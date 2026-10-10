@@ -1,0 +1,6 @@
+.DS_Store
+/shelf
+*.app
+dist/
+dist.noindex/
+.scratch/
