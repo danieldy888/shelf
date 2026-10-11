@@ -1,7 +1,7 @@
 {
   "name": "Shelf",
   "identifier": "local.y3.shelf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "out": "dist.noindex",
   "macos": {
     "minimumSystemVersion": "13.0",

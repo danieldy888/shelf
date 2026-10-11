@@ -6,9 +6,9 @@
 //
 // Everything is driven through the Objective-C runtime with purego, the
 // same convention as mygo's internal/darwin (module-private, so it cannot
-// be imported and is reimplemented here). All functions are synchronous,
-// start no goroutines and install no event taps or monitors: nothing here
-// requests Accessibility or Input Monitoring permission. Call Init once on
+// be imported and is reimplemented here). No goroutines or event taps are
+// installed. Mouse-only observation lives in clicks_darwin.go and requests
+// no Accessibility or Input Monitoring permission. Call Init once on
 // the main thread; every exported function must be called on the main
 // thread (the parent's event loop already is).
 package mac
@@ -16,8 +16,8 @@ package mac
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"runtime"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -260,6 +260,26 @@ func ClipboardChangeCount() int64 {
 	return n
 }
 
+// ClipboardTypes returns the general pasteboard's declared type
+// identifiers in the source's order of preference (most faithful first).
+// It reads metadata only, never the clipboard contents. Main thread only.
+func ClipboardTypes() []string {
+	var out []string
+	withPool(func() { out = pasteboardTypes(generalPasteboard()) })
+	return out
+}
+
+// pasteboardTypes lists board's declared types; call inside withPool.
+func pasteboardTypes(board id) []string {
+	types := send(board, "types")
+	n := sendInt(types, "count")
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, goString(send(types, "objectAtIndex:", uintptr(i))))
+	}
+	return out
+}
+
 // LeftMouseDown reports whether the left (primary) mouse button is
 // physically held right now, read through CGEventSourceButtonState on the
 // combined-session state — the same source the window server consults, so
@@ -294,13 +314,9 @@ var dragTypeKnown = []string{
 // least one known public type right now. Stale after a drop; only
 // meaningful at the moment a changeCount bump is observed.
 func dragPasteboardHasTypes(board id) bool {
-	types := send(board, "types")
-	for i := range sendInt(types, "count") {
-		name := goString(send(types, "objectAtIndex:", uintptr(i)))
-		for _, known := range dragTypeKnown {
-			if name == known {
-				return true
-			}
+	for _, name := range pasteboardTypes(board) {
+		if slices.Contains(dragTypeKnown, name) {
+			return true
 		}
 	}
 	return false
@@ -478,19 +494,4 @@ func FileIcon(path string, size int) []byte {
 		out = goBytes(png)
 	})
 	return out
-}
-
-// ResolveFilePath converts Finder's file-reference URLs (/.file/id=…)
-// to stable path references. FileList parsing alone cannot resolve them.
-func ResolveFilePath(path string) (string, error) {
-	var resolved string
-	withPool(func() {
-		raw := (&url.URL{Scheme: "file", Path: path}).String()
-		file := send(class("NSURL"), "URLWithString:", uintptr(nsString(raw)))
-		resolved = goString(send(send(file, "filePathURL"), "path"))
-	})
-	if resolved == "" {
-		return "", fmt.Errorf("mac: cannot resolve dropped file %q", path)
-	}
-	return resolved, nil
 }

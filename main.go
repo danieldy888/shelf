@@ -66,6 +66,9 @@ func main() {
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		close(a.stop)
 		mygo.GlobalShortcut.UnregisterAll()
+		if a.stopMouseObservation != nil {
+			a.stopMouseObservation()
+		}
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
@@ -96,6 +99,16 @@ func (a *shelf) ready(show bool) {
 	})
 	a.win.SetVisibleOnAllWorkspaces(true)
 	log.Printf("window collectionBehavior=0x%x", mac.JoinFullScreenSpaces(a.win.NativeHandle()))
+	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
+		if !a.visible || a.quitting {
+			return
+		}
+		if inside {
+			a.holdEscape()
+		} else {
+			a.releaseEscape()
+		}
+	})
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()

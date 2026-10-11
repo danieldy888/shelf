@@ -33,6 +33,8 @@ type shelf struct {
 	lastClipboard                           time.Time
 	dragSerial                              int64
 	dragging, suppressed                    bool
+	escHeld                                 bool
+	stopMouseObservation                    func()
 	edgeSince, leftSince                    time.Time
 	thumbnails                              map[string]*ui.Bitmap
 	thumbPending                            map[string]bool
@@ -67,11 +69,27 @@ func (a *shelf) show(edge bool) {
 	a.win.SetPosition(a.x-int(float32(panelWidth)*(1-a.progress)), a.y)
 	a.win.SetOpacity(float64(a.progress))
 	a.win.ShowInactive()
-	// ShowInactive 不夺焦；仅显示期间注册 Esc，隐藏后立即释放。
+	// ShowInactive 不夺焦，面板收不到按键，只能临时注册全局 Esc。
+	a.holdEscape()
+	a.win.Invalidate()
+}
+
+func (a *shelf) holdEscape() {
+	if a.escHeld {
+		return
+	}
 	if err := mygo.GlobalShortcut.Register("Escape", a.hide); err != nil {
 		a.report(fmt.Errorf("Esc 被其他应用占用，请用快捷键或收起按钮：%w", err))
+		return
 	}
-	a.win.Invalidate()
+	a.escHeld = true
+}
+
+func (a *shelf) releaseEscape() {
+	if a.escHeld {
+		mygo.GlobalShortcut.Unregister("Escape")
+		a.escHeld = false
+	}
 }
 
 func (a *shelf) hide() {
@@ -80,7 +98,7 @@ func (a *shelf) hide() {
 	}
 	a.visible, a.edgeOpened = false, false
 	a.animationFrom, a.animationStart = a.progress, time.Now()
-	mygo.GlobalShortcut.Unregister("Escape")
+	a.releaseEscape()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
 }
@@ -101,6 +119,10 @@ func (a *shelf) animate(now time.Time) {
 		a.animationStart = time.Time{}
 		if !a.visible {
 			a.win.Hide()
+		} else {
+			// show 时那一帧在窗口仍不可见时绘制，系统可能不显示它；
+			// 滑入完成后再画一帧，隐藏期间新增的内容才一定出现。
+			a.win.Invalidate()
 		}
 	}
 }
@@ -143,11 +165,16 @@ func (a *shelf) monitorClipboard() {
 	if a.store == nil || a.loadErr != nil {
 		return
 	}
-	// 图片优先，避免截图附带的文本表示造成双条目。
-	if png := mygo.Clipboard.ReadImage(); len(png) > 0 {
-		a.changed(a.store.AddImage(png))
-	} else if text := mygo.Clipboard.ReadText(); text != "" {
-		a.changed(a.store.AddText(text))
+	// 每次变化只收一条：按来源声明的首选表示取文字或图片，避免双条目。
+	switch classifyClipboard(mac.ClipboardTypes()) {
+	case clipText:
+		if text := mygo.Clipboard.ReadText(); text != "" {
+			a.changed(a.store.AddText(text))
+		}
+	case clipImage:
+		if png := mygo.Clipboard.ReadImage(); len(png) > 0 {
+			a.changed(a.store.AddImage(png))
+		}
 	}
 }
 
@@ -206,13 +233,6 @@ func (a *shelf) receive(data transfer.Data) {
 	}
 	var err error
 	if paths, e := data.Files(); e == nil && len(paths) > 0 {
-		for i, path := range paths {
-			paths[i], err = mac.ResolveFilePath(path)
-			if err != nil {
-				a.report(err)
-				return
-			}
-		}
 		err = a.store.AddFiles(paths)
 	} else if b, e := data.Read(transfer.PNG); e == nil && len(b) > 0 {
 		err = a.store.AddImage(b)
