@@ -1509,3 +1509,68 @@ func TestMigrationKeepsExistingIncompleteBackup(t *testing.T) {
 		t.Fatalf("items after migration: %+v", s.Items)
 	}
 }
+
+// 受管 PNG 被改写为其他有效 PNG 或被截断后，内容寻址文件名不变但字节
+// 已损坏：再次添加同一张图片（命中去重分支）必须核对现有文件字节，发现
+// 不一致时原子恢复为本次验证过的 PNG，而不是因“文件存在”直接成功。
+// 恢复后去重仍只有一条图片项、文件持久化字节与可解码内容均与原图一致。
+func TestAddImageRestoresTamperedManagedFile(t *testing.T) {
+	s, root := newStore(t)
+	pngA := makePNG(t, 4, 4, color.RGBA{R: 9, B: 7, A: 255})
+	if err := s.AddImage(pngA); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	imgID := s.Items[0].ID
+	managed := s.Items[0].Path
+
+	// 去重命中会把既有项移回最前：插入一个文本项来确认顺序与去重。
+	if err := s.AddText("marker"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+
+	cases := map[string][]byte{
+		"different-valid-png": makePNG(t, 4, 4, color.RGBA{G: 111, A: 255}),
+		"truncated":           pngA[:len(pngA)/2],
+	}
+	for name, wrong := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(managed, wrong, 0o600); err != nil {
+				t.Fatalf("tamper managed file: %v", err)
+			}
+			if err := s.AddImage(pngA); err != nil {
+				t.Fatalf("AddImage over tampered file: %v", err)
+			}
+			if len(s.Items) != 2 || s.Items[0].ID != imgID || s.Items[0].Kind != KindImage ||
+				s.Items[0].Path != managed || s.Items[0].Missing {
+				t.Fatalf("dedup/order broken after restore: %+v", s.Items)
+			}
+			got, err := os.ReadFile(managed)
+			if err != nil {
+				t.Fatalf("read restored png: %v", err)
+			}
+			if !bytes.Equal(got, pngA) {
+				t.Fatalf("restored bytes mismatch: got %d bytes, want %d", len(got), len(pngA))
+			}
+			dec, err := png.Decode(bytes.NewReader(got))
+			if err != nil {
+				t.Fatalf("restored file not decodable: %v", err)
+			}
+			if b := dec.Bounds(); b.Dx() != 4 || b.Dy() != 4 {
+				t.Fatalf("restored png bounds %v, want 4x4", b)
+			}
+		})
+	}
+
+	// 原子恢复不得留下临时文件，images 目录仍只有这一个受管文件。
+	ents, err := os.ReadDir(filepath.Join(root, imagesDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != filepath.Base(managed) {
+		names := make([]string, 0, len(ents))
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("stray files in images dir: %v", names)
+	}
+}

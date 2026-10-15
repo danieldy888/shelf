@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/png" // register PNG decoder for image.DecodeConfig validation
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -454,7 +455,7 @@ func (s *Store) AddImage(png []byte) error {
 		// 按实际文件身份去重，避免出现两条同 ID 的图片项。
 		if it.Kind == KindImage && it.Path != "" && sameFilePath(it.Path, path) {
 			// 按内容命名，不在每次截图时重新读取全部历史图片。
-			created, err := s.ensureImageFile(name, png)
+			created, err := s.ensureImageFile(name, png, sum)
 			if err != nil {
 				return fmt.Errorf("store: writing image: %w", err)
 			}
@@ -470,7 +471,7 @@ func (s *Store) AddImage(png []byte) error {
 			return nil
 		}
 	}
-	created, err := s.ensureImageFile(name, png)
+	created, err := s.ensureImageFile(name, png, sum)
 	if err != nil {
 		return fmt.Errorf("store: writing image: %w", err)
 	}
@@ -493,19 +494,53 @@ func (s *Store) AddImage(png []byte) error {
 	return nil
 }
 
-// ensureImageFile writes png as images/<name> unless the file already
-// exists (content-addressed names make an existing file identical). It
-// reports whether this call created the file so failure cleanup can
-// remove only genuinely new, unreferenced files.
-func (s *Store) ensureImageFile(name string, png []byte) (created bool, err error) {
+// ensureImageFile guarantees images/<name> holds exactly the already-verified
+// png whose SHA-256 is sum (the content-addressed name is derived from it).
+// An existing file is reused only after proving identical: regular file,
+// same size, and matching SHA-256 — a mere name hit is never trusted, since
+// the managed file may have been replaced or truncated out from under us.
+// On any mismatch the supplied png is restored atomically (temp + rename).
+// Stat errors other than nonexistence and read errors are reported instead
+// of being treated as "missing", so an unverifiable file is never blindly
+// overwritten. It reports whether this call introduced a previously
+// nonexistent file so failure cleanup removes only genuinely new files — a
+// restored pre-existing path still counts as pre-existing and must never be
+// deleted on rollback.
+func (s *Store) ensureImageFile(name string, png []byte, sum [32]byte) (created bool, err error) {
 	path := filepath.Join(s.imagesDir(), name)
-	if _, statErr := os.Stat(path); statErr == nil {
+	fi, statErr := os.Stat(path)
+	switch {
+	case statErr == nil:
+		if fi.Mode().IsRegular() && fi.Size() == int64(len(png)) {
+			f, err := os.Open(path)
+			if err != nil {
+				return false, fmt.Errorf("store: reading image %s: %w", name, err)
+			}
+			h := sha256.New()
+			_, copyErr := io.Copy(h, f)
+			closeErr := f.Close()
+			if copyErr != nil {
+				return false, fmt.Errorf("store: reading image %s: %w", name, copyErr)
+			}
+			if closeErr != nil {
+				return false, fmt.Errorf("store: closing image %s: %w", name, closeErr)
+			}
+			if bytes.Equal(h.Sum(nil), sum[:]) {
+				return false, nil
+			}
+		}
+		if err := writeFileAtomic(s.imagesDir(), name, png, 0o600); err != nil {
+			return false, err
+		}
 		return false, nil
+	case os.IsNotExist(statErr):
+		if err := writeFileAtomic(s.imagesDir(), name, png, 0o600); err != nil {
+			return false, err
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("store: checking image %s: %w", name, statErr)
 	}
-	if err := writeFileAtomic(s.imagesDir(), name, png, 0o600); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // Remove deletes the item with the given id and persists atomically
