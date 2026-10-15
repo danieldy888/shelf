@@ -16,6 +16,7 @@ package mac
 import (
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"slices"
 	"sync"
@@ -31,6 +32,19 @@ type id = objc.ID
 // NSSize mirrors the 64-bit CoreGraphics size.
 type NSSize struct{ Width, Height float64 }
 
+// NSPoint mirrors the 64-bit CoreGraphics point.
+type NSPoint struct{ X, Y float64 }
+
+// NSRect mirrors the 64-bit CoreGraphics rect.
+type NSRect struct {
+	Origin NSPoint
+	Size   NSSize
+}
+
+// NSEdgeInsets mirrors the AppKit edge insets struct returned by
+// NSScreen.safeAreaInsets.
+type NSEdgeInsets struct{ Top, Left, Bottom, Right float64 }
+
 var (
 	libObjC, libAppKit, libCG uintptr
 	msgSendAddr               uintptr
@@ -39,6 +53,25 @@ var (
 	// Typed variants for arguments/returns that travel in floating-point
 	// registers (RegisterFunc, not raw SyscallN).
 	msgSetSize func(obj id, sel objc.SEL, s NSSize)
+
+	// class_replaceMethod overrides constrainFrameRect:toScreen: on the
+	// shelf window's class, and safeAreaInsets reads NSScreen's notch
+	// insets (the struct return needs RegisterFunc, not raw SyscallN).
+	classReplaceMethod func(cls uintptr, sel objc.SEL, imp uintptr, types string) uintptr
+	msgSafeAreaInsets  func(id, objc.SEL) NSEdgeInsets
+
+	// msgRect reads NSRect-returning selectors (frame, auxiliaryTopLeftArea,
+	// auxiliaryTopRightArea); the struct return needs RegisterFunc too.
+	msgRect func(id, objc.SEL) NSRect
+
+	// msgSetRectBool sends setFrame:display: — an NSRect struct argument
+	// plus a BOOL — so it also needs RegisterFunc rather than raw SyscallN.
+	msgSetRectBool func(obj id, sel objc.SEL, r NSRect, display bool)
+
+	// unconstrainOnce installs the constrainFrameRect:toScreen: override
+	// once for the (one) shelf window class; unconstrainIMP is its callback.
+	unconstrainOnce sync.Once
+	unconstrainIMP  uintptr
 
 	// CGEventSourceButtonState reports hardware button state; reading it
 	// requires no Input Monitoring permission (only *posting* events does).
@@ -99,6 +132,10 @@ func load() {
 		copySymbol(&dragBoardName, address, unsafe.Sizeof(dragBoardName))
 		purego.RegisterFunc(&msgSetSize, msgSendAddr)
 		purego.RegisterLibFunc(&cgEventSourceButtonState, libCG, "CGEventSourceButtonState")
+		purego.RegisterLibFunc(&classReplaceMethod, libObjC, "class_replaceMethod")
+		purego.RegisterFunc(&msgSafeAreaInsets, msgSendAddr)
+		purego.RegisterFunc(&msgRect, msgSendAddr)
+		purego.RegisterFunc(&msgSetRectBool, msgSendAddr)
 	})
 }
 
@@ -437,6 +474,169 @@ func CollectionBehavior(window uintptr) uint {
 		out = uint(sendInt(id(window), "collectionBehavior"))
 	})
 	return out
+}
+
+// ConfigureNotchWindow elevates window to NSStatusWindowLevel (25) so it
+// can sit flush with the hardware notch at Y=0 above the menu bar,
+// disables AppKit's menu-bar frame clamping (constrainFrameRect:toScreen:)
+// on its class so vertical slide animations can move smoothly from Y < 0
+// down to Y = 0, and removes the window shadow so the transparent frame
+// never casts a rectangular shadow when collapsed or peeking.
+func ConfigureNotchWindow(window uintptr) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() {
+		w := id(window)
+		unconstrainOnce.Do(func() {
+			unconstrainIMP = purego.NewCallback(func(_ id, _ objc.SEL, frameRect NSRect, _ id) NSRect {
+				return frameRect
+			})
+			cls := send(w, "class")
+			classReplaceMethod(uintptr(cls), sel("constrainFrameRect:toScreen:"), unconstrainIMP, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@")
+		})
+		send(w, "setLevel:", 25)
+		send(w, "setHasShadow:", 0)
+	})
+}
+
+// SetWindowIgnoresMouseEvents toggles whether window is transparent to mouse
+// clicks and drags (NSWindow.setIgnoresMouseEvents:). When true, clicks pass
+// straight through to the menu bar and underlying apps; when false, the
+// window intercepts clicks and drag-and-drop sessions at the notch.
+func SetWindowIgnoresMouseEvents(window uintptr, ignore bool) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() {
+		var arg uintptr
+		if ignore {
+			arg = 1
+		}
+		send(id(window), "setIgnoresMouseEvents:", arg)
+	})
+}
+
+// primaryScreenHeight returns the primary screen's frame height, needed to
+// flip between AppKit's bottom-left and MyGo's top-left screen origins.
+// Mirrors primaryScreenHeight() in mygo's internal/darwin. Main thread only.
+func primaryScreenHeight() float64 {
+	screens := send(class("NSScreen"), "screens")
+	if sendInt(screens, "count") == 0 {
+		return 0
+	}
+	return msgRect(send(screens, "objectAtIndex:", 0), sel("frame")).Size.Height
+}
+
+// SetWindowFrame moves and resizes window in a single setFrame:display:
+// message. x, y, w and h are in MyGo top-left screen coordinates (the same
+// convention as mygo Window.SetPosition/SetSize, which send two separate
+// setFrame messages). Collapsing the two calls into one keeps the window
+// from ever occupying a half-moved frame between the size and position
+// updates — the shelf shrinks to the top-center strip the moment a drag
+// session begins, and a transient full-width frame there could still
+// swallow drops meant for the apps underneath. Main thread only.
+func SetWindowFrame(window uintptr, x, y, w, h int) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() {
+		r := NSRect{
+			Origin: NSPoint{X: float64(x), Y: primaryScreenHeight() - float64(y) - float64(h)},
+			Size:   NSSize{Width: float64(w), Height: float64(h)},
+		}
+		msgSetRectBool(id(window), sel("setFrame:display:"), r, true)
+	})
+}
+
+// NotchTopInset returns the top safe-area inset in points (e.g. ~32 on a
+// notched MacBook display, 0 on a non-notched display) for the screen
+// matching displayID. Main thread only.
+func NotchTopInset(displayID int64) int {
+	if err := Init(); err != nil {
+		return 0
+	}
+	var top int
+	withPool(func() {
+		screens := send(class("NSScreen"), "screens")
+		n := sendInt(screens, "count")
+		key := nsString("NSScreenNumber")
+		for i := range n {
+			s := send(screens, "objectAtIndex:", uintptr(i))
+			num := send(send(s, "deviceDescription"), "objectForKey:", uintptr(key))
+			if uint32(send(num, "unsignedIntValue")) == uint32(displayID) {
+				insets := msgSafeAreaInsets(s, sel("safeAreaInsets"))
+				if insets.Top > 0 {
+					top = int(math.Ceil(insets.Top))
+				}
+				return
+			}
+		}
+	})
+	return top
+}
+
+// NotchRect returns the top-center notch (or Dynamic Island anchor) rectangle
+// in MyGo top-left screen coordinates for the display matching displayID, and
+// whether the display has a physical camera housing (safeAreaInsets.top > 0).
+// On a non-notched display it returns a centered 180×32 fallback. When no
+// screen matches displayID it returns w=0, h=0, hasNotch=false so callers can
+// tell "no notch geometry" apart from a real rect at the origin — reporting a
+// 180×32 box at (0,0) would invent an interactive zone in the top-left corner
+// of the primary screen.
+// Main thread only.
+func NotchRect(displayID int64) (x, y, w, h int, hasNotch bool) {
+	if err := Init(); err != nil {
+		return 0, 0, 0, 0, false
+	}
+	withPool(func() {
+		screens := send(class("NSScreen"), "screens")
+		n := sendInt(screens, "count")
+		if n == 0 {
+			return
+		}
+		primaryH := primaryScreenHeight()
+		key := nsString("NSScreenNumber")
+		for i := range n {
+			s := send(screens, "objectAtIndex:", uintptr(i))
+			num := send(send(s, "deviceDescription"), "objectForKey:", uintptr(key))
+			if uint32(send(num, "unsignedIntValue")) != uint32(displayID) {
+				continue
+			}
+			// 匹配到显示器后才启用 180×32 回退尺寸；未匹配（或显示器数为 0）
+			// 保持 w=h=0，由调用方禁用刘海交互而不是在 (0,0) 造一个假热区。
+			w, h = 180, 32
+			frame := msgRect(s, sel("frame"))
+			y = int(math.Round(primaryH - frame.Origin.Y - frame.Size.Height))
+			insets := msgSafeAreaInsets(s, sel("safeAreaInsets"))
+			if insets.Top > 0 {
+				hasNotch = true
+				h = int(math.Ceil(insets.Top))
+			}
+			leftAux := msgRect(s, sel("auxiliaryTopLeftArea"))
+			rightAux := msgRect(s, sel("auxiliaryTopRightArea"))
+			if leftAux.Size.Width > 0 && rightAux.Size.Width > 0 {
+				gap := rightAux.Origin.X - (leftAux.Origin.X + leftAux.Size.Width)
+				if gap >= 120 {
+					w = max(180, int(math.Round(gap)))
+					x = int(math.Round(frame.Origin.X + leftAux.Origin.X + leftAux.Size.Width))
+					return
+				}
+			}
+			x = int(math.Round(frame.Origin.X + (frame.Size.Width-float64(w))/2))
+			return
+		}
+	})
+	return x, y, w, h, hasNotch
 }
 
 // FileIcon returns the PNG bytes of the Finder icon for path rendered at

@@ -82,8 +82,10 @@ func main() {
 		a.ready(*show)
 	})
 	mygo.App.OnActivate(func(bool) {
+		// macOS reopen（如 open -a / Finder 再次启动已运行的实例）等价于
+		// 菜单栏图标点击：切换而非强制展开，避免常驻窗口随激活事件自行弹出。
 		if a.win != nil {
-			a.show(false)
+			a.toggle()
 		}
 	})
 	if err := mygo.App.Run(); err != nil {
@@ -94,20 +96,33 @@ func main() {
 func (a *shelf) ready(show bool) {
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title: appName, Width: panelWidth, Height: panelHeight,
-		Hidden: true, Frameless: true, AlwaysOnTop: true, SkipTaskbar: true,
+		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
+		AlwaysOnTop: true, SkipTaskbar: true,
 		DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
 		Content: ui.View(a.view),
 	})
 	a.win.SetVisibleOnAllWorkspaces(true)
+	mac.ConfigureNotchWindow(a.win.NativeHandle())
 	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
-		if !a.visible || a.quitting {
+		if a.quitting {
 			return
 		}
 		if inside {
 			a.holdEscape()
+			// 探头态点击刘海任意处都展开：与 view 里胶囊的 Clicked 互补，
+			// 覆盖落在胶囊提示文字之外的壳面点击。
+			if a.peeking && !a.visible {
+				a.show(false)
+			}
 		} else {
 			a.releaseEscape()
+			// 在其他应用窗口内点击（排除顶部菜单栏状态图标区，避免与托盘点击冲突）时收起托盘。
+			p := mygo.Screen.CursorScreenPoint()
+			inMenuBar := p.Y >= a.notchY && p.Y <= a.notchY+max(36, a.notchH+4)
+			if a.visible && !a.dragging && !inMenuBar {
+				a.hide()
+			}
 		}
 	})
 	a.win.OnClose(func(e *mygo.CloseEvent) {
@@ -138,13 +153,9 @@ func (a *shelf) ready(show bool) {
 	}
 	a.clipboardCount = mac.ClipboardChangeCount()
 	_, a.dragSerial = mac.DragState()
-	a.displays = mygo.Screen.Displays()
 	mygo.Screen.OnDisplaysChanged(func() {
-		a.displays = mygo.Screen.Displays()
-		if a.visible {
-			a.place(mygo.Screen.CursorScreenPoint())
-			a.win.SetPosition(a.x, a.y)
-		}
+		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。
+		a.place(mygo.Screen.CursorScreenPoint())
 	})
 	if a.store != nil {
 		if merr := a.store.MigrationError(); merr != nil {
@@ -153,6 +164,13 @@ func (a *shelf) ready(show bool) {
 	}
 	if show {
 		a.show(false)
+	} else {
+		// 常驻透明窗口始终映射在屏幕上：收起时不绘制、忽略鼠标，帧缩到
+		// 刘海壳大小；拖拽或探头一开始 syncWindowFrame 立刻把它扩成顶边
+		// 窄条接管事件，避免触发 Mission Control，同时不挡住下层应用。
+		a.place(mygo.Screen.CursorScreenPoint())
+		a.syncMousePassThrough()
+		a.win.ShowInactive()
 	}
 	a.startMonitoring()
 	log.Print("Shelf ready")
