@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,6 +16,9 @@ import (
 	"shelf/internal/mac"
 	"shelf/internal/store"
 )
+
+// maxConcurrentThumbs 限制同时在后台解码的缩略图数，避免多张大图同时解码。
+const maxConcurrentThumbs = 2
 
 func (a *shelf) thumbnail(item store.Item) *ui.Bitmap {
 	if item.Kind == store.KindText || item.Missing {
@@ -28,48 +30,41 @@ func (a *shelf) thumbnail(item store.Item) *ui.Bitmap {
 	if a.thumbPending[item.ID] {
 		return nil
 	}
+	// 并发解码上限 2：名额满则留待完成回调触发的重绘再试，
+	// 不排队、不另起后台 goroutine。
+	if a.thumbActive >= maxConcurrentThumbs {
+		return nil
+	}
+	a.thumbActive++
 	a.thumbPending[item.ID] = true
 	go func() {
 		var b *ui.Bitmap
 		ext := strings.ToLower(filepath.Ext(item.Path))
 		if item.Kind == store.KindImage || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".bmp" {
-			// 一次读入，尺寸检查通过后才解码；后台降采样，不把原图常驻 GPU。
-			if f, err := os.Open(item.Path); err == nil {
-				cfg, _, err := image.DecodeConfig(f)
-				if err == nil && cfg.Width > 0 && cfg.Height > 0 && int64(cfg.Width)*int64(cfg.Height) <= 40_000_000 {
-					if _, err = f.Seek(0, 0); err == nil {
-						if img, _, err := image.Decode(f); err == nil {
-							w, h := cfg.Width, cfg.Height
-							if w >= h {
-								h = max(1, h*80/w)
-								w = 80
-							} else {
-								w = max(1, w*80/h)
-								h = 80
-							}
-							thumb := image.NewNRGBA(image.Rect(0, 0, w, h))
-							draw.ApproxBiLinear.Scale(thumb, thumb.Bounds(), img, img.Bounds(), draw.Src, nil)
-							b = ui.NewBitmap(thumb)
-						}
-					}
-				}
-				f.Close()
+			if img := decodeThumb(item.Path); img != nil {
+				b = ui.NewBitmap(img)
 			}
 		}
 		a.win.Update(func() {
+			a.thumbActive--
 			if a.quitting {
 				return
 			}
-			if b == nil {
-				if icon := mac.FileIcon(item.Path, 40); len(icon) > 0 {
-					b, _ = ui.DecodeBitmap(icon)
-				}
-			}
 			delete(a.thumbPending, item.ID)
-			// 已删除的项不把缓存重新放回来。
+			// invalidateThumbnail 标记的在途结果直接丢弃，由重绘按上限重新解码。
+			if a.thumbDiscard[item.ID] {
+				delete(a.thumbDiscard, item.ID)
+				return
+			}
+			// 已删除的项不取 Finder 图标、不把缓存重新放回来。
 			if a.store != nil {
 				for _, current := range a.store.Items {
 					if current.ID == item.ID {
+						if b == nil {
+							if icon := mac.FileIcon(item.Path, 40); len(icon) > 0 {
+								b, _ = ui.DecodeBitmap(icon)
+							}
+						}
 						a.thumbnails[item.ID] = b
 						break
 					}
@@ -78,6 +73,18 @@ func (a *shelf) thumbnail(item store.Item) *ui.Bitmap {
 		})
 	}()
 	return nil
+}
+
+// invalidateThumbnail 丢弃缓存的缩略图；若解码仍在进行，标记其结果
+// 在完成回调中丢弃而不写回缓存，由随后的重绘按并发上限重新解码。
+func (a *shelf) invalidateThumbnail(id string) {
+	delete(a.thumbnails, id)
+	if a.thumbPending[id] {
+		if a.thumbDiscard == nil {
+			a.thumbDiscard = make(map[string]bool)
+		}
+		a.thumbDiscard[id] = true
+	}
 }
 
 func trayIcon() []byte {

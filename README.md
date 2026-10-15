@@ -77,6 +77,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 - Global hotkey ⌃⌥Space to show or hide the shelf
 - Drag files, folders, text and images in — and drag them out to any app
 - Clipboard text history: keeps the last 30 items, duplicates move to the top instead of creating copies
+- Long text is shown as a short preview; copying or dragging keeps the complete text
 - Screenshots and clipboard images land in the shelf automatically
 - Skips passwords copied from password managers that mark them as private
 - Contents persist across restarts
@@ -161,6 +162,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 - 全局快捷键 ⌃⌥Space 随时显示或收起
 - 文件、文件夹、文字、图片都可以拖进来，再拖到任意应用
 - 剪贴板文字历史：最多保留 30 条，重复内容移到顶部而不新增条目
+- 长文字只缩短列表摘要，复制和拖出仍保留完整正文
 - 截图和剪贴板图片自动进入托盘
 - 密码管理器标记为隐私的密码不会被记录
 - 重启后内容保留

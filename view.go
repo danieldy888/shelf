@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -88,7 +89,8 @@ func (a *shelf) view(c *ui.Context) {
 
 func (a *shelf) itemView(c *ui.Context, item store.Item) {
 	t := c.Theme()
-	row := ui.Row(c.Key(item.ID)).Padding(10).Gap(10).Radius(8).Label(itemTitle(item))
+	title := itemTitle(item)
+	row := ui.Row(c.Key(item.ID)).Padding(10).Gap(10).Radius(8).Label(title)
 	if row.Hovered() {
 		row.Background(t.SurfaceHover)
 	} else {
@@ -115,7 +117,7 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 			if item.Missing {
 				color = t.TextMuted
 			}
-			ui.Text(c, itemTitle(item)).SingleLine().FontSize(13).FontWeight(550).TextColor(color)
+			ui.Text(c, title).SingleLine().FontSize(13).FontWeight(550).TextColor(color)
 			detail := "文件引用 · 拖出使用"
 			if item.Kind == store.KindText {
 				detail = "文字 · 单击复制"
@@ -128,13 +130,13 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 			}
 			ui.Text(c, detail).SingleLine().FontSize(11).TextColor(t.TextMuted)
 		})
-		remove := ui.Button(c.Key("remove"), "").Size(26, 26).Padding(0).Center().Label("移除 " + itemTitle(item))
+		remove := ui.Button(c.Key("remove"), "").Size(26, 26).Padding(0).Center().Label("移除 " + title)
 		remove.Children(func() { ui.Icon(c, closeSymbol).Size(12, 12) })
-		if remove.Clicked() && a.loadErr == nil {
+		if remove.Clicked() {
 			if err := a.store.Remove(item.ID); err != nil {
 				a.report(err)
 			} else {
-				delete(a.thumbnails, item.ID)
+				a.invalidateThumbnail(item.ID)
 				a.win.Invalidate()
 			}
 		}
@@ -151,7 +153,29 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 
 func itemTitle(item store.Item) string {
 	if item.Kind == store.KindText {
-		return strings.Join(strings.Fields(item.Text), " ")
+		// 只缩短显示摘要；保存、复制和拖出仍使用完整文字。
+		const limit = 160
+		var preview strings.Builder
+		preview.Grow(min(len(item.Text), limit*3))
+		count, space := 0, false
+		for _, r := range item.Text {
+			if unicode.IsSpace(r) {
+				space = count > 0
+				continue
+			}
+			if count >= limit || space && count+1 >= limit {
+				preview.WriteRune('…')
+				break
+			}
+			if space {
+				preview.WriteByte(' ')
+				count++
+				space = false
+			}
+			preview.WriteRune(r)
+			count++
+		}
+		return preview.String()
 	}
 	if item.Kind == store.KindImage {
 		return "截图 " + item.CreatedAt.Local().Format("01-02 15:04:05")

@@ -20,7 +20,6 @@ type shelf struct {
 	win                                     *mygo.Window
 	tray                                    *mygo.Tray
 	store                                   *store.Store
-	loadErr                                 error
 	stop                                    chan struct{}
 	quitting, visible, edgeOpened, received bool
 	status                                  string
@@ -38,6 +37,8 @@ type shelf struct {
 	edgeSince, leftSince                    time.Time
 	thumbnails                              map[string]*ui.Bitmap
 	thumbPending                            map[string]bool
+	thumbDiscard                            map[string]bool
+	thumbActive                             int
 }
 
 func (a *shelf) toggle() {
@@ -61,7 +62,7 @@ func (a *shelf) show(edge bool) {
 		return
 	}
 	a.place(mygo.Screen.CursorScreenPoint())
-	if a.store != nil && a.loadErr == nil {
+	if a.store != nil {
 		a.store.Refresh()
 	}
 	a.visible, a.edgeOpened, a.received = true, edge, false
@@ -162,7 +163,7 @@ func (a *shelf) monitorClipboard() {
 		return
 	}
 	a.clipboardCount = count
-	if a.store == nil || a.loadErr != nil {
+	if a.store == nil {
 		return
 	}
 	// 每次变化只收一条：按来源声明的首选表示取文字或图片，避免双条目。
@@ -228,7 +229,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 }
 
 func (a *shelf) receive(data transfer.Data) {
-	if a.store == nil || a.loadErr != nil {
+	if a.store == nil {
 		return
 	}
 	var err error
@@ -254,6 +255,9 @@ func (a *shelf) changed(err error) {
 	if err != nil {
 		a.report(err)
 		return
+	}
+	if a.store != nil && len(a.store.Items) > 0 {
+		a.invalidateThumbnail(a.store.Items[0].ID)
 	}
 	a.win.Invalidate()
 }

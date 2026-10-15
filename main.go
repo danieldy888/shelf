@@ -27,10 +27,15 @@ func main() {
 		*dataDir = root
 	}
 	s, err := store.Open(*dataDir)
-	if errors.Is(err, store.ErrLocked) {
-		// 同一数据目录只允许一个实例。第二个实例报告原因后安全退出，
-		// 绝不共享写入，避免覆盖已有历史。
+	if err != nil {
+		// 历史未成功打开时不创建托盘、快捷键或监控，也不改写原件。
 		log.Printf("Shelf: %v", err)
+		message := "无法读取 Shelf 历史"
+		detail := "历史文件保持原样，本次启动已停止。请先备份并检查数据目录中的 state.json。\n\n数据目录：" + *dataDir + "\n\n" + err.Error()
+		if errors.Is(err, store.ErrLocked) {
+			message = "Shelf 已在运行"
+			detail = "同一个数据目录同时只能被一个实例使用，本实例将退出，不会改动已有历史。\n\n数据目录：" + *dataDir
+		}
 		mygo.App.SetName(appName)
 		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 		mygo.App.WhenReady(func() {
@@ -38,8 +43,8 @@ func main() {
 				_, _ = mygo.Dialog.Message(mygo.MessageOptions{
 					Type:    mygo.MessageError,
 					Title:   appName,
-					Message: "Shelf 已在运行",
-					Detail:  "同一个数据目录同时只能被一个实例使用，本实例将退出，不会改动已有历史。\n\n数据目录：" + *dataDir,
+					Message: message,
+					Detail:  detail,
 				})
 				mygo.App.Quit()
 			}()
@@ -49,17 +54,13 @@ func main() {
 		}
 		return
 	}
-	if err != nil {
-		// 不重置损坏的历史；将错误留在界面中，原件保持不变。
-		log.Printf("load history: %v", err)
-	}
 	if s != nil {
 		if merr := s.MigrationError(); merr != nil {
 			// 备份失败时存储已停止写入；这里只做启动日志，界面状态在 ready 中显示。
 			log.Printf("Shelf: 迁移前备份失败，已停止写入以免覆盖可恢复原件：%v", merr)
 		}
 	}
-	a := &shelf{store: s, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool), loadErr: err}
+	a := &shelf{store: s, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
 	mygo.App.SetName(appName)
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
@@ -145,9 +146,7 @@ func (a *shelf) ready(show bool) {
 			a.win.SetPosition(a.x, a.y)
 		}
 	})
-	if a.loadErr != nil {
-		a.status = "历史读取失败，未覆盖原文件。请检查 state.json：" + a.loadErr.Error()
-	} else if a.store != nil {
+	if a.store != nil {
 		if merr := a.store.MigrationError(); merr != nil {
 			a.status = "迁移前备份失败，已停止写入以保护原文件：" + merr.Error()
 		}
