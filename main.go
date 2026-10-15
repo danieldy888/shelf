@@ -99,7 +99,7 @@ func (a *shelf) ready(show bool) {
 		Content: ui.View(a.view),
 	})
 	a.win.SetVisibleOnAllWorkspaces(true)
-	log.Printf("window collectionBehavior=0x%x", mac.JoinFullScreenSpaces(a.win.NativeHandle()))
+	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
 		if !a.visible || a.quitting {
 			return

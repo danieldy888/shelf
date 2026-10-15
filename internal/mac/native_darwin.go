@@ -54,13 +54,6 @@ const (
 	kCGEventSourceStateCombinedSessionState = 0
 	kCGMouseButtonLeft                      = 0
 
-	// NSWindowCollectionBehavior bits (window.h). AppKit allows at most
-	// one of the three FullScreen* bits at a time.
-	collectionCanJoinAllSpaces    = 1 << 0
-	collectionFullScreenPrimary   = 1 << 7
-	collectionFullScreenAuxiliary = 1 << 8
-	collectionFullScreenNone      = 1 << 9
-
 	nsPNGFileType = 4 // NSPNGFileType
 )
 
@@ -436,29 +429,12 @@ func DragState() (active bool, serial int64) {
 	return tracker.active, tracker.serial
 }
 
-// resolveCollectionBehavior returns behavior with all three mutually
-// exclusive fullscreen bits (Primary/Auxiliary/None) removed and
-// FullScreenAuxiliary plus CanJoinAllSpaces set. mygo's window options
-// set exactly one of them (FullScreenNone for DisableFullScreen,
-// otherwise FullScreenPrimary); OR-ing Auxiliary on top without clearing
-// the old bit violates AppKit's "at most one" rule, so the conflicting
-// bit is cleared first and every other behavior bit is preserved.
-func resolveCollectionBehavior(behavior uint) uint {
-	behavior &^= collectionFullScreenPrimary | collectionFullScreenAuxiliary | collectionFullScreenNone
-	return behavior | collectionCanJoinAllSpaces | collectionFullScreenAuxiliary
-}
-
-// JoinFullScreenSpaces makes the panel usable alongside another app's
-// fullscreen window: it resolves the collection behavior (see above) and
-// applies it, then reads back the window's actual behavior for the
-// caller to log/verify. This never activates or makes a window key.
-func JoinFullScreenSpaces(window uintptr) uint {
+// CollectionBehavior reads a window's NSWindowCollectionBehavior. Used
+// only to log the value mygo sets after SetVisibleOnAllWorkspaces.
+func CollectionBehavior(window uintptr) uint {
 	var out uint
 	withPool(func() {
-		win := id(window)
-		behavior := resolveCollectionBehavior(uint(sendInt(win, "collectionBehavior")))
-		send(win, "setCollectionBehavior:", uintptr(behavior))
-		out = uint(sendInt(win, "collectionBehavior"))
+		out = uint(sendInt(id(window), "collectionBehavior"))
 	})
 	return out
 }
