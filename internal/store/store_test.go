@@ -1574,3 +1574,135 @@ func TestAddImageRestoresTamperedManagedFile(t *testing.T) {
 		t.Fatalf("stray files in images dir: %v", names)
 	}
 }
+
+// Clear 清空全部项目并持久化：内存立即为空，重开 state.json 也是空的；
+// 受管 PNG 随清空删除，文件引用指向的原文件与 images/ 里的外来文件都
+// 原样保留（KindFile 的路径绝不删除）。
+func TestClearRemovesEverythingKeepsUserFiles(t *testing.T) {
+	s, root := newStore(t)
+	dir := t.TempDir()
+	original := filepath.Join(dir, "precious.txt")
+	if err := os.WriteFile(original, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(realRoot(t, root), imagesDirName, "stray.txt")
+	if err := os.WriteFile(stray, []byte("not a managed image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{original, stray}); err != nil {
+		t.Fatalf("AddFiles: %v", err)
+	}
+	if err := s.AddText("some text"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{A: 9})); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	if err := s.AddImage(makePNG(t, 3, 3, color.RGBA{B: 7, A: 9})); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	if len(s.Items) != 5 {
+		t.Fatalf("expected 5 items, got %d", len(s.Items))
+	}
+	managed := []string{}
+	for _, it := range s.Items {
+		if it.Kind == KindImage {
+			managed = append(managed, it.Path)
+		}
+	}
+	if len(managed) != 2 {
+		t.Fatalf("expected 2 managed images, got %d", len(managed))
+	}
+	// 同一受管路径被两条图片项引用时只删一次（去重路径），结果同样完整。
+	dup := s.Items[0]
+	dup.ID = newID()
+	s.Items = append(s.Items, dup)
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if err := s.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if len(s.Items) != 0 {
+		t.Fatalf("items not cleared: %+v", s.Items)
+	}
+	for _, p := range managed {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("managed png still exists %s: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(original); err != nil {
+		t.Fatalf("original user file deleted: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("file item inside images dir deleted: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if len(s2.Items) != 0 {
+		t.Fatalf("clear not persisted: %+v", s2.Items)
+	}
+}
+
+// Save 失败（根目录只读）时 Clear 回滚内存、不动磁盘：项目原样恢复，
+// state.json 字节不变，受管 PNG 一个都不删。
+func TestClearSaveFailureRollsBack(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("first"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{A: 9})); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	managed := s.Items[0].Path
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(s.Items))
+	for _, it := range s.Items {
+		ids = append(ids, it.ID)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+
+	if err := s.Clear(); err == nil {
+		t.Fatal("expected save error with read-only root")
+	}
+	if len(s.Items) != len(ids) {
+		t.Fatalf("memory not rolled back: %+v", s.Items)
+	}
+	for i, it := range s.Items {
+		if it.ID != ids[i] {
+			t.Fatalf("item order changed on rollback: %+v", s.Items)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("previous state.json lost/corrupted on failed clear")
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted on failed clear: %v", err)
+	}
+}
+
+// 空托盘上 Clear 直接成功返回，不产生任何写入，失败渠道（如迁移阻断）
+// 也不被触发。
+func TestClearEmptyIsNoOp(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.Clear(); err != nil {
+		t.Fatalf("Clear on empty store: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, stateFileName)); !os.IsNotExist(err) {
+		t.Fatalf("empty Clear wrote state.json: %v", err)
+	}
+}

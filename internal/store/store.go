@@ -573,6 +573,44 @@ func (s *Store) Remove(id string) error {
 	return nil
 }
 
+// Clear removes every item and persists atomically (memory rolls back on
+// save failure). On an empty store it is a no-op. After the save
+// succeeds, managed image files the cleared items referenced are
+// deleted — only paths inside <root>/images are ever touched, and a
+// KindFile item's path is never deleted even if it points there.
+// Cleanup failures are reported while still removing the rest.
+func (s *Store) Clear() error {
+	if len(s.Items) == 0 {
+		return nil
+	}
+	old := slices.Clone(s.Items)
+	s.Items = []Item{}
+	if err := s.Save(); err != nil {
+		s.Items = old
+		return err
+	}
+	var firstErr error
+	var failedPath string
+	seen := map[string]bool{}
+	for _, it := range old {
+		if it.Kind != KindImage || it.Path == "" || !s.managedPath(it.Path) {
+			continue
+		}
+		p := filepath.Clean(it.Path)
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr, failedPath = err, p
+		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("store: items cleared, but deleting managed image %s failed: %w", failedPath, firstErr)
+	}
+	return nil
+}
+
 // Refresh re-stats every non-text item and updates Missing. It never
 // removes items; only Open cleans up nonexistent paths.
 func (s *Store) Refresh() {

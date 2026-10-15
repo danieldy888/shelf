@@ -42,6 +42,18 @@ func (a *shelf) view(c *ui.Context) {
 		ui.Row(c).Gap(10).Children(func() {
 			ui.Icon(c, shelfSymbol).Size(25, 25).TextColor(t.Accent)
 			ui.Text(c, appName).FontSize(21).FontWeight(650).Grow(1)
+			if a.store != nil && len(a.store.Items) > 0 {
+				if ui.Button(c, "清空").Label("清空托盘").Clicked() {
+					if err := a.store.Clear(); err != nil {
+						a.report(err)
+					} else {
+						a.clearThumbnails()
+						if a.win != nil {
+							a.win.Invalidate()
+						}
+					}
+				}
+			}
 			if ui.Button(c, "收起").Label("收起托盘").Clicked() {
 				a.hide()
 			}
@@ -137,7 +149,9 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 				a.report(err)
 			} else {
 				a.invalidateThumbnail(item.ID)
-				a.win.Invalidate()
+				if a.win != nil {
+					a.win.Invalidate()
+				}
 			}
 		}
 	})

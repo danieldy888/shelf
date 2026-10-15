@@ -93,6 +93,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Drag an item out | Drag it from the shelf into the target app |
 | Copy a text item back | Click it once, then paste (`⌘V`) anywhere |
 | Remove an item | Click the × on its right; file references never delete the original file |
+| Clear all items | Click the clear button in the header; file references never delete the original file |
 | Quit Shelf | Right-click the menu-bar icon → Quit |
 
 ## Privacy
@@ -178,6 +179,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 拖出项目 | 从托盘中拖住该项，到目标应用中松开 |
 | 把文字复制回来 | 单击该文字项，然后在任意应用中粘贴（`⌘V`） |
 | 移除项目 | 点击该项右侧的 ×；文件引用不会删除原文件 |
+| 清空全部项目 | 点击托盘顶部的“清空”；文件引用不会删除原文件 |
 | 退出 Shelf | 右键菜单栏图标 → 退出 Shelf |
 
 ## 隐私
