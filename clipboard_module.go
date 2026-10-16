@@ -14,8 +14,7 @@ import (
 // present only while the clipboardHistory setting is on.
 type clipboardModule struct {
 	host  *shelf
-	count int64     // pasteboard changeCount already handled
-	last  time.Time // last poll; polls run every clipboardInterval
+	count int64 // pasteboard changeCount already handled
 }
 
 // newClipboardModule starts from the current clipboard, so whatever was
@@ -24,11 +23,11 @@ func newClipboardModule(host *shelf) *clipboardModule {
 	return &clipboardModule{host: host, count: mac.ClipboardChangeCount()}
 }
 
-func (m *clipboardModule) tick(now time.Time) {
-	if now.Sub(m.last) < clipboardInterval {
-		return
-	}
-	m.last = now
+// tick runs on every monitoring poll (~30 ms): the changeCount read is
+// cheap and keeps latency low, which also lets the frontmost app be
+// attributed to the app that copied, not whatever is frontmost when a
+// slower poll happens to run.
+func (m *clipboardModule) tick(_ time.Time) {
 	count := mac.ClipboardChangeCount()
 	if count == m.count {
 		return
@@ -38,10 +37,11 @@ func (m *clipboardModule) tick(now time.Time) {
 	if a.store == nil {
 		return
 	}
-	// 每次变化只收一条：按来源声明的首选表示取文字或图片，避免双条目。
-	// 同时记录复制发生的瞬间哪个应用在最前：右键菜单据此提供“不再记录
-	// 来自该应用的内容”，设置里被排除的应用则整条跳过。
+	// 记录复制发生的瞬间哪个应用在最前。Shelf 自己处于前台（搜索面板
+	// 拿了键盘）时不记来源；被用户排除的应用整条跳过。
 	bundleID, _ := mac.FrontmostApp()
+	bundleID = captureSource(mac.FrontmostPID(), mac.OwnPID(), bundleID)
+	// 每次变化只收一条：按来源声明的首选表示取文字或图片，避免双条目。
 	switch clipCapture(mac.ClipboardTypes(), bundleID, a.settings.ExcludedApps) {
 	case clipText:
 		if text := mygo.Clipboard.ReadText(); text != "" {

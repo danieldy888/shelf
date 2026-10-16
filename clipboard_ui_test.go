@@ -9,9 +9,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/png"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -349,7 +351,7 @@ func TestEnterCopiesImageAsPNG(t *testing.T) {
 func TestHideLeavesKeyboardMode(t *testing.T) {
 	a, _, _ := clipShelf(t, "x")
 	a.tab, a.search, a.focusMode, a.prevAppPID = tabClipboard, "q", true, 999999
-	a.hide()
+	a.hide(hideExplicit)
 	if a.tab != tabTray || a.search != "" || a.focusMode || a.prevAppPID != 0 {
 		t.Fatalf("hide left keyboard state: tab=%d search=%q focus=%v", a.tab, a.search, a.focusMode)
 	}
@@ -388,5 +390,89 @@ func TestClipboardMenuSettings(t *testing.T) {
 	a.setClipboardHistory(false)
 	if !a.settings.ClipboardHistory {
 		t.Fatal("a broken settings file must not be overwritten")
+	}
+}
+
+// 交还焦点只发生在用户明确的收起动作；点外面、拖出成功只忘掉原应用。
+func TestShouldRestoreApp(t *testing.T) {
+	a := &shelf{focusMode: true}
+	if !a.shouldRestoreApp(hideExplicit) {
+		t.Fatal("explicit hide in keyboard mode must restore the previous app")
+	}
+	if a.shouldRestoreApp(hidePassive) {
+		t.Fatal("a click outside or drag-out must not steal the user back")
+	}
+	a.focusMode = false
+	if a.shouldRestoreApp(hideExplicit) {
+		t.Fatal("a shelf that never took the keyboard restores nothing")
+	}
+}
+
+// 被动收起也忘掉原应用，且不留下键盘状态。
+func TestPassiveHideForgetsPreviousApp(t *testing.T) {
+	a, _, _ := clipShelf(t, "x")
+	a.focusMode, a.prevAppPID = true, 999999
+	a.hide(hidePassive)
+	if a.prevAppPID != 0 {
+		t.Fatal("passive hide must still forget the remembered app")
+	}
+}
+
+// 清空保留置顶项及其图片；选中剪到仍在的行，缩略图只留置顶项的。
+func TestClearKeepsPinnedItems(t *testing.T) {
+	a, view, _ := clipShelf(t, "plain clip", "pinned clip")
+	if err := a.store.SetPinned(a.store.Items[1].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	a.thumbnails["stale"] = &ui.Bitmap{}
+	a.selection.only(a.store.Items[0].ID) // 选中将被清掉的那行
+	view.Frame()
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("click clear: %v", err)
+	}
+	view.Frame()
+	if len(a.store.Items) != 1 || !a.store.Items[0].Pinned {
+		t.Fatalf("clear removed the pinned item: %+v", a.store.Items)
+	}
+	if a.selection.count() != 0 {
+		t.Fatal("selection kept an item that no longer exists")
+	}
+	if _, ok := a.thumbnails["stale"]; ok {
+		t.Fatal("stale thumbnail survived clear")
+	}
+	if !view.HasText("pinned clip") || view.HasText("plain clip") {
+		t.Fatal("visible list did not refresh after clear")
+	}
+}
+
+// 复制写不进剪贴板时托盘不收起，让用户看到失败提示。
+func TestCopyFailureKeepsShelfOpen(t *testing.T) {
+	a, view, _ := clipShelf(t, "won't paste")
+	a.write = failClip{}
+	a.tab = tabClipboard
+	a.focusMode = true
+	a.selection.only(a.store.Items[0].ID)
+	view.Frame()
+	a.copyClipSelection()
+	if !a.visible {
+		t.Fatal("shelf hid although the copy failed")
+	}
+	if !strings.Contains(a.status, "录音笔") && a.status == "" {
+		t.Fatal("failed copy reported nothing")
+	}
+}
+
+type failClip struct{}
+
+func (failClip) writeText(string) error  { return errors.New("pasteboard full") }
+func (failClip) writeImage([]byte) error { return errors.New("pasteboard full") }
+
+// Shelf 自己在前台（键盘搜索开着）时，复制不记来源。
+func TestCaptureSourceSkipsShelfItself(t *testing.T) {
+	if got := captureSource(42, 42, "local.y3u.shelf"); got != "" {
+		t.Fatalf("Shelf frontmost recorded a source: %q", got)
+	}
+	if got := captureSource(10, 42, "com.example.App"); got != "com.example.App" {
+		t.Fatalf("real source dropped: %q", got)
 	}
 }

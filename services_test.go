@@ -20,7 +20,7 @@ func TestServiceFlashOwnership(t *testing.T) {
 		t.Fatal("fresh flash timer should be allowed to hide")
 	}
 	// 用户收起，再手动打开：旧代立即作废。
-	a.hide()
+	a.hide(hideExplicit)
 	a.show(false)
 	if a.serviceFlashMayHide(gen) {
 		t.Error("stale flash generation must not hide a reopened panel")
@@ -55,5 +55,5 @@ func TestServiceFlashOwnership(t *testing.T) {
 		t.Error("must not hide while an outbound drag is live")
 	}
 	a.ownDrag = false
-	a.hide()
+	a.hide(hideExplicit)
 }

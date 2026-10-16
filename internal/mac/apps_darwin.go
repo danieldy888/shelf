@@ -97,6 +97,17 @@ func ActivateApp(pid int) bool {
 	return ok
 }
 
+// DeactivateSelf resigns this application's active status by hiding it
+// (NSApplication.hide:), used when the app to hand focus back to is gone.
+// The shelf only activates for the keyboard-driven search flow; hiding
+// afterwards leaves no key window and no frontmost shadow of a dead app.
+// Main thread only.
+func DeactivateSelf() {
+	withPool(func() {
+		send(send(class("NSApplication"), "sharedApplication"), "hide:", 0)
+	})
+}
+
 // AppNameForBundleID resolves a display name for a bundle identifier: the
 // name of the running application with that identifier, else the bundle's
 // localized name from disk, else "". Read-only, no permission needed.

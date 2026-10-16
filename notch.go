@@ -136,7 +136,7 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	a.releaseKeys()
 	inMenuBar := p.Y >= a.notchY && p.Y <= a.notchY+max(36, a.notchH+4)
 	if a.visible && !a.dragging && !inMenuBar {
-		a.hide()
+		a.hide(hidePassive)
 	}
 }
 
@@ -248,30 +248,35 @@ func (a *shelf) escape() {
 		}
 		return
 	}
-	a.hide()
+	a.hide(hideExplicit)
 }
 
-func (a *shelf) hide() {
+// hide collapses the shelf. exit decides whether the remembered app gets
+// the keyboard back (see shouldRestoreApp); the remembered pid is always
+// cleared so a later explicit hide cannot reactivate it a second time.
+func (a *shelf) hide(exit hideExit) {
 	if !a.visible && !a.peeking {
 		return
 	}
 	// Any hide — manual or the flash's own timer — ends service ownership
 	// so a queued timer can never reclaim a panel the user reopened.
 	a.takeServiceOwnership()
+	restore := a.shouldRestoreApp(exit)
+	prev := a.prevAppPID
 	a.visible, a.edgeOpened, a.peeking = false, false, false
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.peekFrom, a.peekAnimStart = a.peekProgress, time.Now()
 	// 收起后回到默认视图：下次打开（悬停、拖入、托盘）从托盘标签开始，
-	// 搜索框清空；键盘模式交还焦点给用户原来所在的应用。
-	focused := a.focusMode
+	// 搜索框清空；键盘模式在用户明确的收起动作下交还焦点。
 	a.focusMode, a.tab, a.search, a.reveal = false, tabTray, "", ""
+	a.prevAppPID = 0
 	a.releaseKeys()
 	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
 	a.syncMousePassThrough()
-	if focused {
-		a.restorePreviousApp()
+	if restore {
+		a.activatePreviousApp(prev)
 	}
 	if a.win != nil {
 		a.win.Invalidate()

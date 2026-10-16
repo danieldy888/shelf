@@ -166,7 +166,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 				a.leftSince = now
 			}
 			if now.Sub(a.leftSince) >= edgeLeaveDelay {
-				a.hide()
+				a.hide(hidePassive)
 			}
 		} else {
 			a.leftSince = time.Time{}

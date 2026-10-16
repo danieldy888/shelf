@@ -102,13 +102,21 @@ func (a *shelf) clearThumbnails() {
 	}
 }
 
-// dropStaleThumbnails discards cached thumbnails of items no longer stored.
+// dropStaleThumbnails discards cached thumbnails of items no longer
+// stored; a decode still in flight for such an item is marked stale too,
+// so its result is dropped by the completion callback instead of writing
+// back a thumbnail for a removed row.
 func (a *shelf) dropStaleThumbnails() {
 	present := make(map[string]bool, len(a.store.Items))
 	for _, it := range a.store.Items {
 		present[it.ID] = true
 	}
 	for id := range a.thumbnails {
+		if !present[id] {
+			a.invalidateThumbnail(id)
+		}
+	}
+	for id := range a.thumbPending {
 		if !present[id] {
 			a.invalidateThumbnail(id)
 		}

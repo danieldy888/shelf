@@ -19,14 +19,13 @@ const (
 	notchHoverPadY     = 4   // 空手移入刘海探头的垂直余量，单位 pt。
 	// Idle, hover and drag share one transparent strip. Only expansion
 	// changes the native window size; the drag filter protects its centre.
-	peekStripPadX     = 40 // 探头/拖拽窄条相对刘海的水平外扩，单位 pt。
-	peekStripPadH     = 40 // 探头/拖拽顶边条相对刘海的垂直外扩，单位 pt。
-	edgeLeaveDelay    = 350 * time.Millisecond
-	clipboardInterval = 500 * time.Millisecond
-	pointerInterval   = 30 * time.Millisecond
-	panelAnimation    = 180 * time.Millisecond
-	panelWidth        = 440
-	panelHeight       = 400
+	peekStripPadX   = 40 // 探头/拖拽窄条相对刘海的水平外扩，单位 pt。
+	peekStripPadH   = 40 // 探头/拖拽顶边条相对刘海的垂直外扩，单位 pt。
+	edgeLeaveDelay  = 350 * time.Millisecond
+	pointerInterval = 30 * time.Millisecond
+	panelAnimation  = 180 * time.Millisecond
+	panelWidth      = 440
+	panelHeight     = 400
 )
 
 // shortcutHint is what the panel footer shows for trayShortcut; it is

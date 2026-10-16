@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -51,12 +52,10 @@ func (a *shelf) view(c *ui.Context) {
 		a.escape()
 	}
 	c.OnShortcut(ui.Cmd, ui.KeyQ, mygo.App.Quit)
-	// 剪贴板标签的键盘操作：焦点在搜索框时由输入框的 OnTextKey 处理
-	// （输入框先拿到方向键和回车），焦点在别处时在这里兜底。
+	// 剪贴板标签的回车：焦点在搜索框时由输入框的 OnTextKey 处理（输入框先
+	// 拿到方向键和回车），焦点在别处时在这里兜底。Esc 无此需要：输入框不
+	// 消费它，窗口顶部注册的 Shortcut 已经覆盖所有焦点位置。
 	if a.visible && a.tab == tabClipboard {
-		if c.Shortcut(0, ui.KeyEscape) {
-			a.escape()
-		}
 		if c.Shortcut(0, ui.KeyEnter) {
 			a.copyClipSelection()
 		}
@@ -144,7 +143,7 @@ func (a *shelf) view(c *ui.Context) {
 			ui.Row(c).Gap(10).Children(func() {
 				ui.Icon(c, shelfSymbol).Size(25, 25).TextColor(t.Accent)
 				ui.Text(c, appName).FontSize(21).FontWeight(650).TextColor(textPrimary).Grow(1)
-				if a.store != nil && len(a.store.Items) > 0 {
+				if a.store != nil && slices.ContainsFunc(a.store.Items, func(it store.Item) bool { return !it.Pinned }) {
 					clear := ui.ButtonBase(c.Key("clear")).Padding(6, 12).Radius(7).Label("清空托盘")
 					if clear.Hovered() {
 						clear.Background(cardHover)
@@ -160,12 +159,12 @@ func (a *shelf) view(c *ui.Context) {
 							// when a stored image could not be deleted.
 							a.report(err)
 						}
-						if len(a.store.Items) == 0 {
-							a.clearThumbnails()
-							a.selection.clear()
-							if a.win != nil {
-								a.win.Invalidate()
-							}
+						// 置顶项连同受管图片留在列表里：作废被清掉的
+						// 缩略图、把选中剪到仍在的行，再重绘。
+						a.dropStaleThumbnails()
+						a.selection.keepExisting(a.visibleItems())
+						if a.win != nil {
+							a.win.Invalidate()
 						}
 					}
 				}
@@ -179,7 +178,7 @@ func (a *shelf) view(c *ui.Context) {
 					ui.Text(c, "收起").SingleLine().FontSize(12).TextColor(textPrimary)
 				})
 				if collapse.Clicked() {
-					a.hide()
+					a.hide(hideExplicit)
 				}
 			})
 			// 标签切换：托盘（全部内容）｜剪贴板（剪贴板收录的内容）。
@@ -432,7 +431,7 @@ func (a *shelf) copyClipSelection() {
 	}
 	if len(items) == 1 {
 		if a.copyItem(items[0]) {
-			a.hide()
+			a.hide(hideExplicit)
 		}
 		return
 	}
@@ -444,6 +443,7 @@ func (a *shelf) copyClipSelection() {
 		}
 		texts = append(texts, it.Text)
 	}
-	a.copyText(strings.Join(texts, "\n"))
-	a.hide()
+	if a.copyText(strings.Join(texts, "\n")) {
+		a.hide(hideExplicit)
+	}
 }

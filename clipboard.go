@@ -81,3 +81,15 @@ func clipCapture(types []string, sourceApp string, excluded []string) clipKind {
 	}
 	return classifyClipboard(types)
 }
+
+// captureSource is the provenance stamped on a capture: the bundle id of
+// the app that was frontmost when the pasteboard changed, or "" when the
+// source is unknown — including when Shelf itself is frontmost, which
+// only happens while the keyboard search is open and must not record
+// itself. Pure; unit-tested.
+func captureSource(frontPID, ownPID int, bundleID string) string {
+	if frontPID == ownPID {
+		return ""
+	}
+	return bundleID
+}

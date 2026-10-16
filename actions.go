@@ -141,17 +141,20 @@ func (a *shelf) writer() clipWriter {
 	return systemClipboard{}
 }
 
-// copyText puts text on the clipboard without recording it again.
-func (a *shelf) copyText(text string) {
+// copyText puts text on the clipboard without recording it again and
+// reports whether the write went through; callers that hide the shelf
+// afterwards use it to stay open when the copy failed.
+func (a *shelf) copyText(text string) bool {
 	if err := a.writer().writeText(text); err != nil {
 		a.report(err)
-		return
+		return false
 	}
 	a.clip.skipCurrent()
 	a.status, a.statusUntil = "已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second)
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+	return true
 }
 
 // copyItem puts one item on the clipboard as ⌘C on it would: text as text,
@@ -159,8 +162,7 @@ func (a *shelf) copyText(text string) {
 func (a *shelf) copyItem(item store.Item) bool {
 	switch item.Kind {
 	case store.KindText:
-		a.copyText(item.Text)
-		return true
+		return a.copyText(item.Text)
 	case store.KindImage:
 		png, err := os.ReadFile(item.Path)
 		if err != nil {

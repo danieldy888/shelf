@@ -106,15 +106,15 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Remove an item | Click the × on its right; file references never delete the original file |
 | Select several items | ⌘-click to add or remove one, ⇧-click to select a range |
 | Drag several items out | Select them, then drag any one of them |
-| Switch between all items and clipboard captures | Click 托盘 or 剪贴板 in the panel header |
-| Search clipboard captures | Press `⌃⌥V` (or the 剪贴板 tab): type to filter — ↑/↓ selects, ⏎ copies and collapses back to your app, `Esc` clears the search then collapses |
-| Pin an item | Right-click it → 置顶; pinned rows show a pin mark and are never evicted by limits, cleanup or 清空 |
-| Stop recording an app | Right-click a clipboard item → 不再记录来自「app」的内容; it lands in `settings.json`'s `excludedApps` |
+| Switch between all items and clipboard captures | Click "Shelf" (托盘) or "Clipboard" (剪贴板) in the panel header |
+| Search clipboard captures | Press `⌃⌥V` (or the Clipboard tab): type to filter — ↑/↓ selects, ⏎ copies and collapses back to your app, `Esc` clears the search then collapses |
+| Pin an item | Right-click it → Pin (置顶); pinned rows show a pin mark and are never evicted by limits, cleanup or Clear |
+| Stop recording an app | Right-click a clipboard item → Stop recording this app (不再记录来自「app」的内容); it lands in `settings.json`'s `excludedApps` |
 | More actions | Right-click an item: open, show in Finder, Quick Look, AirDrop, copy, pin, remove |
 | Quick Look | Select files or images and press Space; Space or `Esc` closes it |
-| Clipboard history on/off and its size | Right-click the menu-bar icon → 剪贴板记录: 记录剪贴板 toggles recording live; 保留 30/100/300 条 caps stored texts |
+| Clipboard history on/off and its size | Right-click the menu-bar icon → Clipboard History (剪贴板记录): the check item toggles recording live; the radio items cap stored texts at 30/100/300 |
 | Clean up old items | Right-click the menu-bar icon, choose the automatic cleanup period |
-| Clear all items | Click the clear button in the header; file references never delete the original file |
+| Clear all items | Click Clear (清空) in the header — removes everything except pinned items (their saved images stay); file references never delete the original file |
 | Collapse the shelf | Press `⌃⌥Space`, `Esc`, the collapse button, or click anywhere outside it |
 | Turn on notch drop protection (optional) | Right-click the menu-bar icon, choose the notch drop protection item, then allow Shelf in System Settings; turn it on again after each update |
 | Quit Shelf | Right-click the menu-bar icon → Quit |
@@ -224,7 +224,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 剪贴板记录开关与条数 | 右键菜单栏图标 → 「剪贴板记录」：「记录剪贴板」即时开关；「保留 30/100/300 条」改文字上限 |
 | 快速查看 | 选中文件或图片后按空格；再按空格或 `Esc` 关闭 |
 | 自动清理旧内容 | 右键菜单栏图标 → 自动清理，选择期限 |
-| 清空全部项目 | 点击托盘顶部的“清空”；文件引用不会删除原文件 |
+| 清空全部项目 | 点击托盘顶部的“清空”——移除置顶以外的全部项目（置顶项连同它们的截图保留）；文件引用不会删除原文件 |
 | 收起托盘 | 按 `⌃⌥Space`、`Esc`、“收起”，或点击托盘外任意处 |
 | 开启刘海拖放保护（可选） | 右键菜单栏图标 → 开启刘海拖放保护…，再在系统设置里打开 Shelf；每次更新后重新开启一次 |
 | 退出 Shelf | 右键菜单栏图标 → 退出 Shelf |

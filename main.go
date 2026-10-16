@@ -115,7 +115,7 @@ func (a *shelf) ready(show bool) {
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()
-			a.hide()
+			a.hide(hideExplicit)
 		}
 	})
 	var err error

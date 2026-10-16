@@ -68,7 +68,7 @@ type shelf struct {
 
 func (a *shelf) toggle() {
 	if a.visible {
-		a.hide()
+		a.hide(hideExplicit)
 	} else {
 		a.show(false)
 	}
@@ -166,7 +166,7 @@ func (a *shelf) completed(r transfer.Result) {
 		return
 	}
 	if !r.Canceled && r.Operation != transfer.None {
-		a.hide()
+		a.hide(hidePassive)
 	}
 }
 
@@ -238,6 +238,25 @@ func (a *shelf) setClipboardLimit(n int) {
 	}
 }
 
+// hideExit is how a hide was reached. Restoring the keyboard to the app
+// the user copied from is right only for exits the user chose while using
+// the shelf — Esc, Enter-copy, the collapse button, the tray/shortcut
+// toggle. A click outside or a finished drag-out means the user moved on
+// to another app themselves; stealing it back would fight that choice.
+type hideExit int
+
+const (
+	hideExplicit hideExit = iota // the user dismissed the shelf itself
+	hidePassive                  // click elsewhere, a finished drag-out, a flash timer
+)
+
+// shouldRestoreApp reports whether hide wants the remembered frontmost app
+// re-activated: only when the shelf had the keyboard (focusMode) and the
+// exit was the user's own dismiss. Pure; unit-tested.
+func (a *shelf) shouldRestoreApp(exit hideExit) bool {
+	return a.focusMode && exit == hideExplicit
+}
+
 // openClipboardSearch opens the shelf on the clipboard tab with the search
 // field focused and ready for typing (the clipboard hotkey). The app is
 // activated so the window takes the keyboard, and the app the user came
@@ -245,6 +264,10 @@ func (a *shelf) setClipboardLimit(n int) {
 // keyboard flow activates the app; hover, drag, tray and service opens keep
 // their ShowInactive behaviour.
 func (a *shelf) openClipboardSearch() {
+	// This open takes the panel over: a queued services flash or a
+	// drag-edge auto-collapse must never hide the search underneath.
+	a.takeServiceOwnership()
+	a.edgeOpened = false
 	if a.win == nil {
 		return
 	}
@@ -263,16 +286,16 @@ func (a *shelf) openClipboardSearch() {
 	a.releaseKeys()
 }
 
-// restorePreviousApp hands the keyboard back to the app the user came
-// from when the shelf was opened for clipboard search. It activates only
-// while this app is still the active one: if the user already switched
-// away (a click outside collapses the panel too), the app they chose must
-// stay in front.
-func (a *shelf) restorePreviousApp() {
-	pid := a.prevAppPID
-	a.prevAppPID = 0
+// activatePreviousApp hands the keyboard back to the app the user came
+// from when the shelf was opened for clipboard search. It runs only while
+// this app is still the active one — a user who switched away already
+// must not be pulled back — and if the remembered app is gone, Shelf's
+// own activation is resigned rather than leaving a hidden app in front.
+func (a *shelf) activatePreviousApp(pid int) {
 	if pid <= 0 || pid == mac.OwnPID() || !mac.AppActive() {
 		return
 	}
-	mac.ActivateApp(pid)
+	if !mac.ActivateApp(pid) {
+		mac.DeactivateSelf()
+	}
 }

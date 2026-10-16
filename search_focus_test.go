@@ -77,7 +77,7 @@ func TestSearchOpenFocusesWindow(t *testing.T) {
 		time.Sleep(8 * time.Second)
 	}
 	// Hide hands the keyboard back to where the user came from.
-	onMain(func() { a.hide() })
+	onMain(func() { a.hide(hideExplicit) })
 	if a.focusMode || a.prevAppPID != 0 {
 		t.Fatalf("hide kept keyboard state: focusMode=%v prevAppPID=%d", a.focusMode, a.prevAppPID)
 	}

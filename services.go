@@ -84,7 +84,7 @@ func (a *shelf) serviceReceive(paths []string, text string) {
 	time.AfterFunc(2*time.Second, func() {
 		mygo.RunOnMain(func() {
 			if a.serviceFlashMayHide(gen) {
-				a.hide()
+				a.hide(hidePassive)
 			}
 		})
 	})
