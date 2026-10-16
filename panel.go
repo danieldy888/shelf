@@ -112,7 +112,7 @@ func (a *shelf) view(c *ui.Context) {
 	zone.Children(func() {
 		if !expanded {
 			if !peeked {
-				if island || a.islandK > 0.01 {
+				if island {
 					// 刘海岛：黑色壳向左/右展开成翼，内容是 leading 图标、
 					// 右侧文字与/或电平条；点击展开（见 mouseDown）。
 					a.islandView(c, shellW)

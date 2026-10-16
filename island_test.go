@@ -3,9 +3,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/internal/settings"
 )
 
 // fakeActivityModule is a module that answers the island's activity query
@@ -323,6 +326,42 @@ func (c *fakeCard) card(view *ui.Context) bool {
 	}
 	ui.Text(view, c.label).FontSize(12).TextColor(textPrimary)
 	return true
+}
+
+// The island menu's check items save their setting and are disabled while
+// settings.json could not be read (so a broken file is never overwritten).
+func TestIslandMenuSavesToggles(t *testing.T) {
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir, settings: settings.Default()}
+	a.islandMenu()[0].Click(nil, nil)
+	saved, err := settings.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.IslandNowPlaying {
+		t.Fatal("unchecking 正在播放 must save islandNowPlaying=false")
+	}
+	if !saved.IslandBattery || !saved.IslandVolume {
+		t.Fatalf("one toggle changed the others: %+v", saved)
+	}
+	if a.settings.IslandNowPlaying {
+		t.Fatal("the running setting must follow the saved one")
+	}
+	if a.islandMenu()[0].Checked {
+		t.Fatal("a rebuilt menu must show the saved state")
+	}
+	// A broken settings file is never overwritten: the item is disabled
+	// and its click must not write anything.
+	broken := &shelf{dataDir: t.TempDir(), settingsBroken: true, settings: settings.Default()}
+	for _, it := range broken.islandMenu() {
+		if !it.Disabled {
+			t.Fatalf("menu item %q must be disabled while settings are broken", it.Label)
+		}
+		it.Click(nil, nil)
+	}
+	if _, err := os.Stat(filepath.Join(broken.dataDir, settings.FileName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("broken settings were written: %v", err)
+	}
 }
 
 // islandSmokeProvider is injected by the gated smoke test: a live activity
