@@ -229,18 +229,27 @@ func (a *shelf) show(edge bool) {
 	}
 }
 
+// Global hotkey seams: holdKeys/releaseKeys register and unregister the
+// panel's Esc and Space, which needs the app running; tests stub them to
+// check who owns the keys.
+var (
+	registerKey   = mygo.GlobalShortcut.Register
+	unregisterKey = mygo.GlobalShortcut.Unregister
+)
+
 // holdKeys takes Esc (close Quick Look, then collapse) and Space (Quick
 // Look the selection) while the shelf is in use; releaseKeys returns them
 // as soon as the user clicks in another app.
 func (a *shelf) holdKeys() {
-	if a.focusMode {
-		// 键盘模式的窗口自己处理 Esc 与空格：全局注册会在按键到达窗口
-		// 之前消费掉它们（空格就打不进搜索框），所以这里不占用。
+	if !a.keysAreOurs() {
+		// 设置窗口在前台时它自己处理 Esc 与空格（Esc/⌘W 关窗、控件收
+		// 空格），全局注册会把按键从它手里抢走；剪贴板搜索模式的窗口同
+		// 理。两条路径都先确保已注册的按键已经归还。
 		a.releaseKeys()
 		return
 	}
 	if !a.escHeld {
-		if err := mygo.GlobalShortcut.Register("Escape", a.escape); err != nil {
+		if err := registerKey("Escape", a.escape); err != nil {
 			a.report(fmt.Errorf("Esc 被其他应用占用，请用快捷键或收起按钮：%w", err))
 		} else {
 			a.escHeld = true
@@ -248,17 +257,24 @@ func (a *shelf) holdKeys() {
 	}
 	if !a.spaceHeld {
 		// Without Space, Quick Look stays available from the context menu.
-		a.spaceHeld = mygo.GlobalShortcut.Register("Space", a.toggleQuickLook) == nil
+		a.spaceHeld = registerKey("Space", a.toggleQuickLook) == nil
 	}
+}
+
+// keysAreOurs reports whether the shelf may hold the global Esc and Space:
+// never while the Settings window is key, and never while the panel itself
+// has the keyboard for clipboard search. Pure; unit-tested.
+func (a *shelf) keysAreOurs() bool {
+	return a.settingsWin == nil && !a.focusMode
 }
 
 func (a *shelf) releaseKeys() {
 	if a.escHeld {
-		mygo.GlobalShortcut.Unregister("Escape")
+		unregisterKey("Escape")
 		a.escHeld = false
 	}
 	if a.spaceHeld {
-		mygo.GlobalShortcut.Unregister("Space")
+		unregisterKey("Space")
 		a.spaceHeld = false
 	}
 }

@@ -38,17 +38,23 @@ var settingsTheme = ui.DarkTheme()
 // openSettings shows the Settings window, creating it the first time, or
 // re-focuses the one already open (single instance). The window is a normal
 // titled window — not the notch panel — centered on the cursor's display.
-// Opening takes the app active so the window can take the keyboard, exactly
-// like the clipboard-search open; on close nothing is restored. The
-// open-at-login state is read back from the system on every open, so the
-// switch reflects changes the user made in System Settings too.
+// Opening takes the app active and the keyboard, exactly like the
+// clipboard-search open: the shelf gives its global Esc/Space back while
+// the window is key, and closing hands the keyboard to wherever it belongs
+// (settingsReleaseKeyboard) without ever hiding this app — NSApp hide would
+// take the notch window away too. The open-at-login state is read back from
+// the system every time the window opens or is re-focused, so the switch
+// reflects changes the user made in System Settings too.
 func (a *shelf) openSettings() {
 	if a.settingsWin != nil {
+		a.loginOn, a.loginErr = openAtLogin(), ""
+		a.repaintSettings()
 		mac.ActivateSelf()
 		a.settingsWin.Show()
 		a.settingsWin.Focus()
 		return
 	}
+	a.settingsTakeKeyboard()
 	a.loginOn, a.loginErr = openAtLogin(), ""
 	frame := settingsFrame(mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint()).WorkArea)
 	w := mygo.NewWindow(mygo.WindowOptions{
@@ -59,11 +65,77 @@ func (a *shelf) openSettings() {
 		Content: ui.View(a.settingsView),
 	})
 	w.SetBounds(frame)
-	w.OnClosed(func() { a.settingsWin = nil })
+	w.OnClosed(a.settingsClosed)
 	a.settingsWin = w
 	w.Show()
 	mac.ActivateSelf()
 	w.Focus()
+}
+
+// settingsTakeKeyboard prepares the handover when the Settings window opens:
+// the shelf releases Esc and Space (the window's own Esc/⌘W and its controls
+// handle them), and the app the user came from is remembered so closing can
+// give the keyboard back.
+func (a *shelf) settingsTakeKeyboard() {
+	if pid := mac.FrontmostPID(); pid > 0 && pid != mac.OwnPID() {
+		a.settingsPrevPID = pid
+	}
+	a.releaseKeys()
+}
+
+// settingsClosed runs when the Settings window has closed: the pointer goes
+// first (a repaint must never touch a destroyed window), then the keyboard
+// goes back to whoever had it before the window opened. A quit closes the
+// window too; nothing may be re-registered or re-activated then.
+func (a *shelf) settingsClosed() {
+	a.settingsWin = nil
+	if a.quitting {
+		return
+	}
+	a.settingsReleaseKeyboard()
+}
+
+// settingsKeyboardExit is who gets the keyboard when the Settings window
+// closes: the panel when it holds it for clipboard search, the shelf itself
+// (Esc/Space again) when the panel is merely open, else the app the user
+// came from. Pure; unit-tested.
+type settingsKeyboardExit int
+
+const (
+	settingsToPanel settingsKeyboardExit = iota
+	settingsToShelf
+	settingsToPrevApp
+)
+
+func (a *shelf) settingsKeyboardExit() settingsKeyboardExit {
+	switch {
+	case a.focusMode:
+		return settingsToPanel
+	case a.visible:
+		return settingsToShelf
+	default:
+		return settingsToPrevApp
+	}
+}
+
+// settingsReleaseKeyboard gives the keyboard back when the Settings window
+// closes, and never hides this app: an NSApp hide would take the notch
+// window with it.
+func (a *shelf) settingsReleaseKeyboard() {
+	prev := a.settingsPrevPID
+	a.settingsPrevPID = 0
+	switch a.settingsKeyboardExit() {
+	case settingsToPanel:
+		// Clipboard search: the panel's search field must keep the
+		// keyboard, so the app we came from must not take it back.
+		if a.win != nil {
+			a.win.Focus()
+		}
+		return
+	case settingsToShelf:
+		a.holdKeys()
+	}
+	a.handBackApp(prev)
 }
 
 // repaintSettings redraws the Settings window when it is open, used after a
@@ -133,11 +205,11 @@ func settingsSection(c *ui.Context, title string, disabled bool, fn func()) {
 // two bindings can never fight (a click has exactly one target). apply
 // receives the new state only when the user actually changed it.
 func settingsToggle(c *ui.Context, key, label string, on bool, apply func(bool)) {
-	row := ui.ToggleBase(c, &on).FillWidth().AlignItems(ui.Center).Gap(10).Padding(1, 0).Label(label)
+	row := ui.ToggleBase(c.Key("toggle-"+key), &on).FillWidth().AlignItems(ui.Center).Gap(10).Padding(1, 0).Label(label)
 	var sw ui.Element
 	row.Children(func() {
 		ui.Text(c, label).SingleLine().FontSize(13).TextColor(textPrimary).Grow(1)
-		sw = ui.Switch(c, &on)
+		sw = ui.Switch(c, &on).Label(label)
 	})
 	if row.Changed() || sw.Changed() {
 		apply(on)
@@ -195,15 +267,18 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 // applyOpenAtLogin switches the login item through SMAppService (macOS 13+)
 // and keeps the shown state and any failure visible inline — running from
 // outside a signed app bundle, for example, reports the error here instead
-// of silently reverting the switch.
+// of silently reverting the switch. Whatever the call returned, the switch
+// then shows what the system actually reports (an SMAppService registration
+// may still need the user's approval in System Settings), so it can never
+// claim a state that is not real.
 func (a *shelf) applyOpenAtLogin(on bool) {
-	if err := setOpenAtLogin(on); err != nil {
+	err := setOpenAtLogin(on)
+	a.loginOn = openAtLogin()
+	if err != nil {
 		a.loginErr = err.Error()
-		a.repaintSettings()
-		return
+	} else {
+		a.loginErr = ""
 	}
-	a.loginErr = ""
-	a.loginOn = on
 	a.repaintSettings()
 }
 
@@ -220,7 +295,7 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 			return fmt.Sprintf("%d 条", n)
 		})
 		settingsRow(c, "limit", "保留条数", func() {
-			if sg := ui.Segmented(c, &selected, labels...); sg.Changed() {
+			if sg := ui.Segmented(c, &selected, labels...).Label("保留条数"); sg.Changed() {
 				a.setClipboardLimit(values[selected])
 			}
 		})
@@ -256,7 +331,7 @@ func (a *shelf) settingsStorageSection(c *ui.Context) {
 			return fmt.Sprintf("%d 天", n)
 		})
 		settingsRow(c, "retention", "自动清理", func() {
-			if sg := ui.Segmented(c, &selected, labels...); sg.Changed() {
+			if sg := ui.Segmented(c, &selected, labels...).Label("自动清理"); sg.Changed() {
 				a.setRetention(values[selected])
 			}
 		})

@@ -210,7 +210,7 @@ func (a *shelf) trayMenu() *mygo.Menu {
 		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
 		{Label: "刘海岛", Type: mygo.MenuItemSubmenu, Submenu: a.islandMenu()},
 		mygo.Separator(),
-		{Label: "设置…", Accelerator: "CmdOrCtrl+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
+		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		mygo.Separator(),
 		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})

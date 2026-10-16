@@ -68,7 +68,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 
 ### Optional
 
-- **Start at login**: right-click the menu-bar icon → 设置… (Settings) → 开机时自动启动. The manual route still works: System Settings → General → Login Items → **+** → Shelf.
+- **Start at login**: right-click the menu-bar icon → Settings → General → Open at login. The manual route still works: System Settings → General → Login Items → **+** → Shelf.
 - **Uninstall**: right-click the menu-bar icon → Quit, then move Shelf from Applications to the Trash. To also delete your saved items, remove `~/Library/Application Support/Shelf/`.
 
 ## Features
@@ -92,7 +92,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 - Select several items with ⌘ or ⇧ and drag them out together
 - Right-click an item to open it, show it in Finder, Quick Look it, AirDrop it or copy its text or path
 - Optional automatic cleanup of items older than 1, 7 or 30 days
-- A Settings window (menu-bar icon → 设置…) gathers every preference — start at login, notch drop protection, clipboard history and its size and excluded apps, cleanup, the notch island sources — and applies each one the instant you change it, exactly as the menu-bar submenus do
+- A Settings window (menu-bar icon → Settings) gathers every preference — start at login, notch drop protection, clipboard history and its size and excluded apps, cleanup, the notch island sources — and applies each one the instant you change it, exactly as the menu-bar submenus do
 - Fully local: zero network requests, no telemetry
 
 ## Usage
@@ -101,7 +101,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Show or hide the shelf | Press `⌃⌥Space`, click the menu-bar icon, or hover the notch and click the peeked pill |
 | Peek at the shelf | Move the pointer onto the notch (no drag needed) — it bulges out; click it to unfold |
 | Expand from live status | Click the wings the notch shows while music plays, the battery changes or you adjust the volume — they unfold the shelf like the peeked pill |
-| Turn the notch island sources on or off | Settings (设置…) → 刘海岛, or right-click the menu-bar icon → 刘海岛: 正在播放 (now playing), 电量与充电 (battery and charging) and 音量 (volume) each switch their source on or off at once |
+| Turn the notch island sources on or off | Settings → Notch island, or right-click the menu-bar icon → Notch island (刘海岛): now playing (正在播放), battery and charging (电量与充电) and volume (音量) each switch their source on or off at once |
 | Stash what you're dragging | While dragging anything, move near the notch — the shelf expands instantly; you can also drop right onto the peeked notch |
 | Summon the drop basket | While dragging, shake the pointer left and right — a basket card appears beside the cursor; drop onto it |
 | Send files or text to the shelf | Right-click selected items in Finder → Services/Quick Actions → "添加到 Shelf" (Add to Shelf); or select text in any app → app menu → Services → "添加到 Shelf" |
@@ -117,14 +117,14 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | More actions | Right-click an item: open, show in Finder, Quick Look, AirDrop, copy, pin, remove |
 | Quick Look | Select files or images and press Space; Space or `Esc` closes it |
 | Clipboard history on/off and its size | Right-click the menu-bar icon → Clipboard History (剪贴板记录): the check item toggles recording live; the radio items cap stored texts at 30/100/300 |
-| Change every preference in one window | Right-click the menu-bar icon → 设置… (Settings, `⌘,`): start at login, notch drop protection, clipboard history and size, excluded apps, cleanup, the notch island sources, shortcuts and the data folder — each control applies at once, and the menu-bar submenus stay in sync |
-| Record from an app again | Settings → 剪贴板 → 排除的应用 → 移除 next to the app (adding still happens from an item's right-click menu) |
-| Start Shelf at login | Settings → 通用 → 开机时自动启动 (macOS 13+); if it cannot be registered the reason shows inline, and the manual System Settings login item still works |
-| See where your data lives | Settings → 打开数据文件夹 opens `~/Library/Application Support/Shelf/` in Finder |
+| Change every preference in one window | Right-click the menu-bar icon → Settings: one window for start at login, notch drop protection, clipboard history and its size, excluded apps, cleanup, the notch island sources, the shortcuts and the data folder — each control applies at once and the menu-bar submenus keep showing the same state |
+| Record from an app again | Settings → Clipboard → Excluded apps → Remove next to the app (apps are still added from an item's right-click menu) |
+| Start Shelf at login | Settings → General → Open at login (macOS 13+); if it cannot be registered the reason shows under the switch, and the manual System Settings login item still works |
+| See where your data lives | Settings → Open data folder opens `~/Library/Application Support/Shelf/` in Finder |
 | Clean up old items | Right-click the menu-bar icon, choose the automatic cleanup period |
 | Clear all items | Click Clear (清空) in the header — removes everything except pinned items (their saved images stay); file references never delete the original file |
 | Collapse the shelf | Press `⌃⌥Space`, `Esc`, the collapse button, or click anywhere outside it |
-| Turn on notch drop protection (optional) | Right-click the menu-bar icon, choose the notch drop protection item, then allow Shelf in System Settings; turn it on again after each update |
+| Turn on notch drop protection (optional) | Settings → General → Notch drop protection → Turn on… (or right-click the menu-bar icon and choose the notch drop protection item), then allow Shelf in System Settings; turn it on again after each update |
 | Quit Shelf | Right-click the menu-bar icon → Quit |
 
 ## Privacy
@@ -234,7 +234,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 置顶项目 | 右键 → 「置顶」；置顶行带图钉标记，不被限额、清理和「清空」移除 |
 | 不再记录某个应用 | 右键剪贴板条目 → 「不再记录来自「应用」的内容」（写入 `settings.json` 的 `excludedApps`） |
 | 剪贴板记录开关与条数 | 右键菜单栏图标 → 「剪贴板记录」：「记录剪贴板」即时开关；「保留 30/100/300 条」改文字上限 |
-| 在一个窗口里改全部设置 | 右键菜单栏图标 → 设置…（`⌘,`）：开机时自动启动、刘海拖放保护、剪贴板记录与条数、排除的应用、自动清理、刘海岛来源、快捷键与数据文件夹；每个控件改完立即生效，菜单栏子菜单同步显示同样状态 |
+| 在一个窗口里改全部设置 | 右键菜单栏图标 → 设置…：开机时自动启动、刘海拖放保护、剪贴板记录与条数、排除的应用、自动清理、刘海岛来源、快捷键与数据文件夹；每个控件改完立即生效，菜单栏子菜单同步显示同样状态 |
 | 恢复记录某个应用 | 设置… → 剪贴板 → 排除的应用 → 该行右侧「移除」（加入列表仍用条目的右键菜单） |
 | 开机自动启动 | 设置… → 通用 → 开机时自动启动（macOS 13+）；注册失败时原因就显示在开关下方，手动加登录项的方式依然可用 |
 | 查看数据文件夹位置 | 设置… → 打开数据文件夹，会在 Finder 里打开 `~/Library/Application Support/Shelf/` |

@@ -26,12 +26,32 @@ import (
 	"shelf/internal/settings"
 )
 
-// stubSettingsSeams replaces the app-level seams and returns a restore func.
-func stubSettingsSeams(t *testing.T, loginOn bool, setErr error, opened *[]string) {
+// stubSettingsSeams replaces the app-level seams (login item, Shell.OpenPath,
+// accessibility request) and returns the login state they share.
+// loginStub models the system's login-item state: setOpenAtLogin flips it
+// unless it fails, and openAtLogin always reports what the system holds.
+// hold makes a set "succeed" while the system keeps reporting off, as an
+// SMAppService registration awaiting the user's approval does.
+type loginStub struct {
+	on   bool
+	err  error
+	hold bool
+}
+
+func stubSettingsSeams(t *testing.T, loginOn bool, setErr error, opened *[]string) *loginStub {
 	t.Helper()
+	st := &loginStub{on: loginOn, err: setErr}
 	origOpen, origSet, origPath, origAx := openAtLogin, setOpenAtLogin, openPath, accessibilityRequest
-	openAtLogin = func() bool { return loginOn }
-	setOpenAtLogin = func(on bool) error { loginOnHolder := on; _ = loginOnHolder; return setErr }
+	openAtLogin = func() bool { return st.on }
+	setOpenAtLogin = func(on bool) error {
+		if st.err != nil {
+			return st.err
+		}
+		if !st.hold {
+			st.on = on
+		}
+		return nil
+	}
 	openPath = func(p string) error {
 		if opened != nil {
 			*opened = append(*opened, p)
@@ -42,6 +62,27 @@ func stubSettingsSeams(t *testing.T, loginOn bool, setErr error, opened *[]strin
 	t.Cleanup(func() {
 		openAtLogin, setOpenAtLogin, openPath, accessibilityRequest = origOpen, origSet, origPath, origAx
 	})
+	return st
+}
+
+// stubKeyboard replaces the global-hotkey and app-activation seams so the
+// key-ownership flows can be checked without a running app.
+func stubKeyboard(t *testing.T) (held *[]string, released *[]string, activated *[]int) {
+	t.Helper()
+	var h, r []string
+	var act []int
+	origReg, origUnreg := registerKey, unregisterKey
+	origActive, origAct, origResign := appIsActive, activateApp, resignSelf
+	registerKey = func(acc string, fn func()) error { h = append(h, acc); return nil }
+	unregisterKey = func(acc string) { r = append(r, acc) }
+	appIsActive = func() bool { return true }
+	activateApp = func(pid int) bool { act = append(act, pid); return true }
+	resignSelf = func() {}
+	t.Cleanup(func() {
+		registerKey, unregisterKey = origReg, origUnreg
+		appIsActive, activateApp, resignSelf = origActive, origAct, origResign
+	})
+	return &h, &r, &act
 }
 
 func newSettingsShelf(t *testing.T) (*shelf, *ui.Tester) {
@@ -229,22 +270,128 @@ func TestSettingsViewExcludedAppRemoval(t *testing.T) {
 }
 
 func TestSettingsViewLoginSwitch(t *testing.T) {
-	// Failing backend shows the error inline and does not flip the state.
-	stubSettingsSeams(t, false, errors.New("app must be installed in /Applications"), nil)
+	// Failing backend shows the error inline and leaves the switch off.
+	st := stubSettingsSeams(t, false, errors.New("app must be installed in /Applications"), nil)
 	a, view := newSettingsShelf(t)
 	clickVisible(t, view, "开机时自动启动")
-	if a.loginOn {
+	if a.loginOn || st.on {
 		t.Fatal("login flag flipped despite backend failure")
 	}
 	if a.loginErr == "" || !view.HasText("/Applications") {
 		t.Fatalf("inline login error missing: %q", a.loginErr)
 	}
-	// A working backend flips and clears the error.
-	stubSettingsSeams(t, false, nil, nil)
-	setOpenAtLogin = func(on bool) error { a.loginOn = on; return nil }
+	// A working backend flips the system state, clears the error and the
+	// switch follows the state the system reports.
+	st.err = nil
 	clickVisible(t, view, "开机时自动启动")
+	if a.loginErr != "" || !a.loginOn {
+		t.Fatalf("enabled login item not reflected: on=%v err=%q", a.loginOn, a.loginErr)
+	}
+}
+
+// SMAppService can accept a registration and still report the item as off
+// until the user approves it in System Settings: the switch must then show
+// the system's answer, not what the click asked for.
+func TestSettingsViewLoginFollowsSystemState(t *testing.T) {
+	st := stubSettingsSeams(t, false, nil, nil)
+	st.hold = true
+	a, view := newSettingsShelf(t)
+	clickVisible(t, view, "开机时自动启动")
+	if a.loginOn {
+		t.Fatal("switch must show the system's state, not the requested one")
+	}
 	if a.loginErr != "" {
-		t.Fatalf("error not cleared after success: %q", a.loginErr)
+		t.Fatalf("an accepted registration is not an error: %q", a.loginErr)
+	}
+}
+
+// The keyboard handover around the Settings window: opening releases the
+// shelf's global Esc/Space, and closing gives them or the activation back
+// to whoever should have them.
+func TestSettingsKeyboardOwnership(t *testing.T) {
+	_, released, activated := stubKeyboard(t)
+
+	// While the window is key, the shelf must not take Esc/Space (its own
+	// Esc/⌘W and controls handle them), and must release keys if held.
+	w := &mygo.Window{}
+	a := &shelf{settingsWin: w, escHeld: true, spaceHeld: true, visible: true}
+	a.holdKeys()
+	if a.escHeld || a.spaceHeld {
+		t.Fatal("holdKeys must not keep Esc/Space while the Settings window is key")
+	}
+	if len(*released) != 2 || !slices.Contains(*released, "Escape") || !slices.Contains(*released, "Space") {
+		t.Fatalf("held keys must be released: %v", *released)
+	}
+
+	// Opening remembers where the user came from and releases the keys.
+	opened := &shelf{escHeld: true}
+	opened.settingsTakeKeyboard()
+	if opened.settingsPrevPID == 0 || opened.escHeld {
+		t.Fatalf("open must remember the app and release Esc: prev=%d esc=%v", opened.settingsPrevPID, opened.escHeld)
+	}
+
+	// Closing with the panel merely open takes Esc/Space back for the shelf
+	// and hands the activation back to the app the user came from.
+	*released, *activated = nil, nil
+	panel := &shelf{settingsWin: w, visible: true, settingsPrevPID: 4242}
+	panel.settingsClosed()
+	if panel.settingsWin != nil {
+		t.Fatal("close must nil the window pointer")
+	}
+	if !panel.escHeld || !panel.spaceHeld {
+		t.Fatal("closing with the panel open must take Esc/Space back")
+	}
+	if len(*activated) != 1 || (*activated)[0] != 4242 {
+		t.Fatalf("closing must hand the keyboard back to the app we came from: %v", *activated)
+	}
+
+	// Closing after clipboard search must leave the keyboard to the panel
+	// and must not pull the previous app forward.
+	*released, *activated = nil, nil
+	search := &shelf{settingsWin: w, focusMode: true, visible: true, settingsPrevPID: 4242}
+	search.settingsClosed()
+	if search.escHeld || search.spaceHeld {
+		t.Fatal("clipboard search keeps the keys, not the shelf")
+	}
+	if len(*activated) != 0 {
+		t.Fatalf("clipboard search must keep the keyboard: activated=%v", *activated)
+	}
+}
+
+// settingsKeyboardExit is the pure decision the handover runs on.
+func TestSettingsKeyboardExit(t *testing.T) {
+	if got := (&shelf{focusMode: true, visible: true}).settingsKeyboardExit(); got != settingsToPanel {
+		t.Fatalf("clipboard search must win: %v", got)
+	}
+	if got := (&shelf{visible: true}).settingsKeyboardExit(); got != settingsToShelf {
+		t.Fatalf("an open panel takes the keys back: %v", got)
+	}
+	if got := (&shelf{}).settingsKeyboardExit(); got != settingsToPrevApp {
+		t.Fatalf("otherwise the app we came from gets the keyboard: %v", got)
+	}
+}
+
+// One settings row per control: the switch and the segmented controls carry
+// accessible names, the switch the same name as its row.
+func TestSettingsViewControlLabels(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	a, _ := newSettingsShelf(t)
+	find := func(name string) int {
+		n := 0
+		for _, l := range ui.NewTester(a.settingsView, settingsWidth, settingsHeight).Texts() {
+			if l == name {
+				n++
+			}
+		}
+		return n
+	}
+	if n := find("记录剪贴板"); n < 2 {
+		t.Fatalf("row label and switch must both carry the name, got %d", n)
+	}
+	for _, name := range []string{"保留条数", "自动清理"} {
+		if n := find(name); n < 2 {
+			t.Fatalf("%q must name its segmented control too, got %d", name, n)
+		}
 	}
 }
 

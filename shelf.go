@@ -47,6 +47,7 @@ type shelf struct {
 	dataDir                                    string       // where state.json and settings.json live
 	settingsBroken                             bool         // settings.json unreadable: never overwrite it
 	settingsWin                                *mygo.Window // the 设置 window; nil while closed
+	settingsPrevPID                            int          // app to hand the keyboard back to when it closes
 	loginOn                                    bool         // 开机时自动启动，read back each time the window opens
 	loginErr                                   string       // last SetOpenAtLogin failure, shown inline
 	guard                                      dragGuard
@@ -323,16 +324,32 @@ func (a *shelf) openClipboardSearch() {
 	a.releaseKeys()
 }
 
+// Keyboard handback seams: tests stub these (mac's own calls need the app
+// running) to prove who gets the keyboard when a keyboard-taking surface
+// closes.
+var (
+	appIsActive = mac.AppActive
+	activateApp = mac.ActivateApp
+	resignSelf  = mac.DeactivateSelf
+)
+
 // activatePreviousApp hands the keyboard back to the app the user came
 // from when the shelf was opened for clipboard search. It runs only while
 // this app is still the active one — a user who switched away already
 // must not be pulled back — and if the remembered app is gone, Shelf's
 // own activation is resigned rather than leaving a hidden app in front.
-func (a *shelf) activatePreviousApp(pid int) {
-	if pid <= 0 || pid == mac.OwnPID() || !mac.AppActive() {
+func (a *shelf) activatePreviousApp(pid int) { a.handBack(pid, true) }
+
+// handBackApp is activatePreviousApp without the resign fallback: the
+// Settings window hands the keyboard back the same way, but must never
+// hide this app (NSApp hide would take the notch window with it).
+func (a *shelf) handBackApp(pid int) { a.handBack(pid, false) }
+
+func (a *shelf) handBack(pid int, resignWhenGone bool) {
+	if pid <= 0 || pid == mac.OwnPID() || !appIsActive() {
 		return
 	}
-	if !mac.ActivateApp(pid) {
-		mac.DeactivateSelf()
+	if !activateApp(pid) && resignWhenGone {
+		resignSelf()
 	}
 }
