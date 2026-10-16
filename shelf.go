@@ -133,6 +133,16 @@ func (a *shelf) report(err error) {
 		a.win.Invalidate()
 	}
 }
+
+// notice adds a startup message to the panel footer without hiding an
+// earlier one (settings, shortcut and migration problems can all occur).
+func (a *shelf) notice(msg string) {
+	log.Print(msg)
+	if a.status != "" {
+		a.status += "\n"
+	}
+	a.status += msg
+}
 func (a *shelf) completed(r transfer.Result) {
 	if r.Err != nil {
 		a.report(r.Err)

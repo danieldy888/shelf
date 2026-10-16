@@ -161,7 +161,11 @@ func (a *shelf) view(c *ui.Context) {
 				ui.Column(c).Grow(1).Center().Gap(16).Children(func() {
 					ui.Icon(c, shelfSymbol).Size(48, 48).TextColor(t.Accent)
 					ui.Text(c, "把文件拖到这里").FontSize(17).FontWeight(600).TextColor(textPrimary)
-					ui.Text(c, "文件、文件夹、文字和图片\n复制的文字与截图也会自动收好").TextAlign(ui.Center).FontSize(12).TextColor(textMuted)
+					hint := "文件、文件夹、文字和图片"
+					if a.settings.ClipboardHistory {
+						hint += "\n复制的文字与截图也会自动收好"
+					}
+					ui.Text(c, hint).TextAlign(ui.Center).FontSize(12).TextColor(textMuted)
 				})
 			} else {
 				ui.Scroll(c.Key("items")).Grow(1).Gap(6).Children(func() {

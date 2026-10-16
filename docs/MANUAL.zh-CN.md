@@ -71,11 +71,14 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 ```text
 ~/Library/Application Support/Shelf/
   state.json        托盘内容（含图片清单）
+  settings.json     设置
   images/           剪贴板图片与截图
   .lock             防止同时运行两个 Shelf 的锁文件，运行时不要删除
 ```
 
 在 Finder 按 `⌘⇧G`，粘贴 `~/Library/Application Support/Shelf/`，即可找到它。备份时先退出 Shelf，再复制整个文件夹；恢复时同样先退出。
+
+不想让 Shelf 记录复制的内容：先退出 Shelf，用“文本编辑”打开 `settings.json`，把 `"clipboardHistory": true` 改成 `"clipboardHistory": false`，保存后重新打开 Shelf。改回 `true` 即可恢复。文件写错时，Shelf 会提示并按默认设置运行，不会改动你的文件。
 
 同一时间只能运行一个 Shelf：再打开第二个时，它会提示“已在运行”并立即退出，不会影响已有内容。
 

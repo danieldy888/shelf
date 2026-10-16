@@ -62,12 +62,9 @@ func main() {
 		}
 	}
 	prefs, perr := settings.Load(*dataDir)
-	if perr != nil {
-		log.Printf("Shelf: %v", perr)
-	}
 	a := &shelf{store: s, settings: prefs, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
 	if perr != nil {
-		a.status = "设置文件无法读取，本次使用默认设置：" + perr.Error()
+		a.notice("设置文件无法读取，本次使用默认设置：" + perr.Error())
 	}
 	mygo.App.SetName(appName)
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
@@ -140,8 +137,7 @@ func (a *shelf) ready(show bool) {
 		a.tray.PopUpMenu()
 	})
 	if err := mygo.GlobalShortcut.Register(trayShortcut, a.toggle); err != nil {
-		a.status = fmt.Sprintf("快捷键被占用；可点击菜单栏图标。%v", err)
-		log.Print(a.status)
+		a.notice(fmt.Sprintf("快捷键被占用；可点击菜单栏图标。%v", err))
 	}
 	if a.settings.ClipboardHistory {
 		a.clip = newClipboardModule(a)
@@ -154,7 +150,7 @@ func (a *shelf) ready(show bool) {
 	})
 	if a.store != nil {
 		if merr := a.store.MigrationError(); merr != nil {
-			a.status = "迁移前备份失败，已停止写入以保护原文件：" + merr.Error()
+			a.notice("迁移前备份失败，已停止写入以保护原文件：" + merr.Error())
 		}
 	}
 	if show {
