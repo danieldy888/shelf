@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -128,6 +127,28 @@ func (a *shelf) islandTick(now time.Time) {
 	}
 }
 
+// islandTextW is the trailing string's drawn width at size. The answer is
+// cached per (text, size) — a live activity measures once, not per frame.
+func (a *shelf) islandTextW(c *ui.Context, text string, size float32) float32 {
+	if text == "" {
+		return 0
+	}
+	if a.islandFitSrc == text && a.islandFitSize == size {
+		return a.islandFitW
+	}
+	w, _ := a.islandMeasure(c, text, size)
+	a.islandFitSrc, a.islandFitSize, a.islandFitW = text, size, w
+	return w
+}
+
+// islandMeasure is the one place the island lays text out for measurement;
+// the counter exists so tests can prove a repainted frame re-measures
+// nothing.
+func (a *shelf) islandMeasure(c *ui.Context, text string, size float32) (float32, float32) {
+	a.islandMeasures++
+	return c.MeasureText(0, ui.Span{Text: text, Size: size})
+}
+
 // islandFit clips trailing text to avail points with an ellipsis, measured
 // the same way it is drawn; the answer is cached per (text, size, avail)
 // so a live activity does not re-measure every frame.
@@ -135,20 +156,19 @@ func (a *shelf) islandFit(c *ui.Context, text string, size, avail float32) strin
 	if text == "" {
 		return ""
 	}
-	key := fmt.Sprintf("%s@%g@%g", text, size, avail)
-	if key == a.islandFitKey {
+	if a.islandFitIn == text && a.islandFitInSize == size && a.islandFitAvail == avail {
 		return a.islandFitText
 	}
 	out := ""
-	if w, _ := c.MeasureText(0, ui.Span{Text: text, Size: size}); w <= avail {
+	if a.islandTextW(c, text, size) <= avail {
 		out = text
-	} else if w, _ := c.MeasureText(0, ui.Span{Text: "…", Size: size}); w <= avail {
+	} else if w, _ := a.islandMeasure(c, "…", size); w <= avail {
 		// Binary-search the longest prefix that fits with an ellipsis.
 		lo, hi := 0, utf8.RuneCountInString(text)
 		for lo < hi {
 			mid := (lo + hi + 1) / 2
 			cand := string([]rune(text)[:mid]) + "…"
-			if w, _ := c.MeasureText(0, ui.Span{Text: cand, Size: size}); w <= avail {
+			if w, _ := a.islandMeasure(c, cand, size); w <= avail {
 				lo = mid
 			} else {
 				hi = mid - 1
@@ -156,7 +176,7 @@ func (a *shelf) islandFit(c *ui.Context, text string, size, avail float32) strin
 		}
 		out = string([]rune(text)[:lo]) + "…"
 	}
-	a.islandFitKey, a.islandFitText = key, out
+	a.islandFitIn, a.islandFitInSize, a.islandFitAvail, a.islandFitText = text, size, avail, out
 	return out
 }
 
@@ -185,10 +205,7 @@ func (a *shelf) islandView(c *ui.Context, shellW float32) {
 		ui.Box(c.Key("isle-r")).Width(wing).Height(baseH).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 			bar := act.Level >= 0
 			trailMax := wing - 8
-			textW := float32(0)
-			if act.Trailing != "" {
-				textW, _ = c.MeasureText(0, ui.Span{Text: act.Trailing, Size: 12})
-			}
+			textW := a.islandTextW(c, act.Trailing, 12)
 			barW := float32(0)
 			if bar {
 				barW = min(20, trailMax)

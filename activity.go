@@ -41,7 +41,7 @@ type activityProvider interface {
 }
 
 // A panelCard is a module that adds a card at the top of the expanded
-// panel's 托盘 tab, e.g. now-playing controls. It is drawn inside the
+// panel's tray tab, e.g. now-playing controls. It is drawn inside the
 // panel's content column and must keep to the panel palette.
 type panelCard interface {
 	card(c *ui.Context) bool // reports whether it drew anything

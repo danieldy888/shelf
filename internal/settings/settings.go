@@ -27,8 +27,6 @@ type Settings struct {
 	ClipboardLimit int `json:"clipboardLimit"`
 	// ExcludedApps lists bundle identifiers whose copies are never
 	// recorded into the shelf.
-	// ExcludedApps lists bundle identifiers whose copies are never
-	// recorded into the shelf.
 	ExcludedApps []string `json:"excludedApps"`
 	// IslandNowPlaying shows live now-playing status in the notch island.
 	IslandNowPlaying bool `json:"islandNowPlaying"`

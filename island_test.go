@@ -176,6 +176,40 @@ func TestIslandIdleRendersWingsAndTrailing(t *testing.T) {
 	}
 }
 
+// Repeated paints of the same activity re-measure nothing: the trailing
+// text's width and its truncation are both cached (islandMeasures only
+// counts real MeasureText calls).
+func TestIslandRepaintMeasuresOnce(t *testing.T) {
+	a := &shelf{
+		win: &mygo.Window{}, x: 470, y: 0, h: 380,
+		notchX: 645, notchY: 0, notchW: 180, notchH: 32,
+		islandK: 1,
+		island:  activity{ID: "battery", Trailing: "87%", Level: 0.6, Priority: 1},
+	}
+	view := ui.NewTester(a.view, a.islandStripW(), 72)
+	first := a.islandMeasures
+	if first == 0 {
+		t.Fatal("the first paint must measure the trailing text")
+	}
+	for range 5 {
+		view.Frame()
+	}
+	if a.islandMeasures != first {
+		t.Fatalf("repaints re-measured: %d -> %d calls", first, a.islandMeasures)
+	}
+	// A changed value measures once more, then settles again.
+	a.island.Trailing = "86%"
+	view.Frame()
+	got := a.islandMeasures
+	if got <= first {
+		t.Fatal("a new trailing text must be measured")
+	}
+	view.Frame()
+	if a.islandMeasures != got {
+		t.Fatalf("the settled repaint re-measured: %d -> %d calls", got, a.islandMeasures)
+	}
+}
+
 // Without an activity the collapsed shelf draws nothing at all: the
 // resident strip keeps today's invisible idle state.
 func TestIslandIdleWithoutActivityDrawsNothing(t *testing.T) {
