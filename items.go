@@ -21,6 +21,10 @@ import (
 func (a *shelf) itemView(c *ui.Context, item store.Item) {
 	title := itemTitle(item)
 	row := ui.Row(c.Key(item.ID)).Padding(10).Gap(10).Radius(8).Label(title)
+	if a.reveal == item.ID {
+		// 键盘移动选中行后把它留在可见范围内。
+		row.ScrollIntoView()
+	}
 	switch {
 	case a.selection.has(item.ID):
 		row.Background(cardSelected)
@@ -64,11 +68,17 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 			if item.Kind == store.KindImage {
 				detail = "PNG 图片 · 拖出使用"
 			}
+			if item.Source == store.SourceClipboard {
+				detail = "剪贴板收录 · " + detail
+			}
 			if item.Missing {
 				detail = "文件已移动"
 			}
 			ui.Text(c, detail).SingleLine().FontSize(11).TextColor(textMuted)
 		})
+		if item.Pinned {
+			ui.Icon(c.Key("pin"), pinSymbol).Size(13, 13).TextColor(textMuted).Label("已置顶")
+		}
 		remove := ui.ButtonBase(c.Key("remove")).Size(26, 26).Padding(0).Center().Radius(13).Label("移除 " + title)
 		remove.Children(func() { ui.Icon(c, closeSymbol).Size(12, 12).TextColor(textMuted) })
 		if remove.Clicked() {
@@ -77,7 +87,9 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 	})
 	if row.Clicked() {
 		mods := row.ClickModifiers()
-		a.selection.click(a.store.Items, item.ID, mods)
+		// 显示顺序来自当前标签（剪贴板标签有置顶排序），⇧ 选择跟着它走。
+		a.selection.click(a.visibleItems(), item.ID, mods)
+		a.reveal = ""
 		if mods&(ui.Cmd|ui.Shift) == 0 && item.Kind == store.KindText {
 			a.copyText(item.Text)
 		}

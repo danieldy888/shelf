@@ -64,6 +64,8 @@ func main() {
 	}
 	prefs, perr := settings.Load(*dataDir)
 	a := &shelf{store: s, settings: prefs, dataDir: *dataDir, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
+	// 剪贴板文字限额来自设置；小于 1 的值由 store 回落到默认 30。
+	s.SetTextLimit(prefs.ClipboardLimit)
 	if perr != nil {
 		a.settingsBroken = true
 		a.notice("设置文件无法读取，本次使用默认设置：" + perr.Error())
@@ -105,18 +107,7 @@ func main() {
 }
 
 func (a *shelf) ready(show bool) {
-	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName, Width: panelWidth, Height: panelHeight,
-		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
-		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,
-		DisableMove: true, DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
-		Content: ui.View(a.view),
-	})
-	a.win.SetVisibleOnAllWorkspaces(true)
-	mac.ConfigureNotchWindow(a.win.NativeHandle())
-	a.win.OnMove(a.windowGeometryChanged)
-	a.win.OnResize(a.windowGeometryChanged)
-	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))
+	a.newNotchWindow()
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
 		a.mouseDown(inside, mygo.Screen.CursorScreenPoint())
 	})
@@ -141,10 +132,10 @@ func (a *shelf) ready(show bool) {
 	if err := mygo.GlobalShortcut.Register(trayShortcut, a.toggle); err != nil {
 		a.notice(fmt.Sprintf("快捷键被占用；可点击菜单栏图标。%v", err))
 	}
-	if a.settings.ClipboardHistory {
-		a.clip = newClipboardModule(a)
-		a.modules = append(a.modules, a.clip)
+	if err := mygo.GlobalShortcut.Register(clipboardShortcut, a.openClipboardSearch); err != nil {
+		a.notice(fmt.Sprintf("剪贴板搜索快捷键被占用；可点击菜单栏图标。%v", err))
 	}
+	a.applyClipboardHistory()
 	a.modules = append(a.modules, &retentionModule{host: a})
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
@@ -170,6 +161,25 @@ func (a *shelf) ready(show bool) {
 	log.Print("Shelf ready")
 }
 
+// newNotchWindow creates the persistent notch window: one transparent,
+// frameless, non-activating panel that the three states redraw. The smoke
+// test builds the same window, so the ⌃⌥V focus behaviour is checked
+// against what production shows.
+func (a *shelf) newNotchWindow() {
+	a.win = mygo.NewWindow(mygo.WindowOptions{
+		Title: appName, Width: panelWidth, Height: panelHeight,
+		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
+		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,
+		DisableMove: true, DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
+		Content: ui.View(a.view),
+	})
+	a.win.SetVisibleOnAllWorkspaces(true)
+	mac.ConfigureNotchWindow(a.win.NativeHandle())
+	a.win.OnMove(a.windowGeometryChanged)
+	a.win.OnResize(a.windowGeometryChanged)
+	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))
+}
+
 // trayMenu is rebuilt on every right-click so it reflects the current
 // Accessibility state, which the user changes in System Settings, and the
 // current settings.
@@ -184,6 +194,7 @@ func (a *shelf) trayMenu() *mygo.Menu {
 		{Label: "显示 / 收起 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
 		guard,
 		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
+		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
 		mygo.Separator(),
 		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
@@ -219,4 +230,27 @@ func (a *shelf) setRetention(days int) {
 	}
 	a.settings = next
 	a.removeExpired(time.Now())
+}
+
+// clipboardMenu offers the clipboard history toggle and the text limits.
+// It is disabled while settings.json could not be read, so a broken file is
+// never overwritten. Both act at once: the module starts or stops, and the
+// new limit applies on the next copy.
+func (a *shelf) clipboardMenu() []*mygo.MenuItem {
+	items := []*mygo.MenuItem{{
+		Label: "记录剪贴板", Type: mygo.MenuItemCheckbox, Checked: a.settings.ClipboardHistory, Disabled: a.settingsBroken,
+		Click: func(*mygo.MenuItem, *mygo.Window) { a.setClipboardHistory(!a.settings.ClipboardHistory) },
+	}}
+	items = append(items, mygo.Separator())
+	limit := a.settings.ClipboardLimit
+	if limit < 1 {
+		limit = settings.Default().ClipboardLimit
+	}
+	for _, n := range clipboardLimitChoices {
+		items = append(items, &mygo.MenuItem{
+			Label: fmt.Sprintf("保留 %d 条", n), Type: mygo.MenuItemRadio, Checked: limit == n, Disabled: a.settingsBroken,
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.setClipboardLimit(n) },
+		})
+	}
+	return items
 }

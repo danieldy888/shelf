@@ -5,6 +5,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/internal/settings"
 	"shelf/internal/store"
 )
 
@@ -21,7 +24,7 @@ import (
 // becomes the selection, as in Finder.
 func (a *shelf) targets(item store.Item) []store.Item {
 	if a.selection.has(item.ID) && a.selection.count() > 1 {
-		return a.selection.chosen(a.store.Items)
+		return a.selection.chosen(a.visibleItems())
 	}
 	a.selection.only(item.ID)
 	return []store.Item{item}
@@ -81,6 +84,27 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 		}
 		a.copyText(strings.Join(lines, "\n"))
 	}
+	// 置顶：作用于右键的行（或多选的全部）；全部已置顶时改为取消置顶。
+	pinned := len(items) > 0
+	for _, it := range items {
+		if !it.Pinned {
+			pinned = false
+			break
+		}
+	}
+	pinLabel := "置顶"
+	if pinned {
+		pinLabel = "取消置顶"
+	}
+	if m.Item(pinLabel).Chosen() {
+		a.setPinned(items, !pinned)
+	}
+	// 剪贴板来源：一键把这个应用加入不再记录列表。
+	if item.Source == store.SourceClipboard && item.SourceApp != "" {
+		if m.Item("不再记录来自「" + a.appName(item.SourceApp) + "」的内容").Disabled(a.settingsBroken).Chosen() {
+			a.excludeClipboardApp(item.SourceApp)
+		}
+	}
 	m.Separator()
 	removeLabel := "移除"
 	if len(items) > 1 {
@@ -91,14 +115,125 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 	}
 }
 
+// clipWriter is where Shelf's own copies go. Production uses the system
+// clipboard; tests substitute a recorder so copying can be exercised
+// without a running app (mygo's clipboard needs App.Run).
+type clipWriter interface {
+	writeText(text string) error
+	writeImage(png []byte) error
+}
+
+// systemClipboard is the production clipWriter.
+type systemClipboard struct{}
+
+func (systemClipboard) writeText(text string) error {
+	return mygo.Clipboard.Write(transfer.TextData(text))
+}
+
+func (systemClipboard) writeImage(png []byte) error { return mygo.Clipboard.WriteImage(png) }
+
+// writer is where a copy goes: the system clipboard unless a test
+// substituted a recorder (a.write).
+func (a *shelf) writer() clipWriter {
+	if a.write != nil {
+		return a.write
+	}
+	return systemClipboard{}
+}
+
 // copyText puts text on the clipboard without recording it again.
 func (a *shelf) copyText(text string) {
-	if err := mygo.Clipboard.Write(transfer.TextData(text)); err != nil {
+	if err := a.writer().writeText(text); err != nil {
 		a.report(err)
 		return
 	}
 	a.clip.skipCurrent()
 	a.status, a.statusUntil = "已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second)
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// copyItem puts one item on the clipboard as ⌘C on it would: text as text,
+// an image as PNG. It reports whether it copied; a failure is reported.
+func (a *shelf) copyItem(item store.Item) bool {
+	switch item.Kind {
+	case store.KindText:
+		a.copyText(item.Text)
+		return true
+	case store.KindImage:
+		png, err := os.ReadFile(item.Path)
+		if err != nil {
+			a.report(err)
+			return false
+		}
+		if err := a.writer().writeImage(png); err != nil {
+			a.report(err)
+			return false
+		}
+		a.clip.skipCurrent()
+		a.status, a.statusUntil = "已复制图片 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second)
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+		return true
+	}
+	a.report(errors.New("这一项不能复制到剪贴板"))
+	return false
+}
+
+// setPinned pins or unpins every target; each item is saved on its own
+// (the store's API), and the first failure stops the rest and is reported.
+func (a *shelf) setPinned(items []store.Item, pinned bool) {
+	for _, it := range items {
+		if err := a.store.SetPinned(it.ID, pinned); err != nil {
+			a.report(err)
+			return
+		}
+	}
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// appName resolves and caches the display name of a bundle identifier. The
+// context menu's exclude item must read the same when the menu opens and
+// when it is chosen, so a name resolved once cannot change under it, and
+// the lookup (running apps, then the bundle on disk) runs once per app.
+func (a *shelf) appName(bundleID string) string {
+	if name, ok := a.appNames[bundleID]; ok {
+		return name
+	}
+	name := mac.AppNameForBundleID(bundleID)
+	if name == "" {
+		name = bundleID
+	}
+	if a.appNames == nil {
+		a.appNames = map[string]string{}
+	}
+	a.appNames[bundleID] = name
+	return name
+}
+
+// excludeClipboardApp stops recording copies from bundleID: the identifier
+// is appended to the excludedApps setting and saved at once, so the
+// clipboard module skips it from the next copy on. Disabled while
+// settings.json could not be read, so a broken file is never overwritten.
+func (a *shelf) excludeClipboardApp(bundleID string) {
+	if bundleID == "" || a.settingsBroken {
+		return
+	}
+	name := a.appName(bundleID)
+	if !slices.Contains(a.settings.ExcludedApps, bundleID) {
+		next := a.settings
+		next.ExcludedApps = append(slices.Clone(a.settings.ExcludedApps), bundleID)
+		if err := settings.Save(a.dataDir, next); err != nil {
+			a.report(err)
+			return
+		}
+		a.settings = next
+	}
+	a.status, a.statusUntil = "已不再记录来自「"+name+"」的内容", time.Now().Add(3*time.Second)
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -121,7 +256,7 @@ func (a *shelf) remove(items []store.Item) {
 	for _, id := range ids {
 		a.invalidateThumbnail(id)
 	}
-	a.selection.keepExisting(a.store.Items)
+	a.selection.keepExisting(a.visibleItems())
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -147,7 +282,7 @@ func (a *shelf) toggleQuickLook() {
 	if a.store == nil || !a.visible {
 		return
 	}
-	paths, _ := usable(a.selection.chosen(a.store.Items))
+	paths, _ := usable(a.selection.chosen(a.visibleItems()))
 	a.quickLook(paths)
 }
 
@@ -158,7 +293,7 @@ func (a *shelf) dragOut(item store.Item) transfer.Data {
 		return a.dragData(item)
 	}
 	var all []transfer.Item
-	for _, it := range a.selection.chosen(a.store.Items) {
+	for _, it := range a.selection.chosen(a.visibleItems()) {
 		if it.Missing {
 			continue
 		}

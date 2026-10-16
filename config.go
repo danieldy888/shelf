@@ -8,7 +8,11 @@ import (
 const (
 	appName = "Shelf"
 	// Carbon 全局快捷键，不需要辅助功能权限。
-	trayShortcut       = "Ctrl+Alt+Space"
+	trayShortcut = "Ctrl+Alt+Space"
+	// 打开剪贴板搜索：显示托盘、切到剪贴板标签并把焦点放进搜索框。
+	clipboardShortcut = "Ctrl+Alt+V"
+	// searchLabel 是搜索框的无障碍名称（也是测试定位用的标签）。
+	searchLabel        = "搜索剪贴板"
 	notchTriggerWidth  = 280 // 刘海拖拽接收区与保护区的宽度，单位 pt。
 	notchTriggerHeight = 64  // 拖拽靠近刘海时的垂直感应高度，单位 pt。
 	notchHoverPadX     = 8   // 空手移入刘海探头的水平余量，单位 pt。
@@ -29,6 +33,14 @@ const (
 // derived from the constant so the hint can never disagree with the
 // registered shortcut.
 var shortcutHint = shortcutLabel(trayShortcut)
+
+// clipboardHint is the panel footer's label for clipboardShortcut, derived
+// from the constant the same way.
+var clipboardHint = shortcutLabel(clipboardShortcut)
+
+// clipboardLimitChoices are the clipboard text limits offered in the
+// menu-bar menu; the setting takes any number, the menu the usual ones.
+var clipboardLimitChoices = []int{30, 100, 300}
 
 // shortcutLabel renders an Electron-style accelerator ("Ctrl+Alt+Space")
 // as macOS glyphs ("⌃⌥Space"). Unknown spellings are returned unchanged

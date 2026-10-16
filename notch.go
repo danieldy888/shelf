@@ -204,6 +204,12 @@ func (a *shelf) show(edge bool) {
 // Look the selection) while the shelf is in use; releaseKeys returns them
 // as soon as the user clicks in another app.
 func (a *shelf) holdKeys() {
+	if a.focusMode {
+		// 键盘模式的窗口自己处理 Esc 与空格：全局注册会在按键到达窗口
+		// 之前消费掉它们（空格就打不进搜索框），所以这里不占用。
+		a.releaseKeys()
+		return
+	}
 	if !a.escHeld {
 		if err := mygo.GlobalShortcut.Register("Escape", a.escape); err != nil {
 			a.report(fmt.Errorf("Esc 被其他应用占用，请用快捷键或收起按钮：%w", err))
@@ -228,10 +234,18 @@ func (a *shelf) releaseKeys() {
 	}
 }
 
-// escape closes Quick Look first, like Finder, then collapses the shelf.
+// escape closes Quick Look first, like Finder, then clears the clipboard
+// search while it holds text, and finally collapses the shelf.
 func (a *shelf) escape() {
 	if mac.QuickLookVisible() {
 		mac.CloseQuickLook()
+		return
+	}
+	if a.tab == tabClipboard && a.search != "" {
+		a.search = ""
+		if a.win != nil {
+			a.win.Invalidate()
+		}
 		return
 	}
 	a.hide()
@@ -247,11 +261,18 @@ func (a *shelf) hide() {
 	a.visible, a.edgeOpened, a.peeking = false, false, false
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.peekFrom, a.peekAnimStart = a.peekProgress, time.Now()
+	// 收起后回到默认视图：下次打开（悬停、拖入、托盘）从托盘标签开始，
+	// 搜索框清空；键盘模式交还焦点给用户原来所在的应用。
+	focused := a.focusMode
+	a.focusMode, a.tab, a.search, a.reveal = false, tabTray, "", ""
 	a.releaseKeys()
 	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
 	a.syncMousePassThrough()
+	if focused {
+		a.restorePreviousApp()
+	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}

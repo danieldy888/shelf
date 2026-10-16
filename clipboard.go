@@ -1,6 +1,9 @@
 package main
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 type clipKind int
 
@@ -51,4 +54,30 @@ func classifyClipboard(types []string) clipKind {
 		}
 	}
 	return clipSkip
+}
+
+// clipboardExcluded reports whether a copy is from an app the user chose
+// not to record: bundleID is compared to the excludedApps setting without
+// case, as Launch Services compares bundle identifiers. An unknown source
+// ("" — the system reported no frontmost app) is never excluded.
+func clipboardExcluded(bundleID string, excluded []string) bool {
+	if bundleID == "" {
+		return false
+	}
+	for _, id := range excluded {
+		if strings.EqualFold(strings.TrimSpace(id), bundleID) {
+			return true
+		}
+	}
+	return false
+}
+
+// clipCapture decides what one clipboard change records: nothing from an
+// app the user excluded, otherwise whatever the change's declared types
+// say (see classifyClipboard).
+func clipCapture(types []string, sourceApp string, excluded []string) clipKind {
+	if clipboardExcluded(sourceApp, excluded) {
+		return clipSkip
+	}
+	return classifyClipboard(types)
 }

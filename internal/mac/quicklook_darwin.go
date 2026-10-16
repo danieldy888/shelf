@@ -202,8 +202,13 @@ func QuickLook(paths []string) error {
 }
 
 // QuickLookVisible reports whether Shelf's Quick Look panel is open.
-// Main thread only.
+// Main thread only. Off the main thread (headless tests) it reports false
+// without instantiating the panel, which AppKit allows only on the main
+// thread.
 func QuickLookVisible() bool {
+	if !OnMainThread() {
+		return false
+	}
 	visible := false
 	withPool(func() {
 		panel := qlSharedPanel()

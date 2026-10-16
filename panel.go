@@ -3,11 +3,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/store"
 )
 
 var (
@@ -15,6 +19,14 @@ var (
 	textSymbol  = symbol(`<path d="M5 5h14M12 5v14M8 19h8"/>`)
 	fileSymbol  = symbol(`<path d="M14 3H6v18h12V7zM14 3v5h4M9 12h6M9 16h6"/>`)
 	closeSymbol = symbol(`<path d="m6 6 12 12M18 6 6 18"/>`)
+	// 图钉：置顶标记（列表里的行首小图标）。
+	pinSymbol = symbol(`<path d="M12 17v4M8 4h8l-1 6 3 3v1H6v-1l3-3z"/>`)
+)
+
+// panelTab is one of the two lists the expanded panel shows.
+const (
+	tabTray      = iota // 托盘：全部内容
+	tabClipboard        // 剪贴板：只显示剪贴板收录的文字与图片
 )
 
 func symbol(paths string) *ui.SVG {
@@ -39,6 +51,16 @@ func (a *shelf) view(c *ui.Context) {
 		a.escape()
 	}
 	c.OnShortcut(ui.Cmd, ui.KeyQ, mygo.App.Quit)
+	// 剪贴板标签的键盘操作：焦点在搜索框时由输入框的 OnTextKey 处理
+	// （输入框先拿到方向键和回车），焦点在别处时在这里兜底。
+	if a.visible && a.tab == tabClipboard {
+		if c.Shortcut(0, ui.KeyEscape) {
+			a.escape()
+		}
+		if c.Shortcut(0, ui.KeyEnter) {
+			a.copyClipSelection()
+		}
+	}
 	t := c.Theme()
 	// 常驻窗口是 Transparent 的：mygo 根元素默认画满主题背景，必须改成
 	// 全透明，否则整个 440×400 窗口会一直盖着一块主题色灰板。
@@ -160,23 +182,23 @@ func (a *shelf) view(c *ui.Context) {
 					a.hide()
 				}
 			})
-			ui.Text(c, "拖进来，随时带走").FontSize(12).TextColor(textMuted)
+			// 标签切换：托盘（全部内容）｜剪贴板（剪贴板收录的内容）。
+			// 剪贴板标签下同一行右侧是搜索框。
+			ui.Row(c.Key("tabs")).Gap(8).AlignItems(ui.Center).Children(func() {
+				a.tabSwitch(c)
+				if a.tab == tabClipboard {
+					a.searchField(c)
+				}
+			})
+			ui.Text(c, a.panelHint()).SingleLine().FontSize(12).TextColor(textMuted)
 			ui.Divider(c).Background(hairline)
-			if a.store == nil || len(a.store.Items) == 0 {
-				ui.Column(c).Grow(1).Center().Gap(16).Children(func() {
-					ui.Icon(c, shelfSymbol).Size(48, 48).TextColor(t.Accent)
-					ui.Text(c, "把文件拖到这里").FontSize(17).FontWeight(600).TextColor(textPrimary)
-					hint := "文件、文件夹、文字和图片"
-					if a.settings.ClipboardHistory {
-						hint += "\n复制的文字与截图也会自动收好"
-					}
-					ui.Text(c, hint).TextAlign(ui.Center).FontSize(12).TextColor(textMuted)
-				})
+			list := a.visibleItems()
+			if len(list) == 0 {
+				a.emptyState(c)
 			} else {
 				ui.Scroll(c.Key("items")).Grow(1).Gap(6).Children(func() {
 					// 快照：删除按钮或拖入回调可改变原切片。
-					items := a.store.Items
-					for _, item := range items {
+					for _, item := range list {
 						a.itemView(c, item)
 					}
 				})
@@ -190,17 +212,19 @@ func (a *shelf) view(c *ui.Context) {
 			if a.status != "" {
 				ui.Text(c, a.status).MaxLines(3).FontSize(11).TextColor(textMuted)
 			} else {
-				count, selected := 0, a.selection.count()
-				if a.store != nil {
-					count = len(a.store.Items)
+				selected := a.selection.count()
+				footer := fmt.Sprintf("%d 项 · 右键更多操作 · ⌘/⇧ 多选", len(list))
+				hint := shortcutHint
+				if a.tab == tabClipboard {
+					hint = clipboardHint
+					footer = fmt.Sprintf("%d 项 · ↑↓ 选择 · ⏎ 复制并收起", len(list))
 				}
-				footer := fmt.Sprintf("%d 项 · 右键更多操作 · ⌘/⇧ 多选", count)
 				if selected > 1 {
 					footer = fmt.Sprintf("已选 %d 项 · 一起拖出 · 空格预览", selected)
 				}
 				ui.Row(c).Children(func() {
 					ui.Text(c, footer).Grow(1).SingleLine().FontSize(11).TextColor(textMuted)
-					ui.Text(c, shortcutHint).FontSize(11).TextColor(textMuted)
+					ui.Text(c, hint).FontSize(11).TextColor(textMuted)
 				})
 			}
 		})
@@ -211,4 +235,215 @@ func (a *shelf) view(c *ui.Context) {
 			a.show(false)
 		}
 	}
+}
+
+// tabSwitch is the compact segmented switch in the panel header:
+// 「托盘」(everything, as before) | 「剪贴板」(clipboard captures only).
+func (a *shelf) tabSwitch(c *ui.Context) {
+	row := ui.Row(c.Key("tab-switch")).Shrink(0).Padding(2).Gap(2).Radius(8).Background(cardSurface)
+	row.Children(func() {
+		a.tabButton(c, "tab-tray", "托盘", tabTray)
+		a.tabButton(c, "tab-clipboard", "剪贴板", tabClipboard)
+	})
+}
+
+// tabButton is one segment of the switch; the chosen one is highlighted
+// and a click switches the list.
+func (a *shelf) tabButton(c *ui.Context, key, label string, tab int) {
+	on := a.tab == tab
+	b := ui.ButtonBase(c.Key(key)).Padding(3, 10).Radius(6).Label(label)
+	switch {
+	case on:
+		b.Background(ui.RGBA(255, 255, 255, 0.24))
+	case b.Hovered():
+		b.Background(cardHover)
+	}
+	b.Children(func() {
+		text := ui.Text(c, label).SingleLine().FontSize(12)
+		if on {
+			text.TextColor(textPrimary).FontWeight(600)
+		} else {
+			text.TextColor(textMuted)
+		}
+	})
+	if b.Clicked() {
+		a.setTab(tab)
+	}
+}
+
+// searchField is the clipboard tab's search box. Typing filters the list
+// as it goes; while the shelf was opened for search the box keeps the
+// keyboard focus, so ↑/↓ walk the list and ⏎ copies and collapses without
+// reaching for the mouse. Esc clears the search first, then collapses.
+func (a *shelf) searchField(c *ui.Context) {
+	wrap := ui.Row(c.Key("clip-search")).Grow(1).Padding(3, 8).Radius(7).Background(cardSurface)
+	wrap.Children(func() {
+		in := ui.TextInputBase(c.Key("clip-query"), &a.search).Grow(1).MinWidth(0).
+			Placeholder("搜索文字").Label(searchLabel).FontSize(12).TextColor(textPrimary)
+		if a.focusMode {
+			in.Focus()
+		}
+		// 焦点在搜索框期间归还全局 Esc/空格：全局热键会在按键到达窗口
+		// 前吃掉它们（空格就打不进查询里）；焦点一离开就收回，
+		// 空格恢复快速预览。
+		if a.win != nil {
+			if in.Focused() {
+				a.releaseKeys()
+			} else if a.visible && !a.focusMode {
+				a.holdKeys()
+			}
+		}
+		in.OnTextKey(func(k ui.TextKey) bool {
+			switch k.Key {
+			case ui.KeyUp:
+				a.moveClipSelection(-1)
+			case ui.KeyDown:
+				a.moveClipSelection(1)
+			case ui.KeyEnter:
+				a.copyClipSelection()
+			case ui.KeyEscape:
+				a.escape()
+			default:
+				return false
+			}
+			return true
+		})
+	})
+}
+
+// panelHint is the line under the title: what the current tab holds.
+func (a *shelf) panelHint() string {
+	if a.tab != tabClipboard {
+		return "拖进来，随时带走"
+	}
+	if !a.settings.ClipboardHistory {
+		return "剪贴板记录已关闭 · 菜单栏图标 → 剪贴板记录"
+	}
+	return "复制的内容自动收好 · " + clipboardHint + " 打开搜索"
+}
+
+// emptyState is what the panel shows when the current tab has no rows: the
+// tray keeps its drop hint, the clipboard tab explains how captures arrive
+// or that the search matched nothing.
+func (a *shelf) emptyState(c *ui.Context) {
+	t := c.Theme()
+	icon, title, hint := shelfSymbol, "把文件拖到这里", "文件、文件夹、文字和图片"
+	switch {
+	case a.tab == tabClipboard && a.search != "":
+		icon, title, hint = textSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
+	case a.tab == tabClipboard && !a.settings.ClipboardHistory:
+		icon, title, hint = textSymbol, "剪贴板记录已关闭", "在菜单栏图标的「剪贴板记录」里重新打开"
+	case a.tab == tabClipboard:
+		icon, title, hint = textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
+	case a.settings.ClipboardHistory:
+		hint += "\n复制的文字与截图也会自动收好"
+	}
+	ui.Column(c).Grow(1).Center().Gap(16).Children(func() {
+		ui.Icon(c, icon).Size(48, 48).TextColor(t.Accent)
+		ui.Text(c, title).FontSize(17).FontWeight(600).TextColor(textPrimary)
+		ui.Text(c, hint).TextAlign(ui.Center).FontSize(12).TextColor(textMuted)
+	})
+}
+
+// visibleItems is the list the expanded panel shows and acts on: every
+// item on the tray tab, in store order (newest first); on the clipboard
+// tab only clipboard captures, matched by the search text and with pinned
+// items first. Rows, selection ranges, menus and drag-outs all use it, so
+// no action can reach a row the tab is not showing.
+func (a *shelf) visibleItems() []store.Item {
+	if a.store == nil {
+		return nil
+	}
+	if a.tab != tabClipboard {
+		return a.store.Items
+	}
+	query := strings.ToLower(strings.TrimSpace(a.search))
+	var pinned, rest []store.Item
+	for _, it := range a.store.Items {
+		if it.Source != store.SourceClipboard || !clipboardItemMatches(it, query) {
+			continue
+		}
+		if it.Pinned {
+			pinned = append(pinned, it)
+		} else {
+			rest = append(rest, it)
+		}
+	}
+	return append(pinned, rest...)
+}
+
+// clipboardItemMatches reports whether a clipboard-list row matches the
+// (already lowercased) search text: text items by case-insensitive
+// substring, images only while the search is empty.
+func clipboardItemMatches(it store.Item, query string) bool {
+	if query == "" {
+		return true
+	}
+	if it.Kind != store.KindText {
+		return false
+	}
+	return strings.Contains(strings.ToLower(it.Text), query)
+}
+
+// setTab switches the panel's list. The selection follows: ids the new
+// list does not show are dropped, so a ⇧-range never spans rows the user
+// cannot see.
+func (a *shelf) setTab(tab int) {
+	if a.tab == tab {
+		return
+	}
+	a.tab = tab
+	a.reveal = ""
+	a.selection.keepExisting(a.visibleItems())
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// moveClipSelection moves the clipboard tab's selection by delta rows
+// (↑/↓ in the search field). With nothing selected yet, ↓ starts at the
+// first row and ↑ at the last; the row is scrolled into view.
+func (a *shelf) moveClipSelection(delta int) {
+	items := a.visibleItems()
+	if len(items) == 0 {
+		return
+	}
+	next := 0
+	if cur := indexOf(items, a.selection.anchor); cur >= 0 {
+		next = min(max(cur+delta, 0), len(items)-1)
+	} else if delta < 0 {
+		next = len(items) - 1
+	}
+	a.selection.only(items[next].ID)
+	a.reveal = items[next].ID
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// copyClipSelection is ⏎ on the clipboard tab: the selected item goes on
+// the clipboard — text as text, an image as PNG — and the shelf collapses,
+// so ⌘V pastes it into the app the user came from. Several selected texts
+// are copied one per line.
+func (a *shelf) copyClipSelection() {
+	items := a.selection.chosen(a.visibleItems())
+	if len(items) == 0 {
+		return
+	}
+	if len(items) == 1 {
+		if a.copyItem(items[0]) {
+			a.hide()
+		}
+		return
+	}
+	var texts []string
+	for _, it := range items {
+		if it.Kind != store.KindText {
+			a.report(errors.New("这些项目不能一起复制；请只选一个"))
+			return
+		}
+		texts = append(texts, it.Text)
+	}
+	a.copyText(strings.Join(texts, "\n"))
+	a.hide()
 }

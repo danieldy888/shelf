@@ -39,14 +39,17 @@ func (m *clipboardModule) tick(now time.Time) {
 		return
 	}
 	// 每次变化只收一条：按来源声明的首选表示取文字或图片，避免双条目。
-	switch classifyClipboard(mac.ClipboardTypes()) {
+	// 同时记录复制发生的瞬间哪个应用在最前：右键菜单据此提供“不再记录
+	// 来自该应用的内容”，设置里被排除的应用则整条跳过。
+	bundleID, _ := mac.FrontmostApp()
+	switch clipCapture(mac.ClipboardTypes(), bundleID, a.settings.ExcludedApps) {
 	case clipText:
 		if text := mygo.Clipboard.ReadText(); text != "" {
-			a.changed(a.store.AddText(text))
+			a.changed(a.store.AddClipText(text, bundleID))
 		}
 	case clipImage:
 		if png := mygo.Clipboard.ReadImage(); len(png) > 0 {
-			a.changed(a.store.AddImage(png))
+			a.changed(a.store.AddClipImage(png, bundleID))
 		}
 	}
 }

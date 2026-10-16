@@ -79,7 +79,10 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 - While dragging, shake the pointer left and right to summon a floating basket beside the cursor — drop into it to stash
 - Global hotkey ⌃⌥Space to show or hide the shelf; clicking outside collapses it back into the notch
 - Drag files, folders, text and images in — and drag them out to any app
-- Clipboard text history: keeps the last 30 items, duplicates move to the top instead of creating copies
+- Clipboard text history: keeps the last 30 items (30/100/300 is a menu choice), duplicates move to the top instead of creating copies; each capture remembers the app it came from
+- ⌃⌥V opens the clipboard tab with a focused search field — type to filter, ↑/↓ to select, ⏎ copies and lands you back in the app you came from
+- Pin any item (right-click → 置顶): pinned rows are marked, list first in the clipboard tab, and are never evicted by the text limit, cleanup or clear-all
+- Exclude an app from recording: right-click a clipboard item → never record from that app again (menu-bar → 剪贴板记录 toggles history entirely)
 - Long text is shown as a short preview; copying or dragging keeps the complete text
 - Screenshots and clipboard images land in the shelf automatically
 - Skips passwords copied from password managers that mark them as private
@@ -103,8 +106,13 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Remove an item | Click the × on its right; file references never delete the original file |
 | Select several items | ⌘-click to add or remove one, ⇧-click to select a range |
 | Drag several items out | Select them, then drag any one of them |
-| More actions | Right-click an item: open, show in Finder, Quick Look, AirDrop, copy, remove |
+| Switch between all items and clipboard captures | Click 托盘 or 剪贴板 in the panel header |
+| Search clipboard captures | Press `⌃⌥V` (or the 剪贴板 tab): type to filter — ↑/↓ selects, ⏎ copies and collapses back to your app, `Esc` clears the search then collapses |
+| Pin an item | Right-click it → 置顶; pinned rows show a pin mark and are never evicted by limits, cleanup or 清空 |
+| Stop recording an app | Right-click a clipboard item → 不再记录来自「app」的内容; it lands in `settings.json`'s `excludedApps` |
+| More actions | Right-click an item: open, show in Finder, Quick Look, AirDrop, copy, pin, remove |
 | Quick Look | Select files or images and press Space; Space or `Esc` closes it |
+| Clipboard history on/off and its size | Right-click the menu-bar icon → 剪贴板记录: 记录剪贴板 toggles recording live; 保留 30/100/300 条 caps stored texts |
 | Clean up old items | Right-click the menu-bar icon, choose the automatic cleanup period |
 | Clear all items | Click the clear button in the header; file references never delete the original file |
 | Collapse the shelf | Press `⌃⌥Space`, `Esc`, the collapse button, or click anywhere outside it |
@@ -180,7 +188,10 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 - 拖拽中左右快速摇晃指针，光标旁会唤出一个悬浮篮子——拖到上面松开即暂存
 - 全局快捷键 ⌃⌥Space 随时显示或收起；点击托盘外任意处自动缩回刘海
 - 文件、文件夹、文字、图片都可以拖进来，再拖到任意应用
-- 剪贴板文字历史：最多保留 30 条，重复内容移到顶部而不新增条目
+- 剪贴板文字历史：默认保留 30 条（菜单栏可改 30/100/300），重复内容移到顶部而不新增条目；每条记录记住复制它的应用
+- 按 `⌃⌥V` 打开剪贴板页并聚焦搜索框——输入即筛选，`↑`/`↓` 选择，`⏎` 复制后收起并落回你原来的应用
+- 右键任意项目可以置顶：置顶行带图钉标记、在剪贴板页排最前，不受文字限额、自动清理和“清空”影响
+- 按应用排除记录：右键剪贴板条目 → “不再记录来自该应用的内容”；菜单栏图标 → “剪贴板记录”可以整体开关
 - 长文字只缩短列表摘要，复制和拖出仍保留完整正文
 - 截图和剪贴板图片自动进入托盘
 - 密码管理器标记为隐私的密码不会被记录
@@ -205,7 +216,12 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 移除项目 | 点击该项右侧的 ×；文件引用不会删除原文件 |
 | 选中多个项目 | 按住 `⌘` 单击逐个选，按住 `⇧` 单击选一段 |
 | 一次拖出多个 | 选中后拖住其中任意一个 |
-| 更多操作 | 右键项目：打开、在 Finder 中显示、快速查看、隔空投送、复制、移除 |
+| 更多操作 | 右键项目：打开、在 Finder 中显示、快速查看、隔空投送、复制、置顶、移除 |
+| 切换全部内容 / 剪贴板记录 | 点面板头部的「托盘」或「剪贴板」 |
+| 搜索剪贴板内容 | 按 `⌃⌥V`（或剪贴板页）输入筛选——`↑`/`↓` 选择，`⏎` 复制并收起回到原应用，`Esc` 先清空搜索再收起 |
+| 置顶项目 | 右键 → 「置顶」；置顶行带图钉标记，不被限额、清理和「清空」移除 |
+| 不再记录某个应用 | 右键剪贴板条目 → 「不再记录来自「应用」的内容」（写入 `settings.json` 的 `excludedApps`） |
+| 剪贴板记录开关与条数 | 右键菜单栏图标 → 「剪贴板记录」：「记录剪贴板」即时开关；「保留 30/100/300 条」改文字上限 |
 | 快速查看 | 选中文件或图片后按空格；再按空格或 `Esc` 关闭 |
 | 自动清理旧内容 | 右键菜单栏图标 → 自动清理，选择期限 |
 | 清空全部项目 | 点击托盘顶部的“清空”；文件引用不会删除原文件 |
