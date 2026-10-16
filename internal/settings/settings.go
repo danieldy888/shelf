@@ -1,0 +1,80 @@
+// Package settings keeps the user's preferences in settings.json inside the
+// data directory, next to the shelf's own state.
+package settings
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+// FileName is the preferences file inside the data directory.
+const FileName = "settings.json"
+
+// Settings are the user-adjustable preferences. Every field must have its
+// default in Default: a key missing from the file keeps that default.
+type Settings struct {
+	// ClipboardHistory records copied text and images into the shelf.
+	ClipboardHistory bool `json:"clipboardHistory"`
+}
+
+// Default is what a fresh install uses.
+func Default() Settings {
+	return Settings{ClipboardHistory: true}
+}
+
+// Load reads dir/settings.json over the defaults.
+//
+// A missing file is created with the defaults so the user can find and edit
+// it. A file that cannot be read or parsed is never rewritten: Load returns
+// the defaults together with the error, and the caller decides how to tell
+// the user.
+func Load(dir string) (Settings, error) {
+	s := Default()
+	path := filepath.Join(dir, FileName)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if werr := write(dir, s); werr != nil {
+			return s, fmt.Errorf("settings: creating %s: %w", FileName, werr)
+		}
+		return s, nil
+	}
+	if err != nil {
+		return s, fmt.Errorf("settings: reading %s: %w", FileName, err)
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Default(), fmt.Errorf("settings: %s is not valid JSON, using defaults: %w", FileName, err)
+	}
+	return s, nil
+}
+
+// write saves s atomically: a temporary file in dir renamed over the target,
+// so a crash never leaves a half-written settings.json.
+func write(dir string, s Settings) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp, err := os.CreateTemp(dir, "."+FileName+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(dir, FileName))
+}

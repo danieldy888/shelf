@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/internal/settings"
 	"shelf/internal/store"
 )
 
@@ -60,7 +61,14 @@ func main() {
 			log.Printf("Shelf: 迁移前备份失败，已停止写入以免覆盖可恢复原件：%v", merr)
 		}
 	}
-	a := &shelf{store: s, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
+	prefs, perr := settings.Load(*dataDir)
+	if perr != nil {
+		log.Printf("Shelf: %v", perr)
+	}
+	a := &shelf{store: s, settings: prefs, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
+	if perr != nil {
+		a.status = "设置文件无法读取，本次使用默认设置：" + perr.Error()
+	}
 	mygo.App.SetName(appName)
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
@@ -135,7 +143,10 @@ func (a *shelf) ready(show bool) {
 		a.status = fmt.Sprintf("快捷键被占用；可点击菜单栏图标。%v", err)
 		log.Print(a.status)
 	}
-	a.clipboardCount = mac.ClipboardChangeCount()
+	if a.settings.ClipboardHistory {
+		a.clip = newClipboardModule(a)
+		a.modules = append(a.modules, a.clip)
+	}
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。
