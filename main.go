@@ -120,11 +120,6 @@ func (a *shelf) ready(show bool) {
 			a.hide()
 		}
 	})
-	menu := mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "显示 / 收起 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
-		mygo.Separator(),
-		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
-	})
 	var err error
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{Icon: trayIcon(), IconIsTemplate: true, ToolTip: "Shelf · 临时托盘"})
 	if err != nil {
@@ -132,7 +127,7 @@ func (a *shelf) ready(show bool) {
 	}
 	a.tray.OnClick(a.toggle)
 	a.tray.OnRightClick(func() {
-		a.tray.SetMenu(menu)
+		a.tray.SetMenu(a.trayMenu())
 		defer a.tray.SetMenu(nil)
 		a.tray.PopUpMenu()
 	})
@@ -162,4 +157,21 @@ func (a *shelf) ready(show bool) {
 	}
 	a.startMonitoring()
 	log.Print("Shelf ready")
+}
+
+// trayMenu is rebuilt on every right-click so the protection item reflects
+// the current Accessibility state, which the user changes in System Settings.
+func (a *shelf) trayMenu() *mygo.Menu {
+	guard := &mygo.MenuItem{Label: "刘海拖放保护已开启", Disabled: true}
+	if !mac.AccessibilityTrusted() {
+		guard = &mygo.MenuItem{Label: "开启刘海拖放保护…", Click: func(*mygo.MenuItem, *mygo.Window) {
+			mac.RequestAccessibility()
+		}}
+	}
+	return mygo.NewMenu([]*mygo.MenuItem{
+		{Label: "显示 / 收起 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
+		guard,
+		mygo.Separator(),
+		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+	})
 }

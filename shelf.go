@@ -52,11 +52,13 @@ type shelf struct {
 }
 
 // dragGuard owns the current filter, including a failed setup attempt so that
-// the same error is not retried on every monitoring tick.
+// the same error is not retried on every monitoring tick. A failure while
+// untrusted is retried once Accessibility is granted, without a restart.
 type dragGuard struct {
 	stop      func()
 	region    mac.DragGuardRegion
 	attempted bool
+	trusted   bool // Accessibility state at the last attempt
 }
 
 func (a *shelf) toggle() {
@@ -400,15 +402,16 @@ func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
 
 // Protect the notch's approach corridor, including its centre. The lower edge
 // is below the camera housing but still inside the shelf's drag trigger.
-// The tap is armed once and stays up for file drags and window moves alike;
-// tearing it down between sessions re-prompts Accessibility and leaves the
-// top edge unguarded at the start of the next drag.
+// The event filter (Accessibility only) is armed once and stays up for file
+// drags and window moves alike; the cursor pin needs no permission and runs
+// only while a file drag is in progress.
 func (a *shelf) syncDragGuard() {
 	if a.win == nil {
 		a.stopDragGuard()
 		return
 	}
 	region := a.dragGuardRegion()
+	mac.SetDragPin(region, a.dragging && !a.quitting)
 	if a.guard.stop != nil {
 		if a.guard.region != region {
 			mac.SetDragGuardRegion(region)
@@ -416,17 +419,18 @@ func (a *shelf) syncDragGuard() {
 		}
 		return
 	}
-	if a.guard.attempted && !mac.AccessibilityTrusted(false) {
+	if a.guard.attempted && (a.guard.trusted || !mac.AccessibilityTrusted()) {
 		return
 	}
 	stop, err := mac.StartDragGuard(region)
-	a.guard = dragGuard{stop: stop, region: region, attempted: true}
+	a.guard = dragGuard{stop: stop, region: region, attempted: true, trusted: mac.AccessibilityTrusted()}
 	if err != nil {
-		log.Printf("刘海拖拽保护未启用（拖到顶部仍可能打开桌面栏）：%v", err)
+		log.Printf("刘海拖拽保护未启用：%v", err)
 	}
 }
 
 func (a *shelf) stopDragGuard() {
+	mac.SetDragPin(mac.DragGuardRegion{}, false)
 	if a.guard.stop != nil {
 		a.guard.stop()
 	}
