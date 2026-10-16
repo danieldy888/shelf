@@ -134,8 +134,11 @@ func (a *shelf) view(c *ui.Context) {
 					})
 					if clear.Clicked() {
 						if err := a.store.Clear(); err != nil {
+							// The list may already be empty and saved even
+							// when a stored image could not be deleted.
 							a.report(err)
-						} else {
+						}
+						if len(a.store.Items) == 0 {
 							a.clearThumbnails()
 							a.selection.clear()
 							if a.win != nil {

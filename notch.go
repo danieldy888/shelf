@@ -125,7 +125,11 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 		return
 	}
 	if inside {
-		a.holdKeys()
+		// Esc and Space are taken only while the panel is open; a press
+		// on the collapsed notch band or a closing panel must not hold them.
+		if a.visible {
+			a.holdKeys()
+		}
 		return
 	}
 	a.releaseKeys()

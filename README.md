@@ -84,6 +84,9 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 - Skips passwords copied from password managers that mark them as private
 - Contents persist across restarts
 - Stores file references only — your files are never copied
+- Select several items with ⌘ or ⇧ and drag them out together
+- Right-click an item to open it, show it in Finder, Quick Look it, AirDrop it or copy its text or path
+- Optional automatic cleanup of items older than 1, 7 or 30 days
 - Fully local: zero network requests, no telemetry
 
 ## Usage
@@ -95,6 +98,11 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Drag an item out | Drag it from the shelf into the target app |
 | Copy a text item back | Click it once, then paste (`⌘V`) anywhere |
 | Remove an item | Click the × on its right; file references never delete the original file |
+| Select several items | ⌘-click to add or remove one, ⇧-click to select a range |
+| Drag several items out | Select them, then drag any one of them |
+| More actions | Right-click an item: open, show in Finder, Quick Look, AirDrop, copy, remove |
+| Quick Look | Select files or images and press Space; Space or `Esc` closes it |
+| Clean up old items | Right-click the menu-bar icon, choose the automatic cleanup period |
 | Clear all items | Click the clear button in the header; file references never delete the original file |
 | Collapse the shelf | Press `⌃⌥Space`, `Esc`, the collapse button, or click anywhere outside it |
 | Turn on notch drop protection (optional) | Right-click the menu-bar icon, choose the notch drop protection item, then allow Shelf in System Settings; turn it on again after each update |
@@ -174,6 +182,9 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 - 密码管理器标记为隐私的密码不会被记录
 - 重启后内容保留
 - 只记录文件引用，绝不复制你的文件
+- 按住 ⌘ 或 ⇧ 多选，一次拖出多个
+- 右键项目可以打开、在 Finder 中显示、快速查看、隔空投送、复制文字或路径
+- 可选自动清理超过 1 天、7 天或 30 天的内容
 - 完全本地运行：零网络请求，无遥测
 
 ## 使用
@@ -186,6 +197,11 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 拖出项目 | 从托盘中拖住该项，到目标应用中松开 |
 | 把文字复制回来 | 单击该文字项，然后在任意应用中粘贴（`⌘V`） |
 | 移除项目 | 点击该项右侧的 ×；文件引用不会删除原文件 |
+| 选中多个项目 | 按住 `⌘` 单击逐个选，按住 `⇧` 单击选一段 |
+| 一次拖出多个 | 选中后拖住其中任意一个 |
+| 更多操作 | 右键项目：打开、在 Finder 中显示、快速查看、隔空投送、复制、移除 |
+| 快速查看 | 选中文件或图片后按空格；再按空格或 `Esc` 关闭 |
+| 自动清理旧内容 | 右键菜单栏图标 → 自动清理，选择期限 |
 | 清空全部项目 | 点击托盘顶部的“清空”；文件引用不会删除原文件 |
 | 收起托盘 | 按 `⌃⌥Space`、`Esc`、“收起”，或点击托盘外任意处 |
 | 开启刘海拖放保护（可选） | 右键菜单栏图标 → 开启刘海拖放保护…，再在系统设置里打开 Shelf；每次更新后重新开启一次 |
