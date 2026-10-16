@@ -137,6 +137,12 @@ func (a *shelf) ready(show bool) {
 	}
 	a.applyClipboardHistory()
 	a.modules = append(a.modules, &retentionModule{host: a})
+	// 刘海岛状态源：有电池的机器才注册电池模块（台式机永远没有）；
+	// 音量跟随默认输出设备，没有可控制设备时保持沉默。
+	if mac.ReadPower().HasBattery {
+		a.modules = append(a.modules, newBatteryModule(a))
+	}
+	a.modules = append(a.modules, newVolumeModule(a))
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。
@@ -195,6 +201,7 @@ func (a *shelf) trayMenu() *mygo.Menu {
 		guard,
 		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
 		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
+		{Label: "刘海岛", Type: mygo.MenuItemSubmenu, Submenu: a.islandMenu()},
 		mygo.Separator(),
 		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
@@ -253,4 +260,37 @@ func (a *shelf) clipboardMenu() []*mygo.MenuItem {
 		})
 	}
 	return items
+}
+
+// islandMenu offers the three island sources as live check items. A
+// provider reads its setting on every tick, so a toggle applies at once;
+// the menu is disabled while settings.json could not be read, so a broken
+// file is never overwritten.
+func (a *shelf) islandMenu() []*mygo.MenuItem {
+	check := func(label string, checked bool, flip func(*settings.Settings)) *mygo.MenuItem {
+		return &mygo.MenuItem{
+			Label: label, Type: mygo.MenuItemCheckbox, Checked: checked, Disabled: a.settingsBroken,
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.setIsland(flip) },
+		}
+	}
+	return []*mygo.MenuItem{
+		check("正在播放", a.settings.IslandNowPlaying, func(s *settings.Settings) { s.IslandNowPlaying = !s.IslandNowPlaying }),
+		check("电量与充电", a.settings.IslandBattery, func(s *settings.Settings) { s.IslandBattery = !s.IslandBattery }),
+		check("音量", a.settings.IslandVolume, func(s *settings.Settings) { s.IslandVolume = !s.IslandVolume }),
+	}
+}
+
+// setIsland applies one island toggle: the change is saved first and only
+// then applied, so a failed write leaves the running setting unchanged.
+func (a *shelf) setIsland(mutate func(*settings.Settings)) {
+	if a.settingsBroken {
+		return
+	}
+	next := a.settings
+	mutate(&next)
+	if err := settings.Save(a.dataDir, next); err != nil {
+		a.report(err)
+		return
+	}
+	a.settings = next
 }
