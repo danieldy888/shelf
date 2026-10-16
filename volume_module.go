@@ -50,6 +50,11 @@ func (t *volumeTracker) step(now time.Time, vol float32, muted bool, ok bool) {
 		t.primed, t.vol, t.muted = true, vol, muted
 		return
 	}
+	if volWithin(t.vol, vol) {
+		// A sub-epsilon drift keeps the shown value: it must not reset the
+		// debounce or count as a new change.
+		vol = t.vol
+	}
 	if vol == t.vol && muted == t.muted {
 		t.flush(now)
 		return
@@ -63,6 +68,16 @@ func (t *volumeTracker) step(now time.Time, vol float32, muted bool, ok bool) {
 	if now.Sub(t.edgeAt) >= volumeDebounce {
 		t.emit(now)
 	}
+}
+
+// volWithin reports whether the new scalar is close enough to the shown
+// one to be the same user-visible level.
+func volWithin(shown, next float32) bool {
+	d := shown - next
+	if d < 0 {
+		d = -d
+	}
+	return d < levelEps
 }
 
 // idle advances an overdue debounce when no fresh sample is available.
@@ -97,10 +112,11 @@ type volumeModule struct {
 	tracker volumeTracker
 	last    time.Time
 	period  time.Duration
+	icons   [2]*ui.SVG
 }
 
 func newVolumeModule(host *shelf) *volumeModule {
-	m := &volumeModule{host: host, period: volumePoll}
+	m := &volumeModule{host: host, period: volumePoll, icons: [2]*ui.SVG{speakerIcon(false), speakerIcon(true)}}
 	if mac.WatchOutput() {
 		m.period = volumeResample
 	}
@@ -111,11 +127,16 @@ func newVolumeModule(host *shelf) *volumeModule {
 }
 
 func (m *volumeModule) tick(now time.Time) {
-	if !mac.ConsumeOutputChanged() && now.Sub(m.last) < m.period {
+	dirty := mac.ConsumeOutputChanged()
+	if !dirty && now.Sub(m.last) < m.period {
 		m.tracker.idle(now)
 		return
 	}
 	m.last = now
+	// A default-device swap that produced no listener event (a HAL restart
+	// or a silently removed device) is recovered here: AudioResync re-arms
+	// and is a no-op while the watched device is still right.
+	mac.AudioResync()
 	s := mac.ReadOutput()
 	m.tracker.step(now, s.Level, s.Muted, s.OK)
 }
@@ -128,7 +149,7 @@ func (m *volumeModule) activity(now time.Time) (activity, bool) {
 	act := activity{
 		ID:       "volume",
 		Priority: volumePriority,
-		Leading:  speakerIcon(m.tracker.muted),
+		Leading:  m.icon(),
 		Level:    m.tracker.vol,
 		Until:    m.tracker.until,
 	}
@@ -138,8 +159,17 @@ func (m *volumeModule) activity(now time.Time) (activity, bool) {
 	return act, true
 }
 
-// speakerIcon is the hand-drawn speaker glyph; the muted variant drops the
-// sound waves for a cross.
+// icon returns the cached speaker glyph so the island's Leading pointer is
+// stable across ticks and never re-parses.
+func (m *volumeModule) icon() *ui.SVG {
+	if m.tracker.muted {
+		return m.icons[1]
+	}
+	return m.icons[0]
+}
+
+// speakerIcon draws the glyph once per variant at construction; the muted
+// variant drops the sound waves for a cross.
 func speakerIcon(muted bool) *ui.SVG {
 	const body = `<path fill="currentColor" d="M4 9.2v5.6h3.6l4.4 3.7V5.5L7.6 9.2H4z"/>`
 	if muted {

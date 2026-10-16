@@ -154,33 +154,64 @@ func ReadOutput() OutputState {
 	return s
 }
 
-// watchOutputDevice installs the shared listener proc on the system
-// object's default-device property and on dev's volume and mute
-// properties, after removing it from whichever device was watched before.
+// watchTransition is the pure core of watchOutputDevice: given the device
+// currently watched and the new default, it reports which device to detach
+// per-device listeners from (0 = none) and which to attach to. The system
+// default-device listener is never part of the transition.
+func watchTransition(watched, next uint32) (detach, attach uint32) {
+	if watched == next {
+		return 0, 0
+	}
+	return watched, next
+}
+
+// watchOutputDevice re-arms the per-device volume and mute listeners when
+// the default output device moves, following watchTransition. The listener
+// on the system object's default-device property is always armed —
+// including while no device exists — so a later device still signals.
 // Main thread only.
 func watchOutputDevice(dev uint32) {
-	if watchedDevice == dev {
+	detach, attach := watchTransition(watchedDevice, dev)
+	if detach == 0 && attach == 0 {
 		return
 	}
-	sys := audioObjectPropertyAddress{selector: selectorDefaultOutputDevice, scope: audioScopeGlobal, element: audioPropertyElementMain}
 	vol := audioObjectPropertyAddress{selector: selectorVolumeScalar, scope: audioScopeOutput, element: audioPropertyElementMain}
 	mute := audioObjectPropertyAddress{selector: selectorMute, scope: audioScopeOutput, element: audioPropertyElementMain}
-	if watchedDevice != 0 {
-		audioRemoveListener(watchedDevice, unsafe.Pointer(&vol), audioCB, nil)
-		audioRemoveListener(watchedDevice, unsafe.Pointer(&mute), audioCB, nil)
-		audioRemoveListener(audioObjectSystemObject, unsafe.Pointer(&sys), audioCB, nil)
+	if detach != 0 {
+		audioRemoveListener(detach, unsafe.Pointer(&vol), audioCB, nil)
+		audioRemoveListener(detach, unsafe.Pointer(&mute), audioCB, nil)
 		watchedDevice = 0
 	}
-	if dev == 0 {
-		return
-	}
-	audioAddListener(audioObjectSystemObject, unsafe.Pointer(&sys), audioCB, nil)
 	// A device without a software volume reports errors for both of these;
-	// the reads stay inert and the default-device listener still follows
-	// the user back to a controllable device.
-	audioAddListener(dev, unsafe.Pointer(&vol), audioCB, nil)
-	audioAddListener(dev, unsafe.Pointer(&mute), audioCB, nil)
-	watchedDevice = dev
+	// the reads stay inert and the system listener still follows the user
+	// back to a controllable device.
+	if attach != 0 {
+		audioAddListener(attach, unsafe.Pointer(&vol), audioCB, nil)
+		audioAddListener(attach, unsafe.Pointer(&mute), audioCB, nil)
+		watchedDevice = attach
+	}
+}
+
+// armSystemListener installs the default-device listener once; it stays
+// armed for the process lifetime so device changes are always reported,
+// even when nothing was audible when the watch began.
+func armSystemListener() {
+	sys := audioObjectPropertyAddress{selector: selectorDefaultOutputDevice, scope: audioScopeGlobal, element: audioPropertyElementMain}
+	audioAddListener(audioObjectSystemObject, unsafe.Pointer(&sys), audioCB, nil)
+}
+
+// AudioResync re-arms the listeners when the watched device has drifted
+// from the current default — a device swap that produced no listener
+// event (a HAL restart, or the device disappearing silently) is recovered
+// on the next resample instead of leaving the feature dead. It reports
+// the AudioObjectID now being watched, 0 when there is none.
+func AudioResync() uint32 {
+	if err := ensureAudio(); err != nil || !audioWatchOK {
+		return 0
+	}
+	dev := defaultOutputDevice()
+	watchOutputDevice(dev)
+	return dev
 }
 
 // WatchOutput installs CoreAudio property listeners so every change to the
@@ -193,8 +224,14 @@ func WatchOutput() bool {
 		return false
 	}
 	audioWatch.Do(func() {
-		audioCB = purego.NewCallback(func(_, _, _, _ uintptr) { audioDirty.Store(true) })
-		watchOutputDevice(defaultOutputDevice())
+		// AudioObjectPropertyListenerProc returns OSStatus; the callback
+		// only flags a change, so the status is always 0.
+		audioCB = purego.NewCallback(func(_, _, _, _ uintptr) int32 {
+			audioDirty.Store(true)
+			return 0
+		})
+		armSystemListener()
+		AudioResync()
 		audioWatchOK = true
 	})
 	return audioWatchOK
@@ -208,7 +245,7 @@ func ConsumeOutputChanged() bool {
 		return false
 	}
 	if audioWatchOK {
-		watchOutputDevice(defaultOutputDevice())
+		AudioResync()
 	}
 	return true
 }

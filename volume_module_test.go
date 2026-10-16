@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"shelf/internal/settings"
 )
 
@@ -120,5 +122,51 @@ func TestVolumeIcons(t *testing.T) {
 	}
 	if speakerIcon(false) == speakerIcon(true) {
 		t.Fatal("muted and unmuted must be distinct glyphs")
+	}
+}
+
+func TestVolumeIconPointerStable(t *testing.T) {
+	// The island invalidates when Leading changes pointer, so the module
+	// must hand out the same cached glyph every tick of a flash.
+	a := &shelf{settings: settings.Default()}
+	a.settings.IslandVolume = true
+	m := &volumeModule{host: a, icons: [2]*ui.SVG{speakerIcon(false), speakerIcon(true)}}
+	now := time.Now()
+	m.tracker = volumeTracker{primed: true, vol: 0.4, until: now.Add(volumeFlash)}
+
+	first, ok1 := m.activity(now)
+	second, ok2 := m.activity(now.Add(500 * time.Millisecond))
+	third, ok3 := m.activity(now.Add(volumeFlash - time.Millisecond))
+	if !ok1 || !ok2 || !ok3 {
+		t.Fatal("all three activity calls inside the window must be live")
+	}
+	if first.Leading != second.Leading || second.Leading != third.Leading {
+		t.Fatal("Leading pointer must be identical across ticks")
+	}
+
+	// The muted variant is a different cached pointer, also stable.
+	m.tracker.muted = true
+	muted1, _ := m.activity(now)
+	muted2, _ := m.activity(now.Add(100 * time.Millisecond))
+	if muted1.Leading != muted2.Leading {
+		t.Fatal("muted Leading must also be cached")
+	}
+	if muted1.Leading == first.Leading {
+		t.Fatal("muted and normal glyphs must be different images")
+	}
+}
+
+func TestVolumeTrackerEpsilon(t *testing.T) {
+	var tr volumeTracker
+	start := time.Now()
+	tr.step(start, 0.5, false, true)
+	// Sub-epsilon jitter is not a user-visible change: it never pends.
+	tr.step(start.Add(10*time.Millisecond), 0.5+levelEps/2, false, true)
+	if tr.pending || tr.live(start.Add(300*time.Millisecond)) {
+		t.Fatal("jitter below levelEps must not flash")
+	}
+	tr.step(start.Add(20*time.Millisecond), 0.5+levelEps*2, false, true)
+	if !tr.pending {
+		t.Fatal("a change above levelEps must pend")
 	}
 }
