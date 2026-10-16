@@ -4,3 +4,4 @@
 dist/
 dist.noindex/
 .scratch/
+resources/darwin-arm64/ShelfNowPlaying.bundle

@@ -3,6 +3,7 @@
   "identifier": "local.y3.shelf",
   "version": "1.0.8",
   "out": "dist.noindex",
+  "buildCommand": "go generate ./...",
   "macos": {
     "minimumSystemVersion": "13.0",
     "signingIdentity": "-",

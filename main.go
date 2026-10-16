@@ -143,6 +143,7 @@ func (a *shelf) ready(show bool) {
 		a.modules = append(a.modules, newBatteryModule(a))
 	}
 	a.modules = append(a.modules, newVolumeModule(a))
+	a.modules = append(a.modules, &nowPlayingModule{host: a})
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。
