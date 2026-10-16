@@ -42,6 +42,28 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 	if len(s.ExcludedApps) != 0 {
 		t.Fatalf("missing excludedApps = %v, want empty", s.ExcludedApps)
 	}
+	if !s.IslandNowPlaying || !s.IslandBattery || !s.IslandVolume {
+		t.Fatalf("missing island keys must stay on: %+v", s)
+	}
+}
+
+// The island toggles load from the file individually: turning one source
+// off must not affect the others, which keep their defaults.
+func TestIslandTogglesLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"islandBattery": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IslandBattery {
+		t.Fatal("islandBattery: false was ignored")
+	}
+	if !s.IslandNowPlaying || !s.IslandVolume {
+		t.Fatalf("one island key off changed the others: %+v", s)
+	}
 }
 
 func TestExplicitValueIsHonoured(t *testing.T) {
