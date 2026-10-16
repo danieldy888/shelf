@@ -558,15 +558,31 @@ func SetWindowFrame(window uintptr, x, y, w, h int) {
 	}
 	withPool(func() {
 		screenH := primaryScreenHeight()
-		r := NSRect{
-			Origin: NSPoint{X: float64(x), Y: screenH - float64(y) - float64(h)},
-			Size:   NSSize{Width: float64(w), Height: float64(h)},
-		}
+		r := windowFrameFor(x, y, w, h, screenH)
 		msgSetRectBool(id(window), sel("setFrame:display:"), r, true)
 		// setFrame still consults constrainFrameRect; pin the top-left in
 		// case a titled ancestor shifted the origin down by the menu bar.
-		msgSetPoint(id(window), sel("setFrameTopLeftPoint:"), NSPoint{X: float64(x), Y: screenH - float64(y)})
+		msgSetPoint(id(window), sel("setFrameTopLeftPoint:"), windowTopLeftFor(x, y, screenH))
 	})
+}
+
+// windowFrameFor converts a MyGo top-left frame (global Y down from the
+// primary display's top edge) into the AppKit rect setFrame:display: wants
+// (bottom-left origin, Y up). screenH is the primary screen's height; displays
+// above the primary produce negative y and therefore origins above screenH,
+// displays to its left produce negative x. Pure: kept separate so synthetic
+// secondary geometries are unit-testable.
+func windowFrameFor(x, y, w, h int, screenH float64) NSRect {
+	return NSRect{
+		Origin: NSPoint{X: float64(x), Y: screenH - float64(y) - float64(h)},
+		Size:   NSSize{Width: float64(w), Height: float64(h)},
+	}
+}
+
+// windowTopLeftFor converts the same top-left corner for
+// setFrameTopLeftPoint:.
+func windowTopLeftFor(x, y int, screenH float64) NSPoint {
+	return NSPoint{X: float64(x), Y: screenH - float64(y)}
 }
 
 // SetWindowIgnoresMouseEvents toggles whether window is transparent to mouse
@@ -668,30 +684,44 @@ func NotchRect(displayID int64) (x, y, w, h int, hasNotch bool) {
 			if uint32(send(num, "unsignedIntValue")) != uint32(displayID) {
 				continue
 			}
-			// 匹配到显示器后才启用 180×32 回退尺寸；未匹配（或显示器数为 0）
-			// 保持 w=h=0，由调用方禁用刘海交互而不是在 (0,0) 造一个假热区。
-			w, h = 180, 32
+			// The match gates the 180×32 fallback; when no screen matches the
+			// helper's w=h=0 result is returned, so the caller disables notch
+			// interaction instead of inventing a hot zone at (0,0).
 			frame := msgRect(s, sel("frame"))
-			y = int(math.Round(primaryH - frame.Origin.Y - frame.Size.Height))
 			insets := msgSafeAreaInsets(s, sel("safeAreaInsets"))
-			if insets.Top > 0 {
-				hasNotch = true
-				h = int(math.Ceil(insets.Top))
-			}
 			leftAux := msgRect(s, sel("auxiliaryTopLeftArea"))
 			rightAux := msgRect(s, sel("auxiliaryTopRightArea"))
-			if leftAux.Size.Width > 0 && rightAux.Size.Width > 0 {
-				gap := rightAux.Origin.X - (leftAux.Origin.X + leftAux.Size.Width)
-				if gap >= 120 {
-					w = max(180, int(math.Round(gap)))
-					x = int(math.Round(frame.Origin.X + leftAux.Origin.X + leftAux.Size.Width))
-					return
-				}
-			}
-			x = int(math.Round(frame.Origin.X + (frame.Size.Width-float64(w))/2))
+			x, y, w, h, hasNotch = notchRectFor(frame, insets, leftAux, rightAux, primaryH)
 			return
 		}
 	})
+	return x, y, w, h, hasNotch
+}
+
+// notchRectFor is the pure geometry behind NotchRect, taking the raw NSScreen
+// values so synthetic multi-display layouts can be unit-tested. frame is the
+// screen's frame in AppKit global space (origin bottom-left of the primary,
+// Y up); primaryH is the primary screen's height used to flip to the global
+// top-left convention CGEvent and MyGo share. The auxiliary areas are local
+// to the screen (bottom-left origin); only their X extents matter, so the
+// flip does not touch them and any secondary frame.Origin.X keeps the
+// housing centred under the physical notch.
+func notchRectFor(frame NSRect, insets NSEdgeInsets, leftAux, rightAux NSRect, primaryH float64) (x, y, w, h int, hasNotch bool) {
+	w, h = 180, 32
+	y = int(math.Round(primaryH - frame.Origin.Y - frame.Size.Height))
+	if insets.Top > 0 {
+		hasNotch = true
+		h = int(math.Ceil(insets.Top))
+	}
+	if leftAux.Size.Width > 0 && rightAux.Size.Width > 0 {
+		gap := rightAux.Origin.X - (leftAux.Origin.X + leftAux.Size.Width)
+		if gap >= 120 {
+			w = max(180, int(math.Round(gap)))
+			x = int(math.Round(frame.Origin.X + leftAux.Origin.X + leftAux.Size.Width))
+			return x, y, w, h, hasNotch
+		}
+	}
+	x = int(math.Round(frame.Origin.X + (frame.Size.Width-float64(w))/2))
 	return x, y, w, h, hasNotch
 }
 
