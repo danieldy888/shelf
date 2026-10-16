@@ -344,22 +344,20 @@ func (a *shelf) emptyState(c *ui.Context) {
 	})
 }
 
-// visibleItems is the list the expanded panel shows and acts on: every
-// item on the tray tab, in store order (newest first); on the clipboard
-// tab only clipboard captures, matched by the search text and with pinned
-// items first. Rows, selection ranges, menus and drag-outs all use it, so
-// no action can reach a row the tab is not showing.
+// visibleItems is the list the expanded panel shows and acts on: the tray
+// tab lists every item and the clipboard tab lists clipboard captures that
+// match the search text; on both tabs pinned items come first, stable
+// within each group (otherwise newest first). Rows, selection ranges,
+// menus and drag-outs all use it, so no action can reach a row the tab is
+// not showing and the display order is the selection order.
 func (a *shelf) visibleItems() []store.Item {
 	if a.store == nil {
 		return nil
 	}
-	if a.tab != tabClipboard {
-		return a.store.Items
-	}
 	query := strings.ToLower(strings.TrimSpace(a.search))
 	var pinned, rest []store.Item
 	for _, it := range a.store.Items {
-		if it.Source != store.SourceClipboard || !clipboardItemMatches(it, query) {
+		if a.tab == tabClipboard && (it.Source != store.SourceClipboard || !clipboardItemMatches(it, query)) {
 			continue
 		}
 		if it.Pinned {

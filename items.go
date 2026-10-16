@@ -87,7 +87,7 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 	})
 	if row.Clicked() {
 		mods := row.ClickModifiers()
-		// 显示顺序来自当前标签（剪贴板标签有置顶排序），⇧ 选择跟着它走。
+		// 显示顺序来自当前标签（两个标签都是置顶在前），⇧ 选择跟着它走。
 		a.selection.click(a.visibleItems(), item.ID, mods)
 		a.reveal = ""
 		if mods&(ui.Cmd|ui.Shift) == 0 && item.Kind == store.KindText {

@@ -140,6 +140,24 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	}
 }
 
+// windowLevel is the overlay's one window-level policy, applied by
+// syncMousePassThrough on every state change: a file drag sits above the
+// menu bar so its strip cannot steal the drop; keyboard focus (clipboard
+// search) must drop below kCGDockWindowLevel or the input method's
+// candidate panel — drawn at 20 and anchored inside the opaque panel —
+// stays completely hidden behind it (marked text still composes inline,
+// which is why the bug reads as "IME types but no candidates").
+func (a *shelf) windowLevel() int {
+	switch {
+	case a.dragging || a.pointerDrag:
+		return mac.PopUpMenuWindowLevel
+	case a.focusMode:
+		return mac.SearchKeyboardLevel
+	default:
+		return mac.StatusWindowLevel
+	}
+}
+
 // Idle clicks below the hardware notch pass through; the notch band itself
 // never does. File drags to the top of the notch must hit a window, or
 // WindowServer treats Y=0 as the Spaces edge. ignoresMouseEvents stays off
@@ -153,7 +171,7 @@ func (a *shelf) syncMousePassThrough() {
 	}
 	h := a.win.NativeHandle()
 	mac.SetOverlayHitTest(h, acceptAll, max(8, a.notchH))
-	mac.SetDragElevated(h, a.dragging || a.pointerDrag)
+	mac.SetWindowLevel(h, a.windowLevel())
 }
 
 // setPeek animates the notch shell between its idle hardware shape and the

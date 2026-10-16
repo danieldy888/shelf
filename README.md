@@ -81,7 +81,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 - Drag files, folders, text and images in — and drag them out to any app
 - Clipboard text history: keeps the last 30 items (30/100/300 is a menu choice), duplicates move to the top instead of creating copies; each capture remembers the app it came from
 - ⌃⌥V opens the clipboard tab with a focused search field — type to filter, ↑/↓ to select, ⏎ copies and lands you back in the app you came from
-- Pin any item (right-click → 置顶): pinned rows are marked, list first in the clipboard tab, and are never evicted by the text limit, cleanup or clear-all
+- Pin any item (right-click → 置顶): pinned rows are marked, list first in both tabs, and are never evicted by the text limit, cleanup or clear-all
 - Exclude an app from recording: right-click a clipboard item → never record from that app again (menu-bar → 剪贴板记录 toggles history entirely)
 - Long text is shown as a short preview; copying or dragging keeps the complete text
 - Screenshots and clipboard images land in the shelf automatically
@@ -190,7 +190,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 - 文件、文件夹、文字、图片都可以拖进来，再拖到任意应用
 - 剪贴板文字历史：默认保留 30 条（菜单栏可改 30/100/300），重复内容移到顶部而不新增条目；每条记录记住复制它的应用
 - 按 `⌃⌥V` 打开剪贴板页并聚焦搜索框——输入即筛选，`↑`/`↓` 选择，`⏎` 复制后收起并落回你原来的应用
-- 右键任意项目可以置顶：置顶行带图钉标记、在剪贴板页排最前，不受文字限额、自动清理和“清空”影响
+- 右键任意项目可以置顶：置顶行带图钉标记、在两个标签页都排最前，不受文字限额、自动清理和“清空”影响
 - 按应用排除记录：右键剪贴板条目 → “不再记录来自该应用的内容”；菜单栏图标 → “剪贴板记录”可以整体开关
 - 长文字只缩短列表摘要，复制和拖出仍保留完整正文
 - 截图和剪贴板图片自动进入托盘

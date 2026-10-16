@@ -135,21 +135,39 @@ func SetOverlayHitTest(window uintptr, acceptAll bool, bandHeight int) {
 	})
 }
 
-const nsPopUpMenuWindowLevel = 101
+const (
+	// StatusWindowLevel is the notch overlay's resting level
+	// (NSStatusWindowLevel): above the menu bar so the shelf can occupy
+	// the screen's top edge.
+	StatusWindowLevel = 25
 
-// SetDragElevated raises the overlay above the menu bar for the duration of
-// a file drag so the menu bar's exclusive strip cannot steal the drop.
-// Restores the status level afterwards. Main thread only.
-func SetDragElevated(window uintptr, elevate bool) {
+	// PopUpMenuWindowLevel is NSPopUpMenuWindowLevel, used while a file
+	// drag needs the overlay above the menu bar's exclusive strip.
+	PopUpMenuWindowLevel = 101
+
+	// SearchKeyboardLevel is where the overlay sits while the clipboard
+	// search has the keyboard (shelf.focusMode). Input-method candidate
+	// panels are drawn by the input method's own process at
+	// kCGDockWindowLevel (20 — measured on 簡體中文輸入法's cached
+	// candidate window); any level above it leaves the candidate
+	// completely behind the 440×400 opaque panel it is anchored inside.
+	// Level 19 stays below that band yet above torn-off menus (18) and
+	// floating palettes (3). The cost of dipping under the band is that
+	// the menu bar (24) covers the notch-height strip at the panel's top:
+	// content there is a spacer plus the title row, while the search
+	// field and the list sit below it, so the keyboard flow is unaffected.
+	SearchKeyboardLevel = 19
+)
+
+// SetWindowLevel puts the window at level and re-orders it frontmost of
+// that band. Level changes alone do not promise topmost placement within
+// the band the window joins. Main thread only.
+func SetWindowLevel(window uintptr, level int) {
 	if window == 0 {
 		return
 	}
 	if err := Init(); err != nil {
 		return
-	}
-	level := nsStatusWindowLevel
-	if elevate {
-		level = nsPopUpMenuWindowLevel
 	}
 	withPool(func() {
 		w := id(window)
@@ -157,8 +175,29 @@ func SetDragElevated(window uintptr, elevate bool) {
 			return
 		}
 		send(w, "setLevel:", uintptr(level))
-		if elevate {
-			send(w, "orderFrontRegardless")
-		}
+		send(w, "orderFrontRegardless")
 	})
+}
+
+// WindowLevel reads the window's current NSWindow level. Main thread only.
+func WindowLevel(window uintptr) int {
+	if window == 0 {
+		return 0
+	}
+	var level int
+	withPool(func() {
+		level = sendInt(id(window), "level")
+	})
+	return level
+}
+
+// SetDragElevated raises the overlay above the menu bar for the duration of
+// a file drag so the menu bar's exclusive strip cannot steal the drop.
+// Restores the status level afterwards. Main thread only.
+func SetDragElevated(window uintptr, elevate bool) {
+	level := StatusWindowLevel
+	if elevate {
+		level = PopUpMenuWindowLevel
+	}
+	SetWindowLevel(window, level)
 }

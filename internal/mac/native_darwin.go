@@ -22,6 +22,7 @@ import (
 	"math"
 	"runtime"
 	"slices"
+	"structs"
 	"sync"
 	"unsafe"
 
@@ -47,6 +48,12 @@ type NSRect struct {
 // NSEdgeInsets mirrors the AppKit edge insets struct returned by
 // NSScreen.safeAreaInsets.
 type NSEdgeInsets struct{ Top, Left, Bottom, Right float64 }
+
+// NSRange mirrors Foundation's NSRange (UTF-16 location/length).
+type NSRange struct {
+	_                structs.HostLayout
+	Location, Length uint
+}
 
 var (
 	libObjC, libAppKit, libCG uintptr
@@ -74,6 +81,11 @@ var (
 	// auxiliaryTopRightArea); the struct return needs RegisterFunc too.
 	msgRect func(id, objc.SEL) NSRect
 
+	// msgFirstRectForRange calls a text input client's
+	// firstRectForCharacterRange:actualRange: — the screen rect IME
+	// candidate panels anchor to.
+	msgFirstRectForRange func(obj id, sel objc.SEL, r NSRange, actual *NSRange) NSRect
+
 	// unconstrainOnce installs the constrainFrameRect:toScreen: override
 	// once for the (one) shelf window class; unconstrainIMP is its callback.
 	unconstrainOnce sync.Once
@@ -99,7 +111,9 @@ const (
 	// 1<<7. Combined with mask 0 this is an NSPanel that has no title bar
 	// for AppKit to keep below the menu bar.
 	nsWindowStyleMaskNonactivatingPanel = 1 << 7
-	nsStatusWindowLevel                 = 25
+	// nsStatusWindowLevel is the overlay's resting level; the exported
+	// names live in overlay_hit.go next to the other band levels.
+	nsStatusWindowLevel = StatusWindowLevel
 
 	collectionCanJoinAllSpaces    = 1 << 0
 	collectionTransient           = 1 << 3
@@ -152,6 +166,7 @@ func load() {
 		purego.RegisterFunc(&msgSetSize, msgSendAddr)
 		purego.RegisterFunc(&msgSetRectBool, msgSendAddr)
 		purego.RegisterFunc(&msgSetPoint, msgSendAddr)
+		purego.RegisterFunc(&msgFirstRectForRange, msgSendAddr)
 		purego.RegisterLibFunc(&cgEventSourceButtonState, libCG, "CGEventSourceButtonState")
 		purego.RegisterLibFunc(&classReplaceMethod, libObjC, "class_replaceMethod")
 		purego.RegisterFunc(&msgSafeAreaInsets, msgSendAddr)

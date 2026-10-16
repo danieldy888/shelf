@@ -67,6 +67,42 @@ func TestSearchOpenFocusesWindow(t *testing.T) {
 	if !key {
 		t.Fatal("the notch window did not become the key window; typing would go nowhere")
 	}
+
+	// IME evidence: the window must sit below kCGDockWindowLevel while the
+	// search field has the keyboard, and the rect the candidate panel
+	// anchors to must be a real caret inside the window — if either is
+	// wrong, candidates are drawn behind the opaque panel or off-screen.
+	level := 0
+	onMain(func() { level = mac.WindowLevel(a.win.NativeHandle()) })
+	if level != mac.SearchKeyboardLevel {
+		t.Fatalf("focus-mode window level = %d, want %d (below the IM band at 20)", level, mac.SearchKeyboardLevel)
+	}
+	t.Logf("firstResponder=%s windowLevel=%d (IM candidate band=20, menubar=24, status=25)",
+		mac.FirstResponderClass(a.win.NativeHandle()), level)
+	var frame, caret mac.NSRect
+	var haveCaret bool
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		onMain(func() {
+			frame = mac.WindowFrame(a.win.NativeHandle())
+			caret, haveCaret = mac.IMECompositionRect(a.win.NativeHandle(), 0, 0)
+		})
+		if haveCaret {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !haveCaret {
+		t.Fatal("firstRectForCharacterRange returned no rect; the candidate panel has nowhere to anchor")
+	}
+	t.Logf("windowFrame=%+v caretScreenRect=%+v (AppKit bottom-left coords)", frame, caret)
+	if caret.Origin.Y < frame.Origin.Y || caret.Origin.Y+caret.Size.Height > frame.Origin.Y+frame.Size.Height ||
+		caret.Origin.X < frame.Origin.X || caret.Origin.X > frame.Origin.X+frame.Size.Width {
+		t.Fatalf("caret rect %+v not inside window frame %+v — candidates anchor outside the window", caret, frame)
+	}
+	if caret.Origin.Y+caret.Size.Height > frame.Origin.Y+frame.Size.Height-33 {
+		t.Logf("note: caret sits in the strip the menubar covers while the window is below level 24")
+	}
+
 	if num := mac.WindowNumber(a.win.NativeHandle()); num != 0 {
 		t.Logf("shelf CGWindowID=%d — screencapture -l %d shoots the panel", num, num)
 		// Leave the number where a shell watcher can pick it up while the
@@ -93,6 +129,11 @@ func TestSearchOpenFocusesWindow(t *testing.T) {
 	}
 	if !restored {
 		t.Fatalf("the previous app %d was not re-activated on hide", prev)
+	}
+	restoredLevel := 0
+	onMain(func() { restoredLevel = mac.WindowLevel(a.win.NativeHandle()) })
+	if restoredLevel != mac.StatusWindowLevel {
+		t.Fatalf("window level after hide = %d, want %d — mouse flows keep the status level", restoredLevel, mac.StatusWindowLevel)
 	}
 	t.Logf("focus restored to pid=%d", prev)
 }

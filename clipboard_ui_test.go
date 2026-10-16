@@ -190,6 +190,49 @@ func TestClipboardPinnedFirstAndPinMenu(t *testing.T) {
 	}
 }
 
+// 托盘页同样把置顶项排最前（同组内保持原顺序），⇧ 范围选择跟着显示顺序走；
+// 取消置顶后回到原来的位置。
+func TestTrayPinnedFirst(t *testing.T) {
+	a, view, _ := clipShelf(t, "alpha top", "beta mid", "gamma bottom")
+	view.Frame()
+	if a.tab != tabTray {
+		t.Fatal("expected the tray tab")
+	}
+	if err := view.RightClick("gamma bottom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("置顶"); err != nil {
+		t.Fatalf("pin item: %v (%v)", err, view.Menu())
+	}
+	view.Frame()
+	if got := clipTexts(a); !slices.Equal(got, []string{"gamma bottom", "alpha top", "beta mid"}) {
+		t.Fatalf("pinned item did not come first on the tray tab: %v", got)
+	}
+
+	// ⇧-选择覆盖显示顺序里的整段：点击第一行再 ⇧ 点第三行 = 全部三行。
+	if err := view.Click("gamma bottom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ClickWith(ui.Shift, "beta mid"); err != nil {
+		t.Fatal(err)
+	}
+	if n := a.selection.count(); n != 3 {
+		t.Fatalf("⇧ range over the displayed order selected %d rows, want 3", n)
+	}
+
+	a.selection.clear()
+	if err := view.RightClick("gamma bottom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("取消置顶"); err != nil {
+		t.Fatalf("unpin item: %v (%v)", err, view.Menu())
+	}
+	view.Frame()
+	if got := clipTexts(a); !slices.Equal(got, []string{"alpha top", "beta mid", "gamma bottom"}) {
+		t.Fatalf("unpinned item did not go back: %v", got)
+	}
+}
+
 // 右键剪贴板条目可以把来源应用加入排除列表并写入 settings.json。
 func TestExcludeAppMenuWritesSettings(t *testing.T) {
 	a, view, _ := clipShelf(t, "from the recorder")

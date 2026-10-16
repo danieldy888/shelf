@@ -278,6 +278,10 @@ func (a *shelf) openClipboardSearch() {
 	}
 	a.tab, a.search = tabClipboard, ""
 	a.focusMode = true
+	// The window must sit below the IM candidate band before the search
+	// field takes the keyboard — even when the panel was already open
+	// and show() returns early. syncMousePassThrough applies windowLevel.
+	a.syncMousePassThrough()
 	a.show(false)
 	mac.ActivateSelf()
 	a.win.Focus()
