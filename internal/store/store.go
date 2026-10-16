@@ -34,15 +34,17 @@ const (
 )
 
 const (
-	stateVersion  = 1
-	stateFileName = "state.json"
-	imagesDirName = "images"
-	lockFileName  = ".lock"
-
-	maxTextItems   = 30
+	stateVersion   = 1
+	stateFileName  = "state.json"
+	imagesDirName  = "images"
+	lockFileName   = ".lock"
+	maxTextItems   = 30       // default cap on unpinned text items; see SetTextLimit
 	maxImageDim    = 16384    // max width or height accepted by AddImage
 	maxImagePixels = 64 << 20 // max total pixels accepted by AddImage (64 MP)
 )
+
+// SourceClipboard marks items captured from the system clipboard.
+const SourceClipboard = "clipboard"
 
 // ErrLocked reports that another live process already holds this data
 // directory. Open returns it wrapped with the root path; callers must
@@ -52,13 +54,20 @@ var ErrLocked = errors.New("store: data directory is in use by another instance"
 
 // Item is one shelf entry. Path is set for file and image items (image
 // paths are managed files inside <root>/images); Text is set for text
-// items. Missing is runtime-only and never persisted.
+// items. Pinned items are never evicted by the text limit and are
+// skipped by RemoveOlderThan and Clear. Source records how the item was
+// added (SourceClipboard for clipboard captures, empty otherwise) and
+// SourceApp the bundle id of the app the copy came from, when known.
+// Missing is runtime-only and never persisted.
 type Item struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
 	Path      string    `json:"path,omitempty"`
 	Text      string    `json:"text,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	Pinned    bool      `json:"pinned,omitempty"`
+	Source    string    `json:"source,omitempty"`
+	SourceApp string    `json:"sourceApp,omitempty"`
 	Missing   bool      `json:"-"`
 }
 
@@ -77,6 +86,10 @@ type Store struct {
 	migrationBlocked error
 	migrateBackup    string
 	migrateBytes     []byte
+
+	// textLimit caps how many unpinned text items are kept; it is applied
+	// on the next text add, never retroactively.
+	textLimit int
 }
 
 // MigrationError returns why writes were disabled after a failed
@@ -137,7 +150,7 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{Root: root, lock: lock}
+	s := &Store{Root: root, lock: lock, textLimit: maxTextItems}
 	ok := false
 	defer func() {
 		if !ok {
@@ -391,22 +404,45 @@ func (s *Store) AddFiles(paths []string) error {
 }
 
 // AddText adds a text item to the front. Identical existing text is
-// moved to the front instead of duplicated. Only the 30 newest text
-// items are kept. Persisted atomically; save failure rolls back.
+// moved to the front instead of duplicated. Only the textLimit newest
+// unpinned text items are kept. Persisted atomically; save failure
+// rolls back.
 func (s *Store) AddText(text string) error {
+	return s.addText(text, false, "")
+}
+
+// AddClipText adds text copied from the clipboard, recording Source and
+// SourceApp so captures can be told apart from dropped or typed text.
+// Behaves like AddText otherwise: identical existing text moves to the
+// front keeping its ID and Pinned flag, and its provenance is refreshed
+// to this capture's.
+func (s *Store) AddClipText(text, sourceApp string) error {
+	return s.addText(text, true, sourceApp)
+}
+
+func (s *Store) addText(text string, clip bool, sourceApp string) error {
 	old := slices.Clone(s.Items)
 	idx := slices.IndexFunc(s.Items, func(it Item) bool {
 		return it.Kind == KindText && it.Text == text
 	})
 	if idx >= 0 {
 		s.moveToFront(idx)
+		if clip {
+			s.Items[0].Source = SourceClipboard
+			s.Items[0].SourceApp = sourceApp
+		}
 	} else {
-		s.Items = append([]Item{{
+		it := Item{
 			ID:        newID(),
 			Kind:      KindText,
 			Text:      text,
 			CreatedAt: time.Now(),
-		}}, s.Items...)
+		}
+		if clip {
+			it.Source = SourceClipboard
+			it.SourceApp = sourceApp
+		}
+		s.Items = append([]Item{it}, s.Items...)
 		s.trimText()
 	}
 	if err := s.Save(); err != nil {
@@ -424,6 +460,17 @@ func (s *Store) AddText(text string) error {
 // rolled-back list does not reference is removed — pre-existing or
 // still-referenced images are never deleted.
 func (s *Store) AddImage(png []byte) error {
+	return s.addImage(png, false, "")
+}
+
+// AddClipImage adds an image copied from the clipboard with the same
+// validation, dedup and managed-file guarantees as AddImage, recording
+// Source and SourceApp for the capture.
+func (s *Store) AddClipImage(png []byte, sourceApp string) error {
+	return s.addImage(png, true, sourceApp)
+}
+
+func (s *Store) addImage(png []byte, clip bool, sourceApp string) error {
 	if len(png) == 0 {
 		return fmt.Errorf("store: empty image data")
 	}
@@ -461,6 +508,10 @@ func (s *Store) AddImage(png []byte) error {
 			}
 			s.moveToFront(i)
 			s.Items[0].Missing = false
+			if clip {
+				s.Items[0].Source = SourceClipboard
+				s.Items[0].SourceApp = sourceApp
+			}
 			if err := s.Save(); err != nil {
 				s.Items = old
 				if created && !s.pathReferenced(path) {
@@ -475,12 +526,17 @@ func (s *Store) AddImage(png []byte) error {
 	if err != nil {
 		return fmt.Errorf("store: writing image: %w", err)
 	}
-	s.Items = append([]Item{{
+	newItem := Item{
 		ID:        id,
 		Kind:      KindImage,
 		Path:      path,
 		CreatedAt: time.Now(),
-	}}, s.Items...)
+	}
+	if clip {
+		newItem.Source = SourceClipboard
+		newItem.SourceApp = sourceApp
+	}
+	s.Items = append([]Item{newItem}, s.Items...)
 	if err := s.Save(); err != nil {
 		s.Items = old
 		// 只清理本次新建、且回滚后已无人引用的文件。文件早已存在
@@ -564,11 +620,40 @@ func (s *Store) Remove(id string) error {
 		s.Items = old
 		return err
 	}
-	failed, err := s.deleteManagedImages([]Item{removed}, true)
+	failed, err := s.deleteManagedImages([]Item{removed})
 	if err != nil {
 		return fmt.Errorf("store: item removed, but deleting managed image %s failed: %w", failed, err)
 	}
 	return nil
+}
+
+// SetPinned marks or unmarks the item with the given id as pinned and
+// persists atomically (memory rolls back on save failure). An unknown
+// id is an error; setting the flag to its current value is a no-op.
+func (s *Store) SetPinned(id string, pinned bool) error {
+	idx := slices.IndexFunc(s.Items, func(it Item) bool { return it.ID == id })
+	if idx < 0 {
+		return fmt.Errorf("store: no item with id %q", id)
+	}
+	if s.Items[idx].Pinned == pinned {
+		return nil
+	}
+	s.Items[idx].Pinned = pinned
+	if err := s.Save(); err != nil {
+		s.Items[idx].Pinned = !pinned
+		return err
+	}
+	return nil
+}
+
+// SetTextLimit sets how many unpinned text items are kept; values below
+// 1 restore the default. The new limit applies on the next text add and
+// does not trim existing items.
+func (s *Store) SetTextLimit(n int) {
+	if n < 1 {
+		n = maxTextItems
+	}
+	s.textLimit = n
 }
 
 // RemoveMany removes the items with the given IDs and saves once. Unknown
@@ -588,20 +673,21 @@ func (s *Store) RemoveMany(ids []string) (int, error) {
 	return s.removeMatching(func(it Item) bool {
 		_, ok := want[it.ID]
 		return ok
-	})
+	}, "removed")
 }
 
-// RemoveOlderThan removes every item added before cutoff and saves once.
-// It returns how many items it removed. Guarantees match Clear: on save
-// failure memory is rolled back and no file is deleted; afterwards only
-// managed images no longer referenced by any remaining item are deleted;
-// files referenced by KindFile items are never touched. Re-adding an
-// existing item refreshes its timestamp, so "added" means last surfaced:
-// items at the cutoff or newer are kept.
+// RemoveOlderThan removes every unpinned item added before cutoff and
+// saves once; pinned items are kept regardless of age. It returns how
+// many items it removed. Guarantees match Clear: on save failure memory
+// is rolled back and no file is deleted; afterwards only managed images
+// no longer referenced by any remaining item are deleted; files
+// referenced by KindFile items are never touched. Re-adding an existing
+// item refreshes its timestamp, so "added" means last surfaced: items
+// at the cutoff or newer are kept.
 func (s *Store) RemoveOlderThan(cutoff time.Time) (int, error) {
 	return s.removeMatching(func(it Item) bool {
-		return it.CreatedAt.Before(cutoff)
-	})
+		return !it.Pinned && it.CreatedAt.Before(cutoff)
+	}, "removed")
 }
 
 // removeMatching drops every item match accepts and persists once.
@@ -609,8 +695,9 @@ func (s *Store) RemoveOlderThan(cutoff time.Time) (int, error) {
 // rolled back and nothing is deleted. After the save succeeds, managed
 // image files the removed items referenced are deleted only when no
 // remaining item still references them. Returns how many items were
-// removed; a cleanup failure reports that count plus the first error.
-func (s *Store) removeMatching(match func(Item) bool) (int, error) {
+// removed; a cleanup failure reports that count plus the first error,
+// worded with verb ("removed"/"cleared").
+func (s *Store) removeMatching(match func(Item) bool, verb string) (int, error) {
 	old := s.Items
 	kept := make([]Item, 0, len(s.Items))
 	var removed []Item
@@ -632,21 +719,20 @@ func (s *Store) removeMatching(match func(Item) bool) (int, error) {
 		s.Items = old
 		return 0, err
 	}
-	failed, err := s.deleteManagedImages(removed, true)
+	failed, err := s.deleteManagedImages(removed)
 	if err != nil {
-		return len(removed), fmt.Errorf("store: items removed, but deleting managed image %s failed: %w", failed, err)
+		return len(removed), fmt.Errorf("store: items %s, but deleting managed image %s failed: %w", verb, failed, err)
 	}
 	return len(removed), nil
 }
 
 // deleteManagedImages deletes the managed image file each item in removed
 // points at — KindImage items only, only paths inside <root>/images, each
-// distinct path once. With onlyUnreferenced it first skips any file a
-// remaining item still references (Clear passes false: its item list is
-// already empty, so nothing can be referenced). Returns the path of the
-// first deletion error for callers to embed in their message; the other
-// files are still removed.
-func (s *Store) deleteManagedImages(removed []Item, onlyUnreferenced bool) (string, error) {
+// distinct path once, and only when no remaining item still references
+// the same file (kept items, including pinned ones, always protect their
+// images). Returns the path of the first deletion error for callers to
+// embed in their message; the other files are still removed.
+func (s *Store) deleteManagedImages(removed []Item) (string, error) {
 	var firstErr error
 	var failedPath string
 	seen := map[string]bool{}
@@ -659,7 +745,7 @@ func (s *Store) deleteManagedImages(removed []Item, onlyUnreferenced bool) (stri
 			continue
 		}
 		seen[p] = true
-		if onlyUnreferenced && s.pathReferenced(it.Path) {
+		if s.pathReferenced(it.Path) {
 			continue
 		}
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
@@ -669,27 +755,17 @@ func (s *Store) deleteManagedImages(removed []Item, onlyUnreferenced bool) (stri
 	return failedPath, firstErr
 }
 
-// Clear removes every item and persists atomically (memory rolls back on
-// save failure). On an empty store it is a no-op. After the save
-// succeeds, managed image files the cleared items referenced are
-// deleted — only paths inside <root>/images are ever touched, and a
-// KindFile item's path is never deleted even if it points there.
-// Cleanup failures are reported while still removing the rest.
+// Clear removes every unpinned item and persists atomically (memory
+// rolls back on save failure); pinned items and the managed images they
+// reference are kept. When everything is pinned or the store is empty
+// it is a no-op. After the save succeeds, managed image files the
+// cleared items referenced are deleted — only paths inside
+// <root>/images are ever touched, and a KindFile item's path is never
+// deleted even if it points there. Cleanup failures are reported while
+// still removing the rest.
 func (s *Store) Clear() error {
-	if len(s.Items) == 0 {
-		return nil
-	}
-	old := slices.Clone(s.Items)
-	s.Items = []Item{}
-	if err := s.Save(); err != nil {
-		s.Items = old
-		return err
-	}
-	failed, err := s.deleteManagedImages(old, false)
-	if err != nil {
-		return fmt.Errorf("store: items cleared, but deleting managed image %s failed: %w", failed, err)
-	}
-	return nil
+	_, err := s.removeMatching(func(it Item) bool { return !it.Pinned }, "cleared")
+	return err
 }
 
 // Refresh re-stats every non-text item and updates Missing. It never
@@ -860,13 +936,18 @@ func (s *Store) moveToFront(i int) {
 	s.Items = next
 }
 
-// trimText keeps only the maxTextItems newest text items.
+// trimText keeps only the textLimit newest unpinned text items; pinned
+// texts are never evicted and do not count towards the limit.
 func (s *Store) trimText() {
+	limit := s.textLimit
+	if limit < 1 {
+		limit = maxTextItems
+	}
 	n := 0
 	next := make([]Item, 0, len(s.Items))
 	for _, it := range s.Items {
-		if it.Kind == KindText {
-			if n >= maxTextItems {
+		if it.Kind == KindText && !it.Pinned {
+			if n >= limit {
 				continue
 			}
 			n++

@@ -2155,3 +2155,420 @@ func TestRemoveManySaveFailureRollsBack(t *testing.T) {
 		t.Fatalf("managed png deleted on failed save: %v", err)
 	}
 }
+
+// findItem locates an item by its text; fails the test when absent.
+func findItem(t *testing.T, s *Store, text string) Item {
+	t.Helper()
+	for _, it := range s.Items {
+		if it.Kind == KindText && it.Text == text {
+			return it
+		}
+	}
+	t.Fatalf("no text item %q in %+v", text, s.Items)
+	return Item{}
+}
+
+// hasText reports whether a text item with the given content exists.
+func hasText(s *Store, text string) bool {
+	for _, it := range s.Items {
+		if it.Kind == KindText && it.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+// 旧版 state.json 没有 pinned/source/sourceApp 字段：加载原样生效，
+// 新增字段取零值（未置顶、无来源）。
+func TestLegacyStateWithoutNewFieldsLoads(t *testing.T) {
+	root := t.TempDir()
+	legacy := `{"version":1,"items":[{"id":"a1","kind":"text","text":"old entry","createdAt":"2024-01-02T03:04:05Z"}]}`
+	if err := os.WriteFile(filepath.Join(root, stateFileName), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if len(s.Items) != 1 || s.Items[0].Text != "old entry" || s.Items[0].ID != "a1" {
+		t.Fatalf("legacy item not loaded: %+v", s.Items)
+	}
+	if s.Items[0].Pinned || s.Items[0].Source != "" || s.Items[0].SourceApp != "" {
+		t.Fatalf("new fields not zero-valued on legacy item: %+v", s.Items[0])
+	}
+	// New fields must survive a save/reopen round trip too.
+	if err := s.SetPinned("a1", true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if len(s2.Items) != 1 || !s2.Items[0].Pinned {
+		t.Fatalf("pinned not persisted: %+v", s2.Items)
+	}
+}
+
+// 置顶文字不计入也不被上限驱逐：35 条文字里 1 条置顶，
+// 最终保留该置顶项 + 30 条最新未置顶文字。
+func TestPinnedTextSurvivesLimitEviction(t *testing.T) {
+	s, _ := newStore(t)
+	for i := range 30 {
+		if err := s.AddText(fmt.Sprintf("t%02d", i)); err != nil {
+			t.Fatalf("AddText %d: %v", i, err)
+		}
+	}
+	if err := s.SetPinned(findItem(t, s, "t00").ID, true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	for i := 30; i < 35; i++ {
+		if err := s.AddText(fmt.Sprintf("t%02d", i)); err != nil {
+			t.Fatalf("AddText %d: %v", i, err)
+		}
+	}
+	if len(s.Items) != 31 {
+		t.Fatalf("want 31 items (30 unpinned + 1 pinned), got %d", len(s.Items))
+	}
+	pinned := findItem(t, s, "t00")
+	if !pinned.Pinned {
+		t.Fatal("t00 lost its pin")
+	}
+	if hasText(s, "t04") {
+		t.Fatal("t04 should have been evicted")
+	}
+	for i := 5; i < 35; i++ {
+		if !hasText(s, fmt.Sprintf("t%02d", i)) {
+			t.Fatalf("t%02d missing", i)
+		}
+	}
+}
+
+// SetTextLimit 改变下一次添加时保留的未置顶文字数。
+func TestSetTextLimit(t *testing.T) {
+	s, _ := newStore(t)
+	s.SetTextLimit(100)
+	for i := range 105 {
+		if err := s.AddText(fmt.Sprintf("u%d", i)); err != nil {
+			t.Fatalf("AddText %d: %v", i, err)
+		}
+	}
+	if len(s.Items) != 100 {
+		t.Fatalf("limit 100 kept %d items", len(s.Items))
+	}
+	// n < 1 restores the default of 30.
+	s.SetTextLimit(0)
+	for i := range 5 {
+		if err := s.AddText(fmt.Sprintf("v%d", i)); err != nil {
+			t.Fatalf("AddText v%d: %v", i, err)
+		}
+	}
+	texts := 0
+	for _, it := range s.Items {
+		if it.Kind == KindText {
+			texts++
+		}
+	}
+	if texts != 30 {
+		t.Fatalf("SetTextLimit(0) kept %d texts, want 30", texts)
+	}
+	// 不改变既有条目：仅在下一次 add 时应用。上面已覆盖；再验证
+	// SetTextLimit 本身不裁掉已超限的旧条目。
+	s2, _ := newStore(t)
+	for i := range 35 {
+		if err := s2.AddText(fmt.Sprintf("w%d", i)); err != nil {
+			t.Fatalf("AddText w%d: %v", i, err)
+		}
+	}
+	s2.SetTextLimit(10)
+	if len(s2.Items) != 30 {
+		t.Fatalf("SetTextLimit trimmed existing items: %d", len(s2.Items))
+	}
+	if err := s2.AddText("fresh"); err != nil {
+		t.Fatal(err)
+	}
+	texts = 0
+	for _, it := range s2.Items {
+		if it.Kind == KindText {
+			texts++
+		}
+	}
+	if texts != 10 {
+		t.Fatalf("after next add want 10 texts, got %d", texts)
+	}
+}
+
+// 重新复制已置顶的文字：去重后仍在原位（移到最前）、保留置顶标记与 ID。
+func TestDedupKeepsPinnedAndMovesToFront(t *testing.T) {
+	s, _ := newStore(t)
+	if err := s.AddText("keep me"); err != nil {
+		t.Fatal(err)
+	}
+	id := s.Items[0].ID
+	if err := s.AddText("other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPinned(id, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("keep me"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Items) != 2 {
+		t.Fatalf("dedup duplicated: %+v", s.Items)
+	}
+	if s.Items[0].ID != id || !s.Items[0].Pinned {
+		t.Fatalf("pinned dedup lost id/pin: %+v", s.Items[0])
+	}
+}
+
+// RemoveOlderThan 跳过置顶项：同一过期时间下，置顶文字与置顶文件保留，
+// 未置顶项移除。
+func TestRemoveOlderThanSkipsPinned(t *testing.T) {
+	s, _ := newStore(t)
+	dir := t.TempDir()
+	f := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{f}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("old text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("old pinned"); err != nil {
+		t.Fatal(err)
+	}
+	pinnedText := findItem(t, s, "old pinned")
+	if err := s.SetPinned(pinnedText.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	fileID := ""
+	for _, it := range s.Items {
+		if it.Kind == KindFile && it.Path == f {
+			fileID = it.ID
+		}
+	}
+	if fileID == "" {
+		t.Fatal("file item missing")
+	}
+	if err := s.SetPinned(fileID, true); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	for _, it := range s.Items {
+		setAge(t, s, it.ID, old)
+	}
+	n, err := s.RemoveOlderThan(time.Now().Add(-24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("removed %d, want 1", n)
+	}
+	if len(s.Items) != 2 {
+		t.Fatalf("kept %d items, want 2 pinned", len(s.Items))
+	}
+	for _, it := range s.Items {
+		if !it.Pinned {
+			t.Fatalf("unpinned item survived: %+v", it)
+		}
+	}
+}
+
+// Clear 保留置顶项及其引用的受管图片，移除其余全部。
+func TestClearKeepsPinned(t *testing.T) {
+	s, _ := newStore(t)
+	if err := s.AddText("plain"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("pinned text"); err != nil {
+		t.Fatal(err)
+	}
+	pinTextID := findItem(t, s, "pinned text").ID
+	if err := s.SetPinned(pinTextID, true); err != nil {
+		t.Fatal(err)
+	}
+	pngPinned := makePNG(t, 2, 2, color.RGBA{R: 1, A: 255})
+	pngLoose := makePNG(t, 2, 2, color.RGBA{G: 2, A: 255})
+	if err := s.AddImage(pngLoose); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddImage(pngPinned); err != nil {
+		t.Fatal(err)
+	}
+	pinImgID := s.Items[0].ID
+	pinImgPath := s.Items[0].Path
+	if err := s.SetPinned(pinImgID, true); err != nil {
+		t.Fatal(err)
+	}
+	var looseImgPath string
+	for _, it := range s.Items {
+		if it.Kind == KindImage && !it.Pinned {
+			looseImgPath = it.Path
+		}
+	}
+	dir := t.TempDir()
+	userFile := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(userFile, []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{userFile}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if len(s.Items) != 2 {
+		t.Fatalf("Clear kept %d items, want 2 pinned: %+v", len(s.Items), s.Items)
+	}
+	for _, it := range s.Items {
+		if !it.Pinned {
+			t.Fatalf("unpinned item survived Clear: %+v", it)
+		}
+	}
+	if _, err := os.Stat(pinImgPath); err != nil {
+		t.Fatalf("pinned managed image deleted: %v", err)
+	}
+	if _, err := os.Stat(looseImgPath); !os.IsNotExist(err) {
+		t.Fatalf("unpinned managed image kept: %v", err)
+	}
+	if _, err := os.Stat(userFile); err != nil {
+		t.Fatalf("user file deleted: %v", err)
+	}
+}
+
+// 全部置顶时 Clear 是空操作：不写盘（在只读根上也成功）。
+func TestClearAllPinnedIsNoOp(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("only pinned"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPinned(s.Items[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+	if err := s.Clear(); err != nil {
+		t.Fatalf("Clear with only pinned items: %v", err)
+	}
+	if len(s.Items) != 1 {
+		t.Fatalf("pinned item removed: %+v", s.Items)
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("all-pinned Clear wrote state.json")
+	}
+}
+
+// SetPinned 在 Save 失败时回滚内存且不写盘；未知 id 报错且不动列表。
+func TestSetPinnedRollbackOnSaveFailure(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("target"); err != nil {
+		t.Fatal(err)
+	}
+	id := s.Items[0].ID
+	if err := s.SetPinned("no-such-id", true); err == nil {
+		t.Fatal("SetPinned on unknown id must fail")
+	}
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+	if err := s.SetPinned(id, true); err == nil {
+		t.Fatal("expected save error with read-only root")
+	}
+	if s.Items[0].Pinned {
+		t.Fatal("Pinned not rolled back on save failure")
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("state.json changed on failed SetPinned")
+	}
+}
+
+// AddClipText 记录来源：新项目带 Source/SourceApp；已存在文本去重时
+// 刷新 SourceApp 到本次复制的应用。普通 AddText 不写来源、也不抹掉
+// 已有剪贴板项的来源。
+func TestAddClipTextProvenance(t *testing.T) {
+	s, _ := newStore(t)
+	if err := s.AddClipText("hello", "com.example.Editor"); err != nil {
+		t.Fatal(err)
+	}
+	it := s.Items[0]
+	if it.Source != SourceClipboard || it.SourceApp != "com.example.Editor" {
+		t.Fatalf("provenance not recorded: %+v", it)
+	}
+	if err := s.AddText("filler"); err != nil {
+		t.Fatal(err)
+	}
+	// Dedup via clip add: same item, refreshed SourceApp, moved to front.
+	if err := s.AddClipText("hello", "com.example.Browser"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Items) != 2 {
+		t.Fatalf("clip dedup duplicated: %+v", s.Items)
+	}
+	it = s.Items[0]
+	if it.Text != "hello" || it.ID == "" {
+		t.Fatalf("dedup did not move to front: %+v", it)
+	}
+	if it.Source != SourceClipboard || it.SourceApp != "com.example.Browser" {
+		t.Fatalf("SourceApp not refreshed: %+v", it)
+	}
+	// Plain AddText dedup keeps provenance and never records a source.
+	if err := s.AddText("plain text"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Items[0].Source != "" || s.Items[0].SourceApp != "" {
+		t.Fatalf("plain AddText recorded provenance: %+v", s.Items[0])
+	}
+	if err := s.AddText("hello"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Items[0].Source != SourceClipboard || s.Items[0].SourceApp != "com.example.Browser" {
+		t.Fatalf("plain AddText wiped provenance: %+v", s.Items[0])
+	}
+}
+
+// AddClipImage 与 AddImage 共享校验/去重/受管文件保证，并记录来源。
+func TestAddClipImageProvenance(t *testing.T) {
+	s, _ := newStore(t)
+	pngA := makePNG(t, 3, 3, color.RGBA{R: 9, A: 255})
+	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	it := s.Items[0]
+	if it.Kind != KindImage || it.Source != SourceClipboard || it.SourceApp != "com.example.Shot" {
+		t.Fatalf("clip image provenance not recorded: %+v", it)
+	}
+	// Dedup via clip add refreshes SourceApp and keeps one item.
+	if err := s.AddClipImage(pngA, "com.example.Other"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Items) != 1 {
+		t.Fatalf("clip image dedup duplicated: %+v", s.Items)
+	}
+	if s.Items[0].SourceApp != "com.example.Other" {
+		t.Fatalf("clip image SourceApp not refreshed: %+v", s.Items[0])
+	}
+	if err := s.AddClipImage(nil, "x"); err == nil {
+		t.Fatal("empty clip image accepted")
+	}
+}

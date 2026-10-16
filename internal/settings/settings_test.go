@@ -3,6 +3,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -12,11 +13,11 @@ func TestMissingFileIsCreatedWithDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s != Default() {
+	if !reflect.DeepEqual(s, Default()) {
 		t.Fatalf("fresh load = %+v, want defaults %+v", s, Default())
 	}
 	again, err := Load(dir)
-	if err != nil || again != Default() {
+	if err != nil || !reflect.DeepEqual(again, Default()) {
 		t.Fatalf("reloading the created file = %+v, %v", again, err)
 	}
 }
@@ -34,6 +35,12 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 	}
 	if !s.ClipboardHistory {
 		t.Fatal("missing clipboardHistory turned clipboard history off")
+	}
+	if s.ClipboardLimit != 30 {
+		t.Fatalf("missing clipboardLimit = %d, want 30", s.ClipboardLimit)
+	}
+	if len(s.ExcludedApps) != 0 {
+		t.Fatalf("missing excludedApps = %v, want empty", s.ExcludedApps)
 	}
 }
 
@@ -53,13 +60,32 @@ func TestExplicitValueIsHonoured(t *testing.T) {
 
 func TestSaveRoundTrips(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{ClipboardHistory: false, RetentionDays: 7}
+	want := Settings{ClipboardHistory: false, RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(dir)
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load after Save = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+// A stored clipboardLimit below 1 means "use the default", so the file
+// can never disable or blow up the history cap by hand-editing.
+func TestNonPositiveClipboardLimitLoadsAsDefault(t *testing.T) {
+	for _, jsonLimit := range []string{"0", "-5"} {
+		dir := t.TempDir()
+		data := []byte(`{"clipboardLimit": ` + jsonLimit + `}`)
+		if err := os.WriteFile(filepath.Join(dir, FileName), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.ClipboardLimit != 30 {
+			t.Fatalf("clipboardLimit %s loaded as %d, want 30", jsonLimit, s.ClipboardLimit)
+		}
 	}
 }
 
@@ -74,7 +100,7 @@ func TestInvalidFileIsNeverRewritten(t *testing.T) {
 	if err == nil {
 		t.Fatal("invalid JSON must be reported")
 	}
-	if s != Default() {
+	if !reflect.DeepEqual(s, Default()) {
 		t.Fatalf("invalid file gave %+v, want defaults", s)
 	}
 	got, _ := os.ReadFile(path)

@@ -22,11 +22,21 @@ type Settings struct {
 	// RetentionDays removes items older than this many days; 0 or less
 	// keeps everything.
 	RetentionDays int `json:"retentionDays"`
+	// ClipboardLimit caps how many unpinned clipboard texts are kept;
+	// values below 1 load as the default.
+	ClipboardLimit int `json:"clipboardLimit"`
+	// ExcludedApps lists bundle identifiers whose copies are never
+	// recorded into the shelf.
+	ExcludedApps []string `json:"excludedApps"`
 }
+
+// defaultClipboardLimit is the clipboard text history cap a fresh
+// install uses.
+const defaultClipboardLimit = 30
 
 // Default is what a fresh install uses.
 func Default() Settings {
-	return Settings{ClipboardHistory: true}
+	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit}
 }
 
 // Save replaces dir/settings.json with s, atomically.
@@ -58,6 +68,9 @@ func Load(dir string) (Settings, error) {
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
 		return Default(), fmt.Errorf("settings: %s is not valid JSON, using defaults: %w", FileName, err)
+	}
+	if s.ClipboardLimit < 1 {
+		s.ClipboardLimit = defaultClipboardLimit
 	}
 	return s, nil
 }
