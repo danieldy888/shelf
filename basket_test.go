@@ -167,3 +167,88 @@ func TestBasketViewStates(t *testing.T) {
 		t.Fatal("confirmation did not arm the auto-close timer")
 	}
 }
+
+// TestBasketViewFailedIntake: a drop the store rejects (here a malformed
+// PNG) must surface as a failure in the card, never as "已放入 Shelf".
+func TestBasketViewFailedIntake(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s}
+	a.basketReceive(transfer.New(transfer.NewItem(transfer.Bytes(transfer.PNG, []byte("not a png")))))
+	if len(s.Items) != 0 {
+		t.Fatal("a malformed PNG was stored")
+	}
+	if !a.basket.failed || a.basket.dropped {
+		t.Fatal("failed intake marked the card as confirmed")
+	}
+	if a.basket.hideAt.IsZero() {
+		t.Fatal("failed intake did not arm the display timer")
+	}
+	view := ui.NewTester(a.basketView, basketWidth, basketHeight)
+	if view.HasText("已放入 Shelf") {
+		t.Fatal("failed intake still shows the success confirmation")
+	}
+	if !view.HasText("放入失败") {
+		t.Fatal("failed intake does not surface in the card")
+	}
+}
+
+// TestBasketPendingCloseKeepsAcceptedDrop is the regression test for the
+// pending-close window: a drop accepted by the card must reach the store
+// even when the pointer has already left and the monitor has requested
+// the close — the close only takes effect on the next render, after
+// DropData has been consumed.
+func TestBasketPendingCloseKeepsAcceptedDrop(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s}
+	a.basket = basketState{shown: true, frame: mygo.Rectangle{X: 100, Y: 100, Width: basketWidth, Height: basketHeight}}
+	// Drag ends with the pointer already outside the card: the monitor
+	// requests the close instead of destroying the window outright.
+	a.dragging = false
+	a.basketTick(time.Now(), mygo.Point{X: 900, Y: 900})
+	if !a.basket.closing {
+		t.Fatal("drag end with the pointer outside did not request a close")
+	}
+	if !a.basket.shown {
+		t.Fatal("the close destroyed the card before its last render")
+	}
+	// The acknowledged drop lands during the closing render.
+	a.basketReceive(transfer.TextData("late drop"))
+	if a.basket.closing {
+		t.Fatal("an incoming drop failed to cancel the pending close")
+	}
+	if len(s.Items) != 1 || s.Items[0].Text != "late drop" {
+		t.Fatal("the accepted drop was lost to the pending close")
+	}
+	if !a.basket.dropped || !a.basket.shown {
+		t.Fatal("the card did not switch to its confirmation state")
+	}
+}
+
+// TestBasketPendingCloseRendersAway: with no drop arriving, the requested
+// close completes on the next render and releases the card.
+func TestBasketPendingCloseRendersAway(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s}
+	a.basket = basketState{shown: true, frame: mygo.Rectangle{X: 100, Y: 100, Width: basketWidth, Height: basketHeight}}
+	view := ui.NewTester(a.basketView, basketWidth, basketHeight)
+	a.basketTick(time.Now(), mygo.Point{X: 900, Y: 900})
+	if !a.basket.closing {
+		t.Fatal("drag end with the pointer outside did not request a close")
+	}
+	view.Frame()
+	if a.basket.shown {
+		t.Fatal("the pending close never took effect")
+	}
+}

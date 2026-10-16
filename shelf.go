@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -95,9 +96,9 @@ func (a *shelf) startMonitoring() {
 	}()
 }
 
-func (a *shelf) receive(data transfer.Data) {
+func (a *shelf) receive(data transfer.Data) error {
 	if a.store == nil {
-		return
+		return errors.New("没有可写入的历史存储")
 	}
 	var err error
 	if paths, e := data.Files(); e == nil && len(paths) > 0 {
@@ -107,8 +108,9 @@ func (a *shelf) receive(data transfer.Data) {
 	} else if b, e := data.Read(transfer.Text); e == nil && len(b) > 0 {
 		err = a.store.AddText(string(b))
 	} else {
-		a.report(fmt.Errorf("此内容不能放入托盘；请拖入本地文件、文字或图片"))
-		return
+		err = fmt.Errorf("此内容不能放入托盘；请拖入本地文件、文字或图片")
+		a.report(err)
+		return err
 	}
 	if err == nil {
 		a.received = true
@@ -116,6 +118,7 @@ func (a *shelf) receive(data transfer.Data) {
 		a.statusUntil = time.Now().Add(3 * time.Second)
 	}
 	a.changed(err)
+	return err
 }
 
 func (a *shelf) changed(err error) {
