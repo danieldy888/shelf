@@ -187,33 +187,74 @@ static void emitError(const char *msg) {
 // ---- reading the system -------------------------------------------------
 
 static dispatch_queue_t workQ;
-static dispatch_semaphore_t workSem;
 
-// readInfo fetches the dictionary and, when wantArt, the artwork blob.
-// Returns 1 on success (dict may still be empty), 0 when nothing is
-// playing / MediaRemote returned NULL.
-static CFDictionaryRef readInfo(void) {
-  __block CFDictionaryRef result = NULL;
-  MRGetInfo(workQ, ^(CFDictionaryRef info) {
-    if (info) result = CFRetain(info);
-    dispatch_semaphore_signal(workSem);
-  });
+// Each request carries its own semaphore: a request whose timeout has
+// already passed takes no part in the next request, so a late completion
+// can never desynchronize the caller. The request memory lives on the
+// heap because MediaRemote may answer after the timeout; once answered or
+// abandoned it is freed by whoever saw it last.
+typedef struct {
+  dispatch_semaphore_t done;
+  CFDictionaryRef info;
+  Boolean playing;
+} NPRequest;
+
+static NPRequest *request(void) {
+  NPRequest *r = calloc(1, sizeof *r);
+  if (r) r->done = dispatch_semaphore_create(0);
+  return r;
+}
+
+// waitRequest returns true when the request was answered before its 3 s
+// timeout. On a timeout the request is abandoned to a background reaper
+// that waits for the late completion — the completion still touches the
+// request, so it must not be freed early.
+static int waitRequest(NPRequest *r) {
   if (dispatch_semaphore_wait(
-          workSem, dispatch_time(DISPATCH_TIME_NOW, 3LL * NSEC_PER_SEC)) != 0)
-    return NULL;
-  return result;
+          r->done, dispatch_time(DISPATCH_TIME_NOW, 3LL * NSEC_PER_SEC)) == 0)
+    return 1;
+  __block NPRequest *bg = r;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+    dispatch_semaphore_wait(bg->done, DISPATCH_TIME_FOREVER);
+    if (bg->info) CFRelease(bg->info);
+    dispatch_release(bg->done);
+    free(bg);
+  });
+  return 0;
+}
+
+static void freeRequest(NPRequest *r) {
+  if (r->info) CFRelease(r->info);
+  dispatch_release(r->done);
+  free(r);
+}
+
+// readInfo fetches the current Now Playing dictionary. Returns NULL when
+// nothing is playing or the read timed out.
+static CFDictionaryRef readInfo(void) {
+  NPRequest *r = request();
+  if (!r) return NULL;
+  MRGetInfo(workQ, ^(CFDictionaryRef info) {
+    if (info) r->info = CFRetain(info);
+    dispatch_semaphore_signal(r->done);
+  });
+  if (!waitRequest(r)) return NULL; // abandoned; the reaper owns it now
+  CFDictionaryRef info = r->info;
+  r->info = NULL;
+  freeRequest(r);
+  return info;
 }
 
 static int readIsPlaying(void) {
-  __block Boolean playing = false;
+  NPRequest *r = request();
+  if (!r) return -1;
   MRGetIsPlaying(workQ, ^(Boolean p) {
-    playing = p;
-    dispatch_semaphore_signal(workSem);
+    r->playing = p;
+    dispatch_semaphore_signal(r->done);
   });
-  if (dispatch_semaphore_wait(
-          workSem, dispatch_time(DISPATCH_TIME_NOW, 3LL * NSEC_PER_SEC)) != 0)
-    return -1;
-  return playing ? 1 : 0;
+  int playing = waitRequest(r) ? (r->playing ? 1 : 0) : -1;
+  if (playing != -1) freeRequest(r);
+  return playing;
 }
 
 static char *base64Copy(const unsigned char *data, long n) {
@@ -234,8 +275,10 @@ static char *base64Copy(const unsigned char *data, long n) {
   return s;
 }
 
-// snapshot copies the current system state into s (free with freeSnap).
+// snapshot copies the current system state into s, freeing whatever s
+// already held. Callers must freeSnap or hand it to publish afterwards.
 static void snapshot(Snapshot *s) {
+  freeSnap(s);
   memset(s, 0, sizeof *s);
   s->at = nowUnix();
   s->playing = readIsPlaying() == 1;
@@ -264,15 +307,21 @@ static void snapshot(Snapshot *s) {
     snprintf(buf, sizeof buf, "%s\n%s", s->title ? s->title : "", s->artist ? s->artist : "");
     setStr(&s->artID, buf);
   }
-  // artwork
+  // Artwork: encode it only when this is a track the reader has not
+  // already been told about — re-encoding the same blob every poll is
+  // the memory the published-only reads used to leak.
   const void *art = CFDictionaryGetValue(info, KeyArtwork);
   if (art && CFGetTypeID(art) == CFDataGetTypeID()) {
     CFDataRef d = (CFDataRef)art;
     CFIndex n = CFDataGetLength(d);
     if (n > 0 && n < 8 * 1024 * 1024) {
-      const UInt8 *bytes = CFDataGetBytePtr(d);
-      s->art = base64Copy(bytes, (long)n);
-      s->artLen = s->art ? (long)strlen(s->art) : 0;
+      if (!sentArtID || strcmp(sentArtID, s->artID ? s->artID : "") != 0) {
+        const UInt8 *bytes = CFDataGetBytePtr(d);
+        s->art = base64Copy(bytes, (long)n);
+        s->artLen = s->art ? (long)strlen(s->art) : 0;
+      }
+    } else {
+      s->artMissing = 1; // empty or oversized: tell the reader to stop waiting
     }
   } else {
     s->artMissing = 1;
@@ -330,7 +379,7 @@ static void publish(void) {
 // poll is the periodic read (and the notification-triggered one).
 static void poll(void) {
   lastSample = nowUnix();
-  snapshot(&pending);
+  snapshot(&pending); // frees the previous unread sample first
   publish();
 }
 
@@ -419,7 +468,6 @@ void shelf_np_run(void) {
   loadMediaRemote();
   ignoreSigpipe();
   workQ = dispatch_queue_create("shelf.np.work", NULL);
-  workSem = dispatch_semaphore_create(0);
   if (MRRegister) MRRegister(dispatch_get_main_queue());
   observeNotifications();
 

@@ -157,7 +157,7 @@ func TestNowPlayingHostReadsAndSends(t *testing.T) {
 	state := `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`
 	path := fakeHostScript(t, state)
 	h := NewNowPlayingHost()
-	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
+	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
 		return startCommand(ctx, path)
 	}
 	if err := h.Start(); err != nil {
@@ -196,7 +196,7 @@ func TestNowPlayingHostReadsAndSends(t *testing.T) {
 func TestNowPlayingHostDeadAfterHelperExit(t *testing.T) {
 	path := fakeHostScript(t, `{"ok":true,"playing":false}`)
 	h := NewNowPlayingHost()
-	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
+	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
 		return startCommand(ctx, path)
 	}
 	if err := h.Start(); err != nil {
@@ -218,8 +218,8 @@ func TestNowPlayingHostDeadAfterHelperExit(t *testing.T) {
 
 func TestNowPlayingHostStartFailureIsReported(t *testing.T) {
 	h := NewNowPlayingHost()
-	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
-		return nil, nil, os.ErrNotExist
+	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
+		return nil, nil, nil, os.ErrNotExist
 	}
 	if err := h.Start(); err == nil {
 		t.Fatal("Start must report the failure")
@@ -289,21 +289,21 @@ func TestLiveNowPlayingProbe(t *testing.T) {
 
 // startCommand starts path with its stdin/stdout pipes, the same shape
 // startPerlHost returns.
-func startCommand(ctx context.Context, path string) (io.WriteCloser, io.ReadCloser, error) {
+func startCommand(ctx context.Context, path string) (io.WriteCloser, io.ReadCloser, func() error, error) {
 	cmd := exec.CommandContext(ctx, path)
 	in, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return in, out, nil
+	return in, out, cmd.Wait, nil
 }
 
 func TestDecodeNPLineRoundTripFromHelperSource(t *testing.T) {
@@ -318,5 +318,37 @@ func TestDecodeNPLineRoundTripFromHelperSource(t *testing.T) {
 		if !strings.Contains(string(src), `"`+field+`\"`) && !strings.Contains(string(src), `\"`+field) {
 			t.Errorf("helper.c does not mention field %q", field)
 		}
+	}
+}
+
+// TestHelperSourceContracts guards the C source against small but
+// load-bearing mistakes: the snapshot frees what it overwrites, the
+// baseline and the artwork-sent marker exist, oversized art reports as
+// missing, and there is no shared semaphore.
+func TestHelperSourceContracts(t *testing.T) {
+	src, err := os.ReadFile("nowplaying/helper.c")
+	if err != nil {
+		t.Skipf("helper source not found: %v", err)
+	}
+	for _, want := range []string{
+		// Each request has its own semaphore; a late answer can never
+		// desync a shared one.
+		"NPRequest", "dispatch_semaphore_create(0)",
+		// The snapshot frees what it overwrites (the leak fix).
+		"freeSnap(s);",
+		// Oversized or empty artwork must report missing, not merely be
+		// skipped, or the reader keeps waiting for it.
+		"artMissing = 1;",
+		// Artwork is not re-encoded once this track's was sent.
+		"sentArtID",
+		// The baseline tracks whose artwork already went out.
+		"firstPublish",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("helper.c lacks %q", want)
+		}
+	}
+	if strings.Contains(string(src), "workSem") {
+		t.Error("helper.c still uses a shared semaphore")
 	}
 }

@@ -217,9 +217,10 @@ func jsonFloat(v any) float64 {
 // latest Now Playing state to the UI. Start begins it; Stop ends it.
 // Hosts are not reused after Stop.
 type NowPlayingHost struct {
-	// start launches the host and returns its stdin and stdout. nil uses
+	// start launches the host and returns its stdin, its stdout and a
+	// wait that reaps the process once the stdout reader ends. nil uses
 	// the real perl host; tests substitute a fake.
-	start func(ctx context.Context) (io.WriteCloser, io.ReadCloser, error)
+	start func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error)
 
 	mu     sync.Mutex
 	latest NowPlayingState // last state read
@@ -238,7 +239,8 @@ func NewNowPlayingHost() *NowPlayingHost {
 // NewNowPlayingHostWithSource builds a host whose child streams come
 // from source instead of the perl host. It exists so tests can drive the
 // protocol with a stub child; production code uses NewNowPlayingHost.
-func NewNowPlayingHostWithSource(source func(ctx context.Context) (io.WriteCloser, io.ReadCloser, error)) *NowPlayingHost {
+// The wait result reaps the stub process once its stdout ends.
+func NewNowPlayingHostWithSource(source func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error)) *NowPlayingHost {
 	h := &NowPlayingHost{}
 	if source != nil {
 		h.start = source
@@ -253,7 +255,7 @@ func (h *NowPlayingHost) Start() error {
 		h.start = startPerlHost
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	in, out, err := h.start(ctx)
+	in, out, wait, err := h.start(ctx)
 	if err != nil {
 		cancel()
 		return err
@@ -261,14 +263,19 @@ func (h *NowPlayingHost) Start() error {
 	h.cmd = in
 	h.cancel = cancel
 	h.done = make(chan struct{})
-	go h.loop(out)
+	go h.loop(out, wait)
 	return nil
 }
 
-// loop reads helper lines until the host exits.
-func (h *NowPlayingHost) loop(out io.ReadCloser) {
+// loop reads helper lines until the host exits, then reaps the process:
+// a helper that dies on its own must not become a zombie, and neither
+// must the CommandContext goroutine watching it.
+func (h *NowPlayingHost) loop(out io.ReadCloser, wait func() error) {
 	defer close(h.done)
 	defer out.Close()
+	if wait != nil {
+		defer wait()
+	}
 	r := newNPReader(out)
 	for {
 		u, err := r.read()
@@ -334,14 +341,16 @@ func (h *NowPlayingHost) Send(command NowPlayingCommand) {
 }
 
 // startPerlHost runs the helper bundle inside the Apple-signed perl.
-func startPerlHost(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
+// The returned wait reaps the process; it must be called once the
+// stdout reader ends or the child lingers as a zombie.
+func startPerlHost(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
 	perl := "/usr/bin/perl"
 	if _, err := os.Stat(perl); err != nil {
-		return nil, nil, fmt.Errorf("now playing needs %s: %w", perl, err)
+		return nil, nil, nil, fmt.Errorf("now playing needs %s: %w", perl, err)
 	}
 	bundle, err := helperBundlePath()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cmd := exec.CommandContext(ctx, perl, "-e", npPerlScript, bundle)
 	// The host prints JSON on stdout only; perl warnings and loader noise
@@ -349,16 +358,16 @@ func startPerlHost(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
 	cmd.Stderr = io.Discard
 	in, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return in, out, nil
+	return in, out, cmd.Wait, nil
 }
 
 // helperBundlePath locates the shipped helper bundle. In a built app it

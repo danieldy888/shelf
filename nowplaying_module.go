@@ -55,9 +55,16 @@ type npSnap struct {
 }
 
 // npSnapOf is the pure projection from a state to the compared snapshot.
-func npSnapOf(st mac.NowPlayingState, have bool, now time.Time) npSnap {
+// Position counts only while the expanded panel can show it: with the
+// panel closed a once-a-second redraw would wake the compositor for a
+// card no one sees.
+func npSnapOf(st mac.NowPlayingState, have, panelVisible bool, now time.Time) npSnap {
 	if !have {
 		return npSnap{}
+	}
+	position := 0
+	if panelVisible {
+		position = int(st.Position(now))
 	}
 	return npSnap{
 		have:     true,
@@ -65,7 +72,7 @@ func npSnapOf(st mac.NowPlayingState, have bool, now time.Time) npSnap {
 		title:    st.Title,
 		artist:   st.Artist,
 		artID:    st.ArtID,
-		position: int(st.Position(now)),
+		position: position,
 	}
 }
 
@@ -138,7 +145,7 @@ func (m *nowPlayingModule) refresh(now time.Time) {
 	if have {
 		m.decodeArt(st)
 	}
-	m.invalidate(npSnapOf(st, have, now))
+	m.invalidate(npSnapOf(st, have, m.host.visible, now))
 }
 
 // invalidate marks snap as current and redraws when it differs from what

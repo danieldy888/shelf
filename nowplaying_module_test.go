@@ -45,14 +45,11 @@ func newStubNowPlaying(t *testing.T, on bool) *stubNowPlaying {
 		}
 		close(s.cmds)
 	}()
-	host := mac.NewNowPlayingHostWithSource(func(ctx context.Context) (io.WriteCloser, io.ReadCloser, error) {
+	host := mac.NewNowPlayingHostWithSource(func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
 		// The stub child "exits" when the host is stopped, so Stop does
 		// not wait out its one-second grace period.
-		go func() {
-			<-ctx.Done()
-			lineR.Close()
-		}()
-		return cmdW, lineR, nil
+		wait := func() error { lineR.Close(); return nil }
+		return cmdW, lineR, wait, nil
 	})
 	s.mod = &nowPlayingModule{
 		host: &shelf{settings: settings.Settings{IslandNowPlaying: on}},
@@ -95,18 +92,27 @@ func (s *stubNowPlaying) feed(t *testing.T, line string) mac.NowPlayingState {
 
 func TestNPSnapOf(t *testing.T) {
 	now := time.Now()
-	if got := npSnapOf(mac.NowPlayingState{}, false, now); got != (npSnap{}) {
+	if got := npSnapOf(mac.NowPlayingState{}, false, true, now); got != (npSnap{}) {
 		t.Fatalf("no state must project to the zero snapshot, got %+v", got)
 	}
 	st := mac.NowPlayingState{Playing: true, Title: "T", Artist: "A", ArtID: "id",
 		Elapsed: 10, Rate: 1, Received: now.Add(-2 * time.Second)}
-	got := npSnapOf(st, true, now)
+	got := npSnapOf(st, true, true, now)
 	want := npSnap{have: true, playing: true, title: "T", artist: "A", artID: "id", position: 12}
 	if got != want {
 		t.Fatalf("snapshot = %+v, want %+v", got, want)
 	}
+	// Panel closed: the same state is still live but the moving position
+	// is not compared, so the tick does not wake once a second.
+	closed := npSnapOf(st, true, false, now)
+	if !closed.have || closed.position != 0 {
+		t.Fatalf("closed-panel snapshot = %+v", closed)
+	}
+	if closed == got {
+		t.Fatal("a position-bearing snapshot must differ from a closed one")
+	}
 	// A paused track keeps its frozen position but reports not playing.
-	paused := npSnapOf(mac.NowPlayingState{Title: "T", Elapsed: 10, Received: now.Add(-time.Hour)}, true, now)
+	paused := npSnapOf(mac.NowPlayingState{Title: "T", Elapsed: 10, Received: now.Add(-time.Hour)}, true, true, now)
 	if paused.playing || paused.position != 10 {
 		t.Fatalf("paused snapshot = %+v", paused)
 	}
@@ -255,8 +261,8 @@ func TestNowPlayingStopsWhenHelperDies(t *testing.T) {
 func TestNowPlayingStartFailureIsRetriedLater(t *testing.T) {
 	m := &nowPlayingModule{host: &shelf{settings: settings.Settings{IslandNowPlaying: true}}}
 	m.newHost = func() *mac.NowPlayingHost {
-		return mac.NewNowPlayingHostWithSource(func(context.Context) (io.WriteCloser, io.ReadCloser, error) {
-			return nil, nil, errors.New("no helper here")
+		return mac.NewNowPlayingHostWithSource(func(context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
+			return nil, nil, nil, errors.New("no helper here")
 		})
 	}
 	now := time.Now()
@@ -271,8 +277,8 @@ func TestNowPlayingStartFailureIsRetriedLater(t *testing.T) {
 	tries := 0
 	m.newHost = func() *mac.NowPlayingHost {
 		tries++
-		return mac.NewNowPlayingHostWithSource(func(context.Context) (io.WriteCloser, io.ReadCloser, error) {
-			return nil, nil, errors.New("still nothing")
+		return mac.NewNowPlayingHostWithSource(func(context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
+			return nil, nil, nil, errors.New("still nothing")
 		})
 	}
 	m.tick(now.Add(npRetryDelay / 2))
