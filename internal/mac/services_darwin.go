@@ -11,7 +11,9 @@ package mac
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
@@ -40,11 +42,28 @@ func serviceContent(paths []string, text string) ([]string, string) {
 	return nil, text
 }
 
+// svcErrMessage is the NSString the service request reports back through
+// the classic selector's third parameter (NSString **error, not NSError **).
+// It is allocated once at +1, outside any autorelease pool, so the pointer
+// stays valid after the callback's pool drains and past the request.
+var svcErrMessage id
+
+// retainedString returns an NSString with a permanent +1 retain: unlike
+// nsString it is never autoreleased, so it survives its creation pool.
+func retainedString(s string) id {
+	b := unsafe.StringData(s)
+	str := send(send(class("NSString"), "alloc"), "initWithBytes:length:encoding:",
+		uintptr(unsafe.Pointer(b)), uintptr(len(s)), nsUTF8StringEncoding)
+	runtime.KeepAlive(s)
+	return str
+}
+
 // addToShelf serves the "添加到 Shelf" request (NSMessage addToShelf,
 // selector addToShelf:userData:error:, type encoding v@:@@^@). pbs copies
 // the caller's payload into this fresh pasteboard; it is read only here,
 // never written back. Files beat text; an empty payload faults the request
-// back to the caller through the NSError out-parameter.
+// back to the caller by storing an NSString message through errOut, which
+// may be NULL when the caller does not care.
 func addToShelf(_ id, _ objc.SEL, pboard id, _ id, errOut *id) {
 	var paths []string
 	var text string
@@ -81,12 +100,11 @@ func addToShelf(_ id, _ objc.SEL, pboard id, _ id, errOut *id) {
 	})
 	paths, text = serviceContent(paths, text)
 	if len(paths) == 0 && text == "" {
+		if svcErrMessage == 0 {
+			svcErrMessage = retainedString("Nothing to add to Shelf")
+		}
 		if errOut != nil {
-			desc := send(class("NSDictionary"), "dictionaryWithObject:forKey:",
-				uintptr(nsString("Nothing to add to Shelf")),
-				uintptr(nsString("NSLocalizedDescriptionKey")))
-			*errOut = send(send(class("NSError"), "alloc"), "initWithDomain:code:userInfo:",
-				uintptr(nsString("local.y3.shelf")), 1, uintptr(desc))
+			*errOut = svcErrMessage
 		}
 		return
 	}

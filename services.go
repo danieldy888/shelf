@@ -13,9 +13,21 @@ import (
 	"shelf/internal/mac"
 )
 
-// serviceSeq 标记最近一次由服务唤出的闪现；用户在闪现后接管面板
-// （点进面板拿走 Esc、选中条目、拖出）则自动收起失效。
-var serviceSeq int
+// serviceFlashGen is the generation counter that owns the auto-hide timer
+// started by a service flash. serviceReceive bumps it when the flash
+// opens the panel; takeServiceOwnership bumps it whenever the user takes
+// over — any hide (manual collapse, Esc, click outside, successful
+// drag-out), any click inside the panel, or an outbound drag. A queued
+// timer whose generation no longer matches does nothing, so a stale flash
+// can never hide a panel the user is using.
+var serviceFlashGen int
+
+// takeServiceOwnership ends the service flash's ownership of the visible
+// panel: the pending auto-hide becomes inert. Called from every user
+// action that dismisses or works with the shelf. Main thread only.
+func (a *shelf) takeServiceOwnership() {
+	serviceFlashGen++
+}
 
 // installServices registers "添加到 Shelf" so Finder and any app's Services
 // menu can send selected files or text into the shelf. A failure is a
@@ -28,6 +40,13 @@ func (a *shelf) installServices() {
 	if err != nil {
 		a.notice("服务菜单不可用：" + err.Error())
 	}
+}
+
+// serviceFlashMayHide reports whether the auto-hide timer generation g is
+// still allowed to collapse the panel: the flash must still own it (no
+// user takeover since it armed) and no drag may be live.
+func (a *shelf) serviceFlashMayHide(gen int) bool {
+	return gen == serviceFlashGen && a.visible && !a.quitting && !a.dragging && !a.pointerDrag && !a.ownDrag
 }
 
 // serviceReceive stores one service payload on the main thread. Files win
@@ -58,16 +77,15 @@ func (a *shelf) serviceReceive(paths []string, text string) {
 	if a.visible {
 		return
 	}
-	serviceSeq++
-	seq := serviceSeq
 	a.show(false)
 	a.releaseKeys()
+	serviceFlashGen++
+	gen := serviceFlashGen
 	time.AfterFunc(2*time.Second, func() {
 		mygo.RunOnMain(func() {
-			if seq != serviceSeq || !a.visible || a.quitting || a.dragging || a.pointerDrag || a.escHeld || a.selection.count() > 0 {
-				return
+			if a.serviceFlashMayHide(gen) {
+				a.hide()
 			}
-			a.hide()
 		})
 	})
 }

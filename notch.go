@@ -130,6 +130,7 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 		if a.visible {
 			a.holdKeys()
 		}
+		a.takeServiceOwnership()
 		return
 	}
 	a.releaseKeys()
@@ -240,6 +241,9 @@ func (a *shelf) hide() {
 	if !a.visible && !a.peeking {
 		return
 	}
+	// Any hide — manual or the flash's own timer — ends service ownership
+	// so a queued timer can never reclaim a panel the user reopened.
+	a.takeServiceOwnership()
 	a.visible, a.edgeOpened, a.peeking = false, false, false
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.peekFrom, a.peekAnimStart = a.peekProgress, time.Now()

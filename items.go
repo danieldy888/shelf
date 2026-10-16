@@ -33,6 +33,7 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 		row.DragDataFrom(func() transfer.Data {
 			// 本应用发起的拖出会话：拖拽监视据此抑制摇晃召唤与篮子。
 			a.ownDrag = true
+			a.takeServiceOwnership()
 			return a.dragOut(item)
 		}, transfer.DragOptions{Operations: transfer.Copy, Done: a.completed})
 	}
