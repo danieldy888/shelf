@@ -11,10 +11,12 @@ import (
 )
 
 // overlayHits is the idle-strip hit rule, in a flipped view whose Y=0 is the
-// screen's top edge. File drags to the hardware notch must always land on a
-// window — otherwise WindowServer treats Y=0 as the Spaces edge. Clicks on
-// the rest of the idle strip still pass through to the app below.
-func overlayHits(acceptAll bool, bandH int, localY, viewH float64) bool {
+// screen's top edge. Only the bandW × bandH region centered on the strip is
+// solid while idle: it follows the drawn notch shell (bare notch, or the
+// widened island wings), so file drags at Y=0 hit a window instead of the
+// Spaces edge while menu-bar items beside the drawn shell keep their clicks.
+// bandW <= 0 means the full strip width.
+func overlayHits(acceptAll bool, bandW, bandH int, localX, localY, viewW, viewH float64) bool {
 	if acceptAll {
 		return true
 	}
@@ -25,28 +27,37 @@ func overlayHits(acceptAll bool, bandH int, localY, viewH float64) bool {
 	if band > viewH {
 		band = viewH
 	}
-	return localY >= 0 && localY < band
+	if localY < 0 || localY >= band {
+		return false
+	}
+	w := float64(bandW)
+	if w <= 0 || w > viewW {
+		w = viewW
+	}
+	x0 := (viewW - w) / 2
+	return localX >= x0 && localX < x0+w
 }
 
 var (
 	overlayHitOnce  sync.Once
 	overlayHitIMP   uintptr
 	overlayAccept   atomic.Bool
-	overlayBand     atomic.Int64
+	overlayBandW    atomic.Int64
+	overlayBandH    atomic.Int64
 	msgConvertPoint func(obj id, sel objc.SEL, p NSPoint, view id) NSPoint
 )
 
 func overlayHitTest(self id, _ objc.SEL, px, py float64) id {
 	b := msgRect(self, sel("bounds"))
-	var localY float64
+	var localX, localY float64
 	if msgConvertPoint != nil {
 		superview := send(self, "superview")
 		local := msgConvertPoint(self, sel("convertPoint:fromView:"), NSPoint{X: px, Y: py}, superview)
-		localY = local.Y
+		localX, localY = local.X, local.Y
 	} else {
-		localY = py
+		localX, localY = px, py
 	}
-	if overlayHits(overlayAccept.Load(), int(overlayBand.Load()), localY, b.Size.Height) {
+	if overlayHits(overlayAccept.Load(), int(overlayBandW.Load()), int(overlayBandH.Load()), localX, localY, b.Size.Width, b.Size.Height) {
 		return self
 	}
 	return 0
@@ -106,18 +117,28 @@ func registerOverlayDropTypes(window id) {
 	register(overlaySurfaceView(window))
 }
 
-// SetOverlayHitTest keeps the overlay in WindowServer's hit-test list (never
-// ignoresMouseEvents) and decides which pixels of the flipped surface are
-// solid. acceptAll is peeking, expanded, or an in-flight drag; otherwise
-// only the hardware-notch band at the top of the strip receives events, so
-// a file dragged onto the camera housing hits a drop target instead of the
-// Spaces edge. Main thread only.
-func SetOverlayHitTest(window uintptr, acceptAll bool, bandHeight int) {
+// SetOverlayBand moves only the idle strip's solid region. The island's
+// width animation tracks it frame by frame without re-installing the
+// hit-test method or re-registering drop types. Main thread only.
+func SetOverlayBand(bandWidth, bandHeight int) {
 	if bandHeight < 1 {
 		bandHeight = 32
 	}
+	overlayBandW.Store(int64(bandWidth))
+	overlayBandH.Store(int64(bandHeight))
+}
+
+// SetOverlayHitTest keeps the overlay in WindowServer's hit-test list (never
+// ignoresMouseEvents) and decides which pixels of the flipped surface are
+// solid. acceptAll is peeking, expanded, or an in-flight drag; otherwise
+// only the bandWidth × bandHeight region centered at the top of the strip
+// receives events — the drawn notch shell — so a file dragged onto the
+// camera housing hits a drop target instead of the Spaces edge and clicks
+// on the island's wings land on the shelf, while the strip around the shell
+// passes through to the menu bar. Main thread only.
+func SetOverlayHitTest(window uintptr, acceptAll bool, bandWidth, bandHeight int) {
+	SetOverlayBand(bandWidth, bandHeight)
 	overlayAccept.Store(acceptAll)
-	overlayBand.Store(int64(bandHeight))
 	if window == 0 {
 		return
 	}

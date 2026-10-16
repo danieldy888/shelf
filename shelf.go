@@ -57,6 +57,13 @@ type shelf struct {
 	peeking                                    bool
 	peekProgress, peekFrom                     float32
 	peekAnimStart                              time.Time
+	island                                     activity  // activity whose wings are shown (ID empty = none)
+	islandNext                                 activity  // activity swapped in when the fold completes
+	islandK                                    float32   // wings' grow-out progress
+	islandFrom                                 float32   // islandK the wings' animation started from
+	islandStart                                time.Time // when islandK's animation started (zero = idle)
+	islandSwap                                 bool      // folding the old wings shut before showing a new activity
+	islandFitKey, islandFitText                string    // trailing-text truncation cache
 	ignoringMouse                              bool
 	thumbnails                                 map[string]*ui.Bitmap
 	shake                                      shakeDetector // 摇晃召唤：拖拽中左右晃动检测
@@ -87,11 +94,13 @@ func (a *shelf) startMonitoring() {
 					if a.quitting {
 						return
 					}
-					a.animate(now)
-					a.monitorDrag(now)
 					for _, m := range a.modules {
 						m.tick(now)
 					}
+					// 刘海岛读取各模块刚更新过的活动状态，再推进动画。
+					a.islandTick(now)
+					a.animate(now)
+					a.monitorDrag(now)
 					if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
 						a.status, a.statusUntil = "", time.Time{}
 						if a.win != nil {

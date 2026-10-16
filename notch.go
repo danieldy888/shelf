@@ -54,11 +54,13 @@ func (a *shelf) nearTrigger(p mygo.Point) bool {
 // Hover changes only the drawing, not the native window geometry. Keeping one
 // stable transparent strip for idle/peek avoids resizing the backing surface
 // every time the pointer crosses the notch. Only opening the panel changes it.
+// The strip is always wide enough for the island's wings, so live activity
+// changes the drawing (and the hit-test band) without a native resize.
 func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.visible || a.progress > 0.01 {
 		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 	}
-	w := max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth)
+	w := max(max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth), a.islandStripW())
 	h := max(max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
@@ -124,6 +126,12 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 		a.show(false)
 		return
 	}
+	// The island's wings sit in the menu bar's centre too, and are only
+	// hit-testable while they are drawn: the same rule expands the shelf.
+	if a.islandShown() && !a.visible && !a.peeking && (inside || a.overIsland(p)) {
+		a.show(false)
+		return
+	}
 	if inside {
 		// Esc and Space are taken only while the panel is open; a press
 		// on the collapsed notch band or a closing panel must not hold them.
@@ -158,8 +166,10 @@ func (a *shelf) windowLevel() int {
 	}
 }
 
-// Idle clicks below the hardware notch pass through; the notch band itself
-// never does. File drags to the top of the notch must hit a window, or
+// Idle clicks and menu-bar items outside the drawn shell pass through; the
+// drawn shell — the notch band, widened to the island's wings while an
+// activity shows — receives events, and a drag in flight accepts the whole
+// strip. File drags to the top of the notch must hit a window, or
 // WindowServer treats Y=0 as the Spaces edge. ignoresMouseEvents stays off
 // so the overlay stays in the hit-test list for the whole drag.
 func (a *shelf) syncMousePassThrough() {
@@ -170,7 +180,8 @@ func (a *shelf) syncMousePassThrough() {
 		return
 	}
 	h := a.win.NativeHandle()
-	mac.SetOverlayHitTest(h, acceptAll, max(8, a.notchH))
+	bandW, bandH := a.idleBand()
+	mac.SetOverlayHitTest(h, acceptAll, bandW, bandH)
 	mac.SetWindowLevel(h, a.windowLevel())
 }
 
@@ -328,13 +339,44 @@ func (a *shelf) animate(now time.Time) {
 			finished = true
 		}
 	}
+	if !a.islandStart.IsZero() {
+		k := min(float32(now.Sub(a.islandStart))/float32(islandAnimation), 1)
+		target := float32(0)
+		if a.hasIsland() && !a.islandSwap {
+			target = 1
+		}
+		a.islandK = a.islandFrom + (target-a.islandFrom)*ui.EaseOut(k)
+		if k >= 1 {
+			a.islandStart = time.Time{}
+			finished = true
+			if a.islandSwap {
+				// The fold finished: swap in the new activity and grow the
+				// wings back out, or stay folded if it ended altogether.
+				a.island, a.islandSwap = a.islandNext, false
+				a.islandNext = activity{}
+				if a.hasIsland() {
+					a.islandFrom, a.islandStart = a.islandK, now
+					finished = false
+				} else {
+					a.islandK = 0
+				}
+			} else {
+				a.islandK = target
+			}
+		}
+	}
 	if a.win == nil {
 		return
 	}
 	// 动画途中逐帧重绘；结束时补一次穿透状态同步与终帧。
-	if !a.animationStart.IsZero() || !a.peekAnimStart.IsZero() || finished {
+	if !a.animationStart.IsZero() || !a.peekAnimStart.IsZero() || !a.islandStart.IsZero() || finished {
 		if finished {
 			a.syncMousePassThrough()
+		} else if !a.islandStart.IsZero() {
+			// The wings change the drawn shell's width frame by frame;
+			// move the hit-test band with them in one atomic store.
+			bandW, bandH := a.idleBand()
+			mac.SetOverlayBand(bandW, bandH)
 		}
 		a.win.Invalidate()
 	}
