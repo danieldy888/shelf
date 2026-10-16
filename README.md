@@ -97,6 +97,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Peek at the shelf | Move the pointer onto the notch (no drag needed) — it bulges out; click it to unfold |
 | Stash what you're dragging | While dragging anything, move near the notch — the shelf expands instantly; you can also drop right onto the peeked notch |
 | Summon the drop basket | While dragging, shake the pointer left and right — a basket card appears beside the cursor; drop onto it |
+| Send files or text to the shelf | Right-click selected items in Finder → Services/Quick Actions → "添加到 Shelf" (Add to Shelf); or select text in any app → app menu → Services → "添加到 Shelf" |
 | Drag an item out | Drag it from the shelf into the target app |
 | Copy a text item back | Click it once, then paste (`⌘V`) anywhere |
 | Remove an item | Click the × on its right; file references never delete the original file |
@@ -198,6 +199,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 探头预览 | 空手把指针移到刘海上——它会向下鼓出；单击探头胶囊即展开 |
 | 暂存正在拖的内容 | 拖着任何东西靠近刘海触发区，托盘瞬间展开；也可以直接拖到探头刘海上松开 |
 | 唤出暂存篮 | 拖拽中左右快速摇晃指针，光标旁出现篮子卡片；拖到上面松开即可 |
+| 从 Finder 或服务菜单收进托盘 | 在 Finder 右键选中的文件或文件夹 → 服务/快速操作 → “添加到 Shelf”；或在任意应用选中文字 → 应用菜单 → 服务 → “添加到 Shelf” |
 | 拖出项目 | 从托盘中拖住该项，到目标应用中松开 |
 | 把文字复制回来 | 单击该文字项，然后在任意应用中粘贴（`⌘V`） |
 | 移除项目 | 点击该项右侧的 ×；文件引用不会删除原文件 |

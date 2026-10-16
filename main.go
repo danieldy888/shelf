@@ -165,6 +165,7 @@ func (a *shelf) ready(show bool) {
 		a.syncMousePassThrough()
 		a.win.ShowInactive()
 	}
+	a.installServices()
 	a.startMonitoring()
 	log.Print("Shelf ready")
 }

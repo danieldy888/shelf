@@ -6,6 +6,19 @@
   "macos": {
     "minimumSystemVersion": "13.0",
     "signingIdentity": "-",
-    "infoPlist": { "LSUIElement": true, "NSHighResolutionCapable": true }
+    "infoPlist": {
+      "LSUIElement": true,
+      "NSHighResolutionCapable": true,
+      "NSServices": [
+        {
+          "NSMenuItem": { "default": "添加到 Shelf" },
+          "NSMessage": "addToShelf",
+          "NSPortName": "Shelf",
+          "NSRequiredContext": {},
+          "NSSendTypes": ["NSStringPboardType", "public.utf8-plain-text"],
+          "NSSendFileTypes": ["public.file-url", "public.item"]
+        }
+      ]
+    }
   }
 }
