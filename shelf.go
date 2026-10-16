@@ -17,42 +17,44 @@ import (
 
 // UI、历史与本机 API 由 mygo 主线程串行拥有。
 type shelf struct {
-	win                                       *mygo.Window
-	tray                                      *mygo.Tray
-	store                                     *store.Store
-	stop                                      chan struct{}
-	quitting, visible, edgeOpened, received   bool
-	status                                    string
-	statusUntil                               time.Time
-	x, y                                      int
-	dispBounds                                mygo.Rectangle
-	frame                                     mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
-	settingFrame                              bool
-	animationStart                            time.Time
-	animationFrom, progress                   float32
-	settings                                  settings.Settings
-	modules                                   []module
-	clip                                      *clipboardModule // nil while clipboard history is off
-	dragSerial                                int64
-	dragging, suppressed, pointerDrag         bool
-	dataDir                                   string // where state.json and settings.json live
-	settingsBroken                            bool   // settings.json unreadable: never overwrite it
-	guard                                     dragGuard
-	escHeld, spaceHeld                        bool
-	selection                                 selection
-	stopMouseObservation, stopDragObservation func()
-	leftSince                                 time.Time
-	h, topInset                               int
-	notchX, notchY, notchW, notchH            int
-	hasNotch                                  bool
-	peeking                                   bool
-	peekProgress, peekFrom                    float32
-	peekAnimStart                             time.Time
-	ignoringMouse                             bool
-	thumbnails                                map[string]*ui.Bitmap
-	thumbPending                              map[string]bool
-	thumbDiscard                              map[string]bool
-	thumbActive                               int
+	win                                        *mygo.Window
+	tray                                       *mygo.Tray
+	store                                      *store.Store
+	stop                                       chan struct{}
+	quitting, visible, edgeOpened, received    bool
+	status                                     string
+	statusUntil                                time.Time
+	x, y                                       int
+	dispBounds                                 mygo.Rectangle
+	frame                                      mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
+	settingFrame                               bool
+	animationStart                             time.Time
+	animationFrom, progress                    float32
+	settings                                   settings.Settings
+	modules                                    []module
+	clip                                       *clipboardModule // nil while clipboard history is off
+	dragSerial                                 int64
+	dragging, suppressed, pointerDrag, ownDrag bool
+	dataDir                                    string // where state.json and settings.json live
+	settingsBroken                             bool   // settings.json unreadable: never overwrite it
+	guard                                      dragGuard
+	escHeld, spaceHeld                         bool
+	selection                                  selection
+	stopMouseObservation, stopDragObservation  func()
+	leftSince                                  time.Time
+	h, topInset                                int
+	notchX, notchY, notchW, notchH             int
+	hasNotch                                   bool
+	peeking                                    bool
+	peekProgress, peekFrom                     float32
+	peekAnimStart                              time.Time
+	ignoringMouse                              bool
+	thumbnails                                 map[string]*ui.Bitmap
+	shake                                      shakeDetector // 摇晃召唤：拖拽中左右晃动检测
+	basket                                     basketState   // 摇晃召唤的拖放篮
+	thumbPending                               map[string]bool
+	thumbDiscard                               map[string]bool
+	thumbActive                                int
 }
 
 func (a *shelf) toggle() {
@@ -147,6 +149,7 @@ func (a *shelf) notice(msg string) {
 	a.status += msg
 }
 func (a *shelf) completed(r transfer.Result) {
+	a.ownDrag = false
 	if r.Err != nil {
 		a.report(r.Err)
 		return

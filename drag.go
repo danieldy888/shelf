@@ -104,6 +104,8 @@ func (a *shelf) pointerDragged() {
 	a.syncDragGuard()
 	a.syncMousePassThrough()
 	if !a.suppressed && !a.visible && a.nearTrigger(p) {
+		// 拖入首次触及刘海触发区时给一下力反馈，提示落点在顶部。
+		mac.HapticTick()
 		a.show(true)
 	}
 }
@@ -126,6 +128,15 @@ func (a *shelf) monitorDrag(now time.Time) {
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
+	// 摇晃召唤：只在系统拖拽进行中、且不是自己拖出或已放弃拖放的会话里
+	// 采样；竖直拖动没有 x 采样变化，不会误触发篮子。
+	if active && !a.suppressed && !a.ownDrag {
+		if a.shake.add(now, float64(p.X)) {
+			a.showBasket(p)
+		}
+	} else {
+		a.shake.reset()
+	}
 	overNotch := a.overNotch(p)
 	nearEdge := a.nearTrigger(p)
 	// Dragging or hovering reveals the pill; only a click or a real incoming
@@ -139,6 +150,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	a.syncMousePassThrough()
 	if active && !a.suppressed && !a.visible && nearEdge {
 		// Incoming drags open immediately; empty-handed hover never does.
+		mac.HapticTick()
 		a.show(true)
 	}
 	if !active && !a.visible && !overNotch {
@@ -162,8 +174,9 @@ func (a *shelf) monitorDrag(now time.Time) {
 	} else {
 		a.leftSince = time.Time{}
 	}
-}
 
+	a.basketTick(now, p)
+}
 func insideRect(p mygo.Point, r mygo.Rectangle) bool {
 	return p.X >= r.X && p.X < r.X+r.Width && p.Y >= r.Y && p.Y < r.Y+r.Height
 }

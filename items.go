@@ -30,7 +30,11 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 		row.Background(cardSurface)
 	}
 	if !item.Missing {
-		row.DragDataFrom(func() transfer.Data { return a.dragOut(item) }, transfer.DragOptions{Operations: transfer.Copy, Done: a.completed})
+		row.DragDataFrom(func() transfer.Data {
+			// 本应用发起的拖出会话：拖拽监视据此抑制摇晃召唤与篮子。
+			a.ownDrag = true
+			return a.dragOut(item)
+		}, transfer.DragOptions{Operations: transfer.Copy, Done: a.completed})
 	}
 	row.ContextMenu(func(m *ui.Menu) { a.itemMenu(m, item) })
 	row.Children(func() {

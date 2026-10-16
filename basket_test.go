@@ -1,0 +1,168 @@
+//go:build darwin
+
+package main
+
+import (
+	"os"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/mac"
+	"shelf/internal/store"
+)
+
+// TestMain keeps go test hermetic by default; with SHELF_BASKET_SMOKE=1 it
+// runs the real app loop so the basket's native window can be inspected
+// (CGWindowListCopyWindowInfo) and screenshotted. The test instance uses a
+// temporary data dir and never touches ~/Library/Application Support/Shelf.
+func TestMain(m *testing.M) {
+	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
+		os.Exit(m.Run())
+	}
+	s, err := store.Open(os.TempDir() + "/shelf-basket-smoke")
+	if err != nil {
+		panic(err)
+	}
+	smokeShelf = &shelf{store: s, stop: make(chan struct{})}
+	mygo.App.SetName(appName)
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	mygo.App.OnWindowAllClosed(func() {})
+	mygo.App.WhenReady(func() {
+		if err := mac.Init(); err != nil {
+			panic(err)
+		}
+		go func() {
+			code := m.Run()
+			mygo.App.Quit()
+			os.Exit(code)
+		}()
+	})
+	if err := mygo.App.Run(); err != nil {
+		panic(err)
+	}
+}
+
+var smokeShelf *shelf
+
+// onMain runs fn on the app's main thread and waits for it. Only reachable
+// in the smoke harness where the app loop is up.
+func onMain(fn func()) {
+	done := make(chan struct{})
+	mygo.RunOnMain(func() {
+		fn()
+		close(done)
+	})
+	<-done
+}
+
+// TestBasketWindowShownAndPlaced proves the summoned card is a real window:
+// WindowServer sees it, its frame is the basket placement rect, and it
+// sits inside the display's visible area. Run with SHELF_BASKET_SMOKE=1.
+func TestBasketWindowShownAndPlaced(t *testing.T) {
+	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
+		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native window smoke test")
+	}
+	a := smokeShelf
+	cursor := mygo.Screen.CursorScreenPoint()
+	onMain(func() {
+		// Place near the cursor the way a shake at that point would.
+		a.showBasket(cursor)
+	})
+	if a.basket.win == nil {
+		t.Fatal("basket window was not created")
+	}
+	defer onMain(a.closeBasket)
+	want := a.basket.frame
+	num := mac.WindowNumber(a.basket.win.NativeHandle())
+	if num == 0 {
+		t.Fatal("basket window has no CGWindowID")
+	}
+	t.Logf("basket CGWindowID=%d frame=%+v — screencapture -l %d shots it", num, want, num)
+	// SHELF_BASKET_HOLD=1 keeps the card up so an external
+	// `screencapture -l <id>` can run against the live window.
+	if os.Getenv("SHELF_BASKET_HOLD") != "" {
+		time.Sleep(8 * time.Second)
+	}
+	var got mac.NSRect
+	var ok bool
+	for i := range 60 {
+		onMain(func() { got, ok = mac.WindowScreenRect(num) })
+		if ok {
+			break
+		}
+		if i == 59 {
+			t.Fatalf("window %d never appeared in CGWindowList", num)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	onMain(func() {
+		t.Logf("AppKit frame=%v mygo Bounds=%+v", got, a.basket.win.Bounds())
+	})
+	if int(got.Size.Width) != want.Width || int(got.Size.Height) != want.Height {
+		t.Fatalf("window size %v×%v, want %d×%d", got.Size.Width, got.Size.Height, want.Width, want.Height)
+	}
+	if int(got.Origin.X) != want.X || int(got.Origin.Y) != want.Y {
+		t.Fatalf("window origin %v,%v, want %d,%d", got.Origin.X, got.Origin.Y, want.X, want.Y)
+	}
+}
+
+// TestBasketFrameStaysInsideVisible clamps the card into the display's
+// visible frame: never under the menu bar, never off-screen.
+func TestBasketFrameStaysInsideVisible(t *testing.T) {
+	vis := mygo.Rectangle{X: 0, Y: 25, Width: 1512, Height: 920}
+	fits := func(r mygo.Rectangle) bool {
+		return r.X >= vis.X && r.Y >= vis.Y &&
+			r.X+r.Width <= vis.X+vis.Width && r.Y+r.Height <= vis.Y+vis.Height
+	}
+	for _, c := range []mygo.Point{
+		{X: 100, Y: 100},  // middle: card lands down-right
+		{X: 1480, Y: 900}, // bottom-right corner: flips left/above
+		{X: 0, Y: 25},     // top-left corner
+		{X: 1510, Y: 25},  // top-right corner
+		{X: 700, Y: 26},   // just under the menu bar
+		{X: 1490, Y: 919}, // one point of room left/down
+	} {
+		if r := basketFrame(vis, c); !fits(r) {
+			t.Fatalf("cursor %+v produced out-of-bounds frame %+v", c, r)
+		}
+	}
+	// A display whose WorkArea starts away from the origin (secondary
+	// screen above/beside the main one) still clamps inside itself.
+	vis2 := mygo.Rectangle{X: -1440, Y: -1080, Width: 1440, Height: 1030}
+	for _, c := range []mygo.Point{{X: -1400, Y: -1070}, {X: -20, Y: -60}} {
+		r := basketFrame(vis2, c)
+		if r.X < vis2.X || r.Y < vis2.Y || r.X+r.Width > vis2.X+vis2.Width || r.Y+r.Height > vis2.Y+vis2.Height {
+			t.Fatalf("secondary display: cursor %+v produced out-of-bounds frame %+v", c, r)
+		}
+	}
+}
+
+// TestBasketViewStates covers the card's three visual states headlessly:
+// idle prompt, then the confirmation after basketReceive.
+func TestBasketViewStates(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s}
+	view := ui.NewTester(a.basketView, basketWidth, basketHeight)
+	if !view.HasText("放到这里") {
+		t.Fatal("basket card does not show the drop prompt")
+	}
+	a.basketReceive(transfer.TextData("hello"))
+	if len(s.Items) != 1 || s.Items[0].Text != "hello" {
+		t.Fatal("drop on the basket did not reach the store")
+	}
+	view.Frame()
+	if !view.HasText("已放入 Shelf") {
+		t.Fatal("basket card does not show the confirmation")
+	}
+	if a.basket.hideAt.IsZero() {
+		t.Fatal("confirmation did not arm the auto-close timer")
+	}
+}
