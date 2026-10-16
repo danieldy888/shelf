@@ -66,9 +66,13 @@ func main() {
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		close(a.stop)
+		a.stopDragGuard()
 		mygo.GlobalShortcut.UnregisterAll()
 		if a.stopMouseObservation != nil {
 			a.stopMouseObservation()
+		}
+		if a.stopDragObservation != nil {
+			a.stopDragObservation()
 		}
 		if a.tray != nil {
 			a.tray.Destroy()
@@ -97,34 +101,19 @@ func (a *shelf) ready(show bool) {
 	a.win = mygo.NewWindow(mygo.WindowOptions{
 		Title: appName, Width: panelWidth, Height: panelHeight,
 		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
-		AlwaysOnTop: true, SkipTaskbar: true,
-		DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
+		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,
+		DisableMove: true, DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
 		Content: ui.View(a.view),
 	})
 	a.win.SetVisibleOnAllWorkspaces(true)
 	mac.ConfigureNotchWindow(a.win.NativeHandle())
+	a.win.OnMove(a.windowGeometryChanged)
+	a.win.OnResize(a.windowGeometryChanged)
 	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
-		if a.quitting {
-			return
-		}
-		if inside {
-			a.holdEscape()
-			// 探头态点击刘海任意处都展开：与 view 里胶囊的 Clicked 互补，
-			// 覆盖落在胶囊提示文字之外的壳面点击。
-			if a.peeking && !a.visible {
-				a.show(false)
-			}
-		} else {
-			a.releaseEscape()
-			// 在其他应用窗口内点击（排除顶部菜单栏状态图标区，避免与托盘点击冲突）时收起托盘。
-			p := mygo.Screen.CursorScreenPoint()
-			inMenuBar := p.Y >= a.notchY && p.Y <= a.notchY+max(36, a.notchH+4)
-			if a.visible && !a.dragging && !inMenuBar {
-				a.hide()
-			}
-		}
+		a.mouseDown(inside, mygo.Screen.CursorScreenPoint())
 	})
+	a.stopDragObservation = mac.ObserveLeftMouseDragged(a.pointerDragged)
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()
@@ -165,9 +154,8 @@ func (a *shelf) ready(show bool) {
 	if show {
 		a.show(false)
 	} else {
-		// 常驻透明窗口始终映射在屏幕上：收起时不绘制、忽略鼠标，帧缩到
-		// 刘海壳大小；拖拽或探头一开始 syncWindowFrame 立刻把它扩成顶边
-		// 窄条接管事件，避免触发 Mission Control，同时不挡住下层应用。
+		// Keep the same top-anchored transparent strip when idle or peeking;
+		// only its drawing and mouse pass-through change on hover.
 		a.place(mygo.Screen.CursorScreenPoint())
 		a.syncMousePassThrough()
 		a.win.ShowInactive()

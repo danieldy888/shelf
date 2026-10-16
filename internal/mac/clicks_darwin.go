@@ -31,3 +31,32 @@ func ObserveMouseDown(window uintptr, clicked func(inside bool)) (stop func()) {
 		}
 	}
 }
+
+// ObserveLeftMouseDragged sees file drags in other apps (Finder included)
+// without Accessibility. The first dragged event is when the overlay must
+// become a drop target — polling 30 ms later is enough for Spaces to win
+// the top edge. Install and stop on the AppKit main thread.
+func ObserveLeftMouseDragged(moved func()) (stop func()) {
+	const mask = 1 << 6 // NSEventTypeLeftMouseDragged
+	globalBlock := objc.NewBlock(func(_ objc.Block, _ id) { moved() })
+	defer globalBlock.Release()
+	localBlock := objc.NewBlock(func(_ objc.Block, event id) id {
+		moved()
+		return event
+	})
+	defer localBlock.Release()
+	global := send(send(class("NSEvent"), "addGlobalMonitorForEventsMatchingMask:handler:", mask, uintptr(globalBlock)), "retain")
+	local := send(send(class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", mask, uintptr(localBlock)), "retain")
+	return func() {
+		if global != 0 {
+			send(class("NSEvent"), "removeMonitor:", uintptr(global))
+			send(global, "release")
+			global = 0
+		}
+		if local != 0 {
+			send(class("NSEvent"), "removeMonitor:", uintptr(local))
+			send(local, "release")
+			local = 0
+		}
+	}
+}

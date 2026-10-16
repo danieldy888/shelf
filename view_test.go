@@ -241,62 +241,161 @@ func TestNotchTriggersBoundToRealRect(t *testing.T) {
 	}
 }
 
-// 拖拽会话一旦激活，常驻窗口必须立刻无条件接收鼠标事件：窗口缩成刘海顶边
-// 窄条（Y=0），若等光标进入触发区再取消穿透，轮询间隙足以让 Mission Control
-// 抢走顶部拖拽。无窗口环境下只验证 ignoringMouse 标记。
+// 拖拽会话一旦激活，整块 overlay 都必须接收事件。空闲时 ignoringMouse 表示
+// 「刘海以下穿透」，刘海条本身仍然命中，否则文件拖到 Y=0 会打开桌面栏。
 func TestDragSessionDisablesPassThrough(t *testing.T) {
 	a := &shelf{dragging: true, ignoringMouse: true}
 	a.syncMousePassThrough()
 	if a.ignoringMouse {
 		t.Fatal("active drag must clear ignoringMouse unconditionally")
 	}
-	// 探头态在无窗口环境下也接收；空闲收起态恢复穿透。
-	b := &shelf{peeking: true, ignoringMouse: true}
+	b := &shelf{peeking: true, ignoringMouse: true, notchX: 600, notchW: 180, notchH: 32}
 	b.syncMousePassThrough()
 	if b.ignoringMouse {
 		t.Fatal("peeking shelf must accept mouse events so the pill is clickable")
 	}
-	c := &shelf{}
+	d := &shelf{pointerDrag: true, ignoringMouse: true, notchX: 600, notchW: 180, notchH: 32}
+	d.syncMousePassThrough()
+	if d.ignoringMouse {
+		t.Fatal("the first mouse-dragged event of a file drag must make the overlay a drop target")
+	}
+	c := &shelf{notchH: 32}
 	c.syncMousePassThrough()
 	if !c.ignoringMouse {
-		t.Fatal("idle collapsed shelf must stay mouse-transparent")
+		t.Fatal("idle collapsed shelf must stay click-through below the notch")
 	}
 }
 
-// 常驻窗口的映射帧必须跟随三态：展开=完整面板，拖拽/探头=刘海顶边窄条，
-// 空闲=刘海壳大小。拖拽时只有窄条拦截事件，其余屏幕留给下层应用；
-// 刘海几何无效时窄条退回面板/显示器顶边中心而不是 (0,0)。
-func TestWindowFrameTracksState(t *testing.T) {
-	a := &shelf{
-		x: 470, y: 0, h: 380,
-		notchX: 600, notchY: 0, notchW: 180, notchH: 32,
+func TestPeekPillCoversExpandHint(t *testing.T) {
+	a := &shelf{notchX: 645, notchY: 0, notchW: 180, notchH: 32, y: 0}
+	// Hint is bottom-aligned in the capsule (padding 7, 11pt type).
+	hint := mygo.Point{X: a.notchX + a.notchW/2, Y: max(32, a.notchH) + 18 - 8}
+	if !a.overPeekPill(hint) {
+		t.Fatalf("expand hint at %v is outside peek pill %+v", hint, a.peekPillRect())
 	}
-	if r := a.desiredFrame(); r != (mygo.Rectangle{X: 600, Y: 0, Width: 180, Height: 32}) {
-		t.Fatalf("idle frame should collapse to the notch housing, got %+v", r)
+	if a.overPeekPill(mygo.Point{X: 80, Y: 20}) {
+		t.Fatal("far-left cursor must not count as a pill click")
+	}
+}
+
+func TestMouseDownOnPeekPillExpandsEvenIfEventWentElsewhere(t *testing.T) {
+	a := &shelf{peeking: true, peekProgress: 1, notchX: 645, notchY: 0, notchW: 180, notchH: 32, y: 0}
+	hint := mygo.Point{X: a.notchX + a.notchW/2, Y: max(32, a.notchH) + 10}
+	a.mouseDown(false, hint)
+	if !a.visible {
+		t.Fatal("clicking the visible peek pill must expand even when WindowServer gave the press to another app")
+	}
+}
+
+func TestMouseDownAwayFromPeekDoesNotExpand(t *testing.T) {
+	a := &shelf{peeking: true, peekProgress: 1, notchX: 645, notchY: 0, notchW: 180, notchH: 32, y: 0}
+	a.mouseDown(false, mygo.Point{X: 80, Y: 40})
+	if a.visible {
+		t.Fatal("a click far from the pill must not expand the shelf")
+	}
+}
+
+// Hover must not move or resize the native surface; only the drawing changes.
+// Keeping the strip anchored also prevents it from covering the Dock.
+func TestHoverKeepsWindowAnchored(t *testing.T) {
+	a := &shelf{x: 470, y: 0, h: 380, notchX: 600, notchW: 180, notchH: 32}
+	idle := a.desiredFrame()
+	for _, progress := range []float32{0, 0.2, 0.8, 1, 0.4, 0} {
+		a.peeking = progress > 0
+		a.peekProgress = progress
+		if got := a.desiredFrame(); got != idle {
+			t.Fatalf("hover remapped the surface: %+v -> %+v", idle, got)
+		}
+	}
+	if idle.Y != 0 || idle.Y+idle.Height >= 380 {
+		t.Fatalf("collapsed surface must stay at the top, far above the Dock: %+v", idle)
 	}
 	a.dragging = true
-	wantStrip := mygo.Rectangle{X: 550, Y: 0, Width: 280, Height: 72}
-	if r := a.desiredFrame(); r != wantStrip {
-		t.Fatalf("drag frame should be the top-center strip %+v, got %+v", wantStrip, r)
-	}
-	a.dragging, a.peeking = false, true
-	if r := a.desiredFrame(); r != wantStrip {
-		t.Fatalf("peek frame should match the drag strip %+v, got %+v", wantStrip, r)
+	if got := a.desiredFrame(); got != idle {
+		t.Fatalf("starting a drag must keep the same approach surface: %+v", got)
 	}
 	a.visible = true
-	if r := a.desiredFrame(); r != (mygo.Rectangle{X: 470, Y: 0, Width: 440, Height: 380}) {
-		t.Fatalf("expanded frame should be the full panel, got %+v", r)
+	if got := a.desiredFrame(); got.Y != idle.Y || got.Height <= idle.Height {
+		t.Fatalf("opening must grow downwards without moving the top edge: %+v", got)
 	}
-	// 无窗口状态也要安全地走一遍帧同步路径（a.frame 未被应用）。
-	a.syncWindowFrame()
-	if a.frame != (mygo.Rectangle{}) {
-		t.Fatal("frame must not be tracked before a window exists")
-	}
+}
 
-	// 刘海几何无效：窄条居中于面板（即显示器）顶边中心，而非 (0,0)。
-	b := &shelf{x: 470, dragging: true}
-	want := mygo.Rectangle{X: 550, Y: 0, Width: 280, Height: 72}
-	if r := b.desiredFrame(); r != want {
-		t.Fatalf("no-notch drag frame should center on the display top, got %+v", r)
+// The event filter's landing line has to sit inside the collapsed drop
+// strip. Otherwise clamped drags miss the shelf and still hit the screen
+// edge that opens Mission Control.
+func TestDragGuardLandsInsideCollapsedStrip(t *testing.T) {
+	a := &shelf{x: 470, y: 0, h: 380, notchX: 600, notchW: 180, notchH: 32}
+	strip := a.desiredFrame()
+	g := a.dragGuardRegion()
+	if g.Y != strip.Y {
+		t.Fatalf("guard top %+v must share the strip top %+v", g, strip)
+	}
+	if g.Y+g.Height > strip.Y+strip.Height {
+		t.Fatalf("guard landing %+v misses drop strip %+v", g, strip)
+	}
+	if g.X < strip.X || g.X+g.Width > strip.X+strip.Width {
+		t.Fatalf("guard corridor %+v is wider than drop strip %+v", g, strip)
+	}
+	if g.Height <= 38 {
+		t.Fatalf("guard landing at %dpt is still inside the menu bar; Spaces would fire", g.Height)
+	}
+}
+
+// 探头/拖拽态的黑壳必须与窗口顶边（Y=0）齐平：光标落在窗口第一行时事件才
+// 会打在托盘上，守卫放行段交出去的拖放才有地方落下。壳只在水平方向居中，
+// 窗口顶边其余部分不属于托盘——那一段由守卫夹取，拖放交给桌面与下层应用。
+// 测试环境没有真实窗口，tester 尺寸即窗口帧。
+func TestPeekShellFlushWithWindowTop(t *testing.T) {
+	a := &shelf{peeking: true, peekProgress: 1, notchW: 180, notchH: 32}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	img := view.Image()
+	b := img.Bounds()
+	first, last := -1, -1
+	for x := range b.Dx() {
+		if _, _, _, alpha := img.At(x, 0).RGBA(); alpha > 0 {
+			if first < 0 {
+				first = x
+			}
+			last = x
+		}
+	}
+	if first < 0 {
+		t.Fatal("peek shell does not touch the window's top edge: a drop at Y=0 would miss the shelf")
+	}
+	if first == 0 || last == b.Dx()-1 {
+		t.Fatalf("peek shell spans the whole top edge (%d..%d): the shelf would swallow drops meant for the desktop", first, last)
+	}
+}
+
+func TestPeekLeavesNoPaintWhenPointerLeaves(t *testing.T) {
+	// A non-nil window selects the production rendering branch; the tester
+	// supplies the surface and never invokes a native window operation here.
+	a := &shelf{win: &mygo.Window{}, notchW: 180, notchH: 32}
+	view := ui.NewTester(a.view, 280, 72)
+	for range 12 {
+		a.peeking, a.peekProgress = true, 1
+		view.Frame()
+		img := view.Image()
+		if _, _, _, alpha := img.At(140, 2).RGBA(); alpha == 0 {
+			t.Fatal("peek did not paint at the top")
+		}
+		for x := range img.Bounds().Dx() {
+			if _, _, _, alpha := img.At(x, img.Bounds().Dy()-1).RGBA(); alpha != 0 {
+				t.Fatal("peek painted beyond its bottom boundary")
+			}
+		}
+		a.peeking, a.peekProgress = false, 0
+		view.Frame()
+		img = view.Image()
+		for y := range img.Bounds().Dy() {
+			for x := range img.Bounds().Dx() {
+				if _, _, _, alpha := img.At(x, y).RGBA(); alpha != 0 {
+					t.Fatalf("collapsed surface retained paint at %d,%d", x, y)
+				}
+			}
+		}
+		if a.visible {
+			t.Fatal("hover must never expand the shelf")
+		}
 	}
 }

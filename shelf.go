@@ -17,36 +17,46 @@ import (
 
 // UI、历史与本机 API 由 mygo 主线程串行拥有。
 type shelf struct {
-	win                                     *mygo.Window
-	tray                                    *mygo.Tray
-	store                                   *store.Store
-	stop                                    chan struct{}
-	quitting, visible, edgeOpened, received bool
-	status                                  string
-	statusUntil                             time.Time
-	x, y                                    int
-	dispBounds                              mygo.Rectangle
-	frame                                   mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
-	animationStart                          time.Time
-	animationFrom, progress                 float32
-	clipboardCount                          int64
-	lastClipboard                           time.Time
-	dragSerial                              int64
-	dragging, suppressed                    bool
-	escHeld                                 bool
-	stopMouseObservation                    func()
-	edgeSince, leftSince                    time.Time
-	h, topInset                             int
-	notchX, notchY, notchW, notchH          int
-	hasNotch                                bool
-	peeking                                 bool
-	peekProgress, peekFrom                  float32
-	peekAnimStart                           time.Time
-	ignoringMouse                           bool
-	thumbnails                              map[string]*ui.Bitmap
-	thumbPending                            map[string]bool
-	thumbDiscard                            map[string]bool
-	thumbActive                             int
+	win                                       *mygo.Window
+	tray                                      *mygo.Tray
+	store                                     *store.Store
+	stop                                      chan struct{}
+	quitting, visible, edgeOpened, received   bool
+	status                                    string
+	statusUntil                               time.Time
+	x, y                                      int
+	dispBounds                                mygo.Rectangle
+	frame                                     mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
+	settingFrame                              bool
+	animationStart                            time.Time
+	animationFrom, progress                   float32
+	clipboardCount                            int64
+	lastClipboard                             time.Time
+	dragSerial                                int64
+	dragging, suppressed, pointerDrag         bool
+	guard                                     dragGuard
+	escHeld                                   bool
+	stopMouseObservation, stopDragObservation func()
+	leftSince                                 time.Time
+	h, topInset                               int
+	notchX, notchY, notchW, notchH            int
+	hasNotch                                  bool
+	peeking                                   bool
+	peekProgress, peekFrom                    float32
+	peekAnimStart                             time.Time
+	ignoringMouse                             bool
+	thumbnails                                map[string]*ui.Bitmap
+	thumbPending                              map[string]bool
+	thumbDiscard                              map[string]bool
+	thumbActive                               int
+}
+
+// dragGuard owns the current filter, including a failed setup attempt so that
+// the same error is not retried on every monitoring tick.
+type dragGuard struct {
+	stop      func()
+	region    mac.DragGuardRegion
+	attempted bool
 }
 
 func (a *shelf) toggle() {
@@ -70,6 +80,7 @@ func (a *shelf) place(p mygo.Point) {
 		a.syncWindowFrame()
 		a.win.SetOpacity(1)
 	}
+	a.syncDragGuard()
 }
 
 // overNotch 只认实测刘海几何：光标真正进入刘海热区（notchX/notchY 为原点，
@@ -92,97 +103,104 @@ func (a *shelf) nearTrigger(p mygo.Point) bool {
 		p.Y >= a.notchY && p.Y <= a.notchY+notchTriggerHeight
 }
 
-// desiredFrame returns the screen rect the resident window should occupy for
-// the current state, in MyGo top-left screen coordinates:
-//
-//   - expanded (visible or mid open/close animation): the full panel rect;
-//   - peeking or mid-drag: a narrow strip flush with the screen's top edge
-//     centered on the notch — wide and tall enough to cover the peeked pill,
-//     the drag trigger zone and a margin around the hardware housing;
-//   - fully idle: just the hardware housing rect (1×1 when no notch
-//     geometry was measured), so the invisible window occupies as little
-//     screen as possible.
-//
-// Shrinking the mapped frame while peeking/dragging is what keeps Mission
-// Control away without stealing drops: the WindowServer sees a valid drop
-// target at the top edge around the notch, while the rest of the old
-// 440×panelHeight frame passes every event through to the apps underneath.
+// Hover changes only the drawing, not the native window geometry. Keeping one
+// stable transparent strip for idle/peek avoids resizing the backing surface
+// every time the pointer crosses the notch. Only opening the panel changes it.
 func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.visible || a.progress > 0.01 {
 		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 	}
-	cx := a.notchX + a.notchW/2
-	if a.notchW <= 0 {
-		// 刘海几何无效时退回面板/显示器顶边中心，不会在屏幕左上角造假区域。
-		cx = a.x + panelWidth/2
-	}
-	w, h := 1, 1
-	if a.peeking || a.dragging || a.peekProgress > 0.01 {
-		w = max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth)
-		h = max(max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
-	} else if a.notchW > 0 {
-		w, h = a.notchW, a.notchH
-	}
-	return mygo.Rectangle{X: cx - w/2, Y: a.y, Width: w, Height: h}
+	w := max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth)
+	h := max(max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
+	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
 
-// syncWindowFrame applies desiredFrame() to the resident window when the
-// mapped rect changed, via a single setFrame:display: so the window never
-// transiently keeps its old width at the new position (or vice versa).
+// Use a single native setFrame plus a top-left pin so AppKit cannot leave
+// the overlay a menu-bar-height below the hardware notch.
 func (a *shelf) syncWindowFrame() {
-	if a.win == nil {
+	if a.win == nil || a.settingFrame {
 		return
 	}
 	r := a.desiredFrame()
 	if r == a.frame {
 		return
 	}
-	a.frame = r
+	a.settingFrame = true
+	defer func() { a.settingFrame = false }()
 	mac.SetWindowFrame(a.win.NativeHandle(), r.X, r.Y, r.Width, r.Height)
+	a.frame = r
 	a.win.Invalidate()
 }
 
-// syncMousePassThrough decides whether the resident transparent window
-// intercepts mouse events, and keeps its mapped frame at desiredFrame().
-// While collapsed and idle the window shrinks to the hardware housing and
-// ignores the mouse so clicks and drags pass straight through to the menu
-// bar and apps beneath; while visible, peeking, mid-animation or during a
-// system drag it accepts events so the notch can be clicked, hovered and
-// dropped onto — but its frame is only the top-center strip then, not the
-// full panel area. During a drag the window accepts unconditionally: the
-// strip is already flush with the top edge (Y=0), and waiting for the
-// cursor to enter the trigger zone before flipping ignoresMouseEvents
-// leaves a poll-interval window where the WindowServer fires the Mission
-// Control / Spaces strip.
-func (a *shelf) syncMousePassThrough() {
-	a.syncWindowFrame()
-	var accept bool
-	switch {
-	case a.visible || a.progress > 0.01:
-		accept = true
-	case a.dragging:
-		// 拖拽期间无条件接收：窗口常驻顶边，先成为合法拖放目标，
-		// macOS 才不会在光标触到 Y=0 时弹出 Spaces 栏抢走拖拽。
-		accept = true
-	case a.peeking || a.peekProgress > 0.01:
-		if a.win != nil && a.notchW > 0 {
-			// 只有光标落在实测刘海附近时才让常驻窗口接管事件；刘海几何
-			// 无效（notchW == 0，显示器未匹配）时保持穿透。
-			p := mygo.Screen.CursorScreenPoint()
-			accept = p.X >= a.notchX-notchHoverPadX-28 && p.X <= a.notchX+a.notchW+notchHoverPadX+28 &&
-				p.Y >= a.notchY && p.Y <= a.notchY+a.notchH+notchHoverPadY+24
-		} else if a.win == nil {
-			accept = true
-		}
-	}
-	ignore := !accept
-	if a.ignoringMouse == ignore {
+// Native window movement can invalidate our cached frame independently of a
+// state transition. Never let the cached target hide a displaced window.
+func (a *shelf) windowGeometryChanged() {
+	if a.settingFrame || a.win == nil {
 		return
 	}
-	a.ignoringMouse = ignore
-	if a.win != nil {
-		mac.SetWindowIgnoresMouseEvents(a.win.NativeHandle(), ignore)
+	if actual := a.win.Bounds(); actual == a.desiredFrame() {
+		a.frame = actual
+		return
 	}
+	a.frame = mygo.Rectangle{}
+	a.syncWindowFrame()
+}
+
+// peekPillRect is the on-screen box of the hovered notch capsule, matching
+// the shell drawn in view(). Clicks on the "点击展开 Shelf" hint land at
+// the bottom of this rect, below the hardware notch.
+func (a *shelf) peekPillRect() mygo.Rectangle {
+	w := max(180, a.notchW) + 56
+	h := max(32, a.notchH) + 18
+	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
+}
+
+func (a *shelf) overPeekPill(p mygo.Point) bool {
+	r := a.peekPillRect()
+	return r.Width > 0 && r.Height > 0 &&
+		p.X >= r.X && p.X < r.X+r.Width &&
+		p.Y >= r.Y && p.Y < r.Y+r.Height
+}
+
+// mouseDown is the AppKit mouse-down observer. inside means the event was
+// delivered to our window; otherwise it went to another app or the menu bar.
+func (a *shelf) mouseDown(inside bool, p mygo.Point) {
+	if a.quitting {
+		return
+	}
+	// The capsule is drawn over the menu bar's empty centre. WindowServer
+	// often gives that press to the menu bar or the app underneath, so the
+	// overlay paints a "click to expand" pill that never receives the click.
+	// A press on the visible pill expands either way.
+	if a.peeking && !a.visible && (inside || a.overPeekPill(p)) {
+		a.show(false)
+		return
+	}
+	if inside {
+		a.holdEscape()
+		return
+	}
+	a.releaseEscape()
+	inMenuBar := p.Y >= a.notchY && p.Y <= a.notchY+max(36, a.notchH+4)
+	if a.visible && !a.dragging && !inMenuBar {
+		a.hide()
+	}
+}
+
+// Idle clicks below the hardware notch pass through; the notch band itself
+// never does. File drags to the top of the notch must hit a window, or
+// WindowServer treats Y=0 as the Spaces edge. ignoresMouseEvents stays off
+// so the overlay stays in the hit-test list for the whole drag.
+func (a *shelf) syncMousePassThrough() {
+	a.syncWindowFrame()
+	acceptAll := a.visible || a.progress > 0.01 || a.dragging || a.pointerDrag || a.peeking || a.peekProgress > 0.01
+	a.ignoringMouse = !acceptAll
+	if a.win == nil {
+		return
+	}
+	h := a.win.NativeHandle()
+	mac.SetOverlayHitTest(h, acceptAll, max(8, a.notchH))
+	mac.SetDragElevated(h, a.dragging || a.pointerDrag)
 }
 
 // setPeek animates the notch shell between its idle hardware shape and the
@@ -263,10 +281,7 @@ func (a *shelf) hide() {
 	}
 }
 
-// animate 推进展开（progress）与探头（peekProgress）两组动画。窗口常驻不
-// 隐藏：收起态完全透明且忽略鼠标。拖拽开始时常驻窗口马上缩成刘海顶边
-// 窄条并接管事件（见 syncWindowFrame），不让 Mission Control 抢走拖到
-// 屏幕顶部的会话，也不会继续挡住面板覆盖区下方的应用。
+// animate updates the shell drawing; idle/peek retain one native surface.
 func (a *shelf) animate(now time.Time) {
 	finished := false
 	if !a.animationStart.IsZero() {
@@ -358,6 +373,97 @@ func (a *shelf) monitorClipboard() {
 	}
 }
 
+// stripCenter is shared by the drop surface and its protected approach region.
+func (a *shelf) stripCenter() int {
+	if a.notchW <= 0 {
+		return a.x + panelWidth/2
+	}
+	return a.notchX + a.notchW/2
+}
+
+// dragGuardRegion is the notch corridor the event filter clamps, in the
+// same coordinates as the resident drop strip.
+func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
+	strip := a.desiredFrame()
+	// Land below the menu bar's exclusive strip, still inside the drop
+	// surface. A 40pt corridor on a 38pt notch sits inside the menu bar
+	// and Spaces still fires.
+	h := min(max(a.notchH+16, 48), strip.Height-1)
+	if h < 8 {
+		h = 8
+	}
+	return mac.DragGuardRegion{
+		X: a.stripCenter() - notchTriggerWidth/2, Y: a.y,
+		Width: notchTriggerWidth, Height: h,
+	}
+}
+
+// Protect the notch's approach corridor, including its centre. The lower edge
+// is below the camera housing but still inside the shelf's drag trigger.
+// The tap is armed once and stays up for file drags and window moves alike;
+// tearing it down between sessions re-prompts Accessibility and leaves the
+// top edge unguarded at the start of the next drag.
+func (a *shelf) syncDragGuard() {
+	if a.win == nil {
+		a.stopDragGuard()
+		return
+	}
+	region := a.dragGuardRegion()
+	if a.guard.stop != nil {
+		if a.guard.region != region {
+			mac.SetDragGuardRegion(region)
+			a.guard.region = region
+		}
+		return
+	}
+	if a.guard.attempted && !mac.AccessibilityTrusted(false) {
+		return
+	}
+	stop, err := mac.StartDragGuard(region)
+	a.guard = dragGuard{stop: stop, region: region, attempted: true}
+	if err != nil {
+		log.Printf("刘海拖拽保护未启用（拖到顶部仍可能打开桌面栏）：%v", err)
+	}
+}
+
+func (a *shelf) stopDragGuard() {
+	if a.guard.stop != nil {
+		a.guard.stop()
+	}
+	a.guard = dragGuard{}
+}
+
+// pointerDragged is the NSEvent mouse-dragged callback. Finder has already
+// declared the drag pasteboard by the first pixel of movement; waiting for
+// the 30 ms poll lets the cursor reach Y=0 first.
+func (a *shelf) pointerDragged() {
+	if a.quitting {
+		return
+	}
+	active, serial := mac.DragState()
+	if serial != a.dragSerial {
+		a.dragSerial = serial
+		a.suppressed = false
+	}
+	if !active {
+		return
+	}
+	a.dragging, a.pointerDrag = true, true
+	p := mygo.Screen.CursorScreenPoint()
+	if !a.visible && !insideRect(p, a.dispBounds) {
+		a.place(p)
+	}
+	if !a.suppressed {
+		a.setPeek(true)
+	}
+	a.syncDragGuard()
+	a.syncMousePassThrough()
+	if !a.suppressed && !a.visible && a.nearTrigger(p) {
+		a.show(true)
+	}
+}
+
+// monitorDrag updates placement, drag protection and interaction on the main thread.
 func (a *shelf) monitorDrag(now time.Time) {
 	active, serial := mac.DragState()
 	if serial != a.dragSerial {
@@ -367,33 +473,28 @@ func (a *shelf) monitorDrag(now time.Time) {
 	a.dragging = active
 	if !active {
 		a.suppressed = false
-		a.edgeSince = time.Time{}
+		if !mac.LeftMouseDown() {
+			a.pointerDrag = false
+		}
 	}
 	p := mygo.Screen.CursorScreenPoint()
+	if !a.visible && !insideRect(p, a.dispBounds) {
+		a.place(p)
+	}
 	overNotch := a.overNotch(p)
 	nearEdge := a.nearTrigger(p)
-	// 拖拽开始（任意位置）或空手光标探入刘海区：立刻探头并切换为接收
-	// 鼠标事件——这一步在光标到达屏幕顶边之前完成，Mission Control 因此
-	// 不会在顶部拖拽时被触发。拖拽中收起态窗口跟着光标换屏。
+	// Dragging or hovering reveals the pill; only a click or a real incoming
+	// drag in the trigger zone can open the full panel.
 	if active || overNotch {
-		if !a.visible && !insideRect(p, a.dispBounds) {
-			a.place(p)
-		}
 		if !a.suppressed || overNotch {
 			a.setPeek(true)
 		}
 	}
+	a.syncDragGuard()
 	a.syncMousePassThrough()
 	if active && !a.suppressed && !a.visible && nearEdge {
-		if a.edgeSince.IsZero() {
-			a.edgeSince = now
-		}
-		if now.Sub(a.edgeSince) >= edgeDwell {
-			a.show(true)
-			a.edgeSince = time.Time{}
-		}
-	} else {
-		a.edgeSince = time.Time{}
+		// Incoming drags open immediately; empty-handed hover never does.
+		a.show(true)
 	}
 	if !active && !a.visible && !overNotch {
 		a.setPeek(false)

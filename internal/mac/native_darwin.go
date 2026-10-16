@@ -2,15 +2,18 @@
 
 // Package mac holds the AppKit/CoreGraphics calls Shelf needs and the mygo
 // public API does not expose: pasteboard change counters, the system drag
-// session probe, the pressed-button state and per-file icons.
+// session probe, the pressed-button state, per-file icons and the Mission
+// Control drag guard.
 //
-// Everything is driven through the Objective-C runtime with purego, the
-// same convention as mygo's internal/darwin (module-private, so it cannot
-// be imported and is reimplemented here). No goroutines or event taps are
-// installed. Mouse-only observation lives in clicks_darwin.go and requests
-// no Accessibility or Input Monitoring permission. Call Init once on
-// the main thread; every exported function must be called on the main
-// thread (the parent's event loop already is).
+// Everything is driven through the Objective-C runtime and CoreGraphics with
+// purego, the same convention as mygo's internal/darwin (module-private, so
+// it cannot be imported and is reimplemented here). No goroutines are
+// installed. Mouse-only observation lives in clicks_darwin.go and requests no
+// Accessibility or Input Monitoring permission; the only event tap is the
+// optional drag guard in drag_guard.go, which macOS hands out solely to a
+// process trusted for Accessibility and which stays inactive otherwise. Call
+// Init once on the main thread; every exported function must be called on
+// the main thread (the parent's event loop already is).
 package mac
 
 import (
@@ -54,6 +57,13 @@ var (
 	// registers (RegisterFunc, not raw SyscallN).
 	msgSetSize func(obj id, sel objc.SEL, s NSSize)
 
+	// msgSetRectBool sends setFrame:display: — an NSRect plus a BOOL.
+	msgSetRectBool func(obj id, sel objc.SEL, r NSRect, display bool)
+
+	// msgSetPoint sends setFrameTopLeftPoint: so a clamped setFrame can
+	// still be pinned to the screen's top edge.
+	msgSetPoint func(obj id, sel objc.SEL, p NSPoint)
+
 	// class_replaceMethod overrides constrainFrameRect:toScreen: on the
 	// shelf window's class, and safeAreaInsets reads NSScreen's notch
 	// insets (the struct return needs RegisterFunc, not raw SyscallN).
@@ -63,10 +73,6 @@ var (
 	// msgRect reads NSRect-returning selectors (frame, auxiliaryTopLeftArea,
 	// auxiliaryTopRightArea); the struct return needs RegisterFunc too.
 	msgRect func(id, objc.SEL) NSRect
-
-	// msgSetRectBool sends setFrame:display: — an NSRect struct argument
-	// plus a BOOL — so it also needs RegisterFunc rather than raw SyscallN.
-	msgSetRectBool func(obj id, sel objc.SEL, r NSRect, display bool)
 
 	// unconstrainOnce installs the constrainFrameRect:toScreen: override
 	// once for the (one) shelf window class; unconstrainIMP is its callback.
@@ -88,6 +94,19 @@ const (
 	kCGMouseButtonLeft                      = 0
 
 	nsPNGFileType = 4 // NSPNGFileType
+
+	// Borderless + nonactivating: NSWindowStyleMaskNonactivatingPanel is
+	// 1<<7. Combined with mask 0 this is an NSPanel that has no title bar
+	// for AppKit to keep below the menu bar.
+	nsWindowStyleMaskNonactivatingPanel = 1 << 7
+	nsStatusWindowLevel                 = 25
+
+	collectionCanJoinAllSpaces    = 1 << 0
+	collectionTransient           = 1 << 3
+	collectionStationary          = 1 << 4
+	collectionIgnoresCycle        = 1 << 6
+	collectionFullScreenAuxiliary = 1 << 8
+	notchCollectionBehavior       = collectionCanJoinAllSpaces | collectionTransient | collectionStationary | collectionIgnoresCycle | collectionFullScreenAuxiliary
 )
 
 // load opens the frameworks once, mirroring internal/darwin's load(); it
@@ -131,11 +150,12 @@ func load() {
 		purego.RegisterLibFunc(&copySymbol, purego.RTLD_DEFAULT, "memcpy")
 		copySymbol(&dragBoardName, address, unsafe.Sizeof(dragBoardName))
 		purego.RegisterFunc(&msgSetSize, msgSendAddr)
+		purego.RegisterFunc(&msgSetRectBool, msgSendAddr)
+		purego.RegisterFunc(&msgSetPoint, msgSendAddr)
 		purego.RegisterLibFunc(&cgEventSourceButtonState, libCG, "CGEventSourceButtonState")
 		purego.RegisterLibFunc(&classReplaceMethod, libObjC, "class_replaceMethod")
 		purego.RegisterFunc(&msgSafeAreaInsets, msgSendAddr)
 		purego.RegisterFunc(&msgRect, msgSendAddr)
-		purego.RegisterFunc(&msgSetRectBool, msgSendAddr)
 	})
 }
 
@@ -476,12 +496,18 @@ func CollectionBehavior(window uintptr) uint {
 	return out
 }
 
-// ConfigureNotchWindow elevates window to NSStatusWindowLevel (25) so it
-// can sit flush with the hardware notch at Y=0 above the menu bar,
-// disables AppKit's menu-bar frame clamping (constrainFrameRect:toScreen:)
-// on its class so vertical slide animations can move smoothly from Y < 0
-// down to Y = 0, and removes the window shadow so the transparent frame
-// never casts a rectangular shadow when collapsed or peeking.
+// ConfigureNotchWindow turns the shelf into a borderless status-level overlay
+// that can occupy the hardware-notch strip at screen Y=0.
+//
+// mygo creates even a "frameless" window with NSWindowStyleMaskTitled plus a
+// hidden title bar. AppKit's default constrainFrameRect:toScreen: then keeps
+// that title bar below the menu bar, so the overlay sits ~24–38 pt down: the
+// peek pill floats in the wallpaper instead of growing out of the camera
+// housing, and the real top edge is still a Mission Control / Spaces trigger.
+// Stripping the style mask to a nonactivating panel, pinning the window at
+// NSStatusWindowLevel, marking it stationary (so Mission Control does not
+// suck it into the Spaces UI), and returning constrainFrameRect unchanged
+// are what actually put a drop target on the top edge.
 func ConfigureNotchWindow(window uintptr) {
 	if window == 0 {
 		return
@@ -492,14 +518,54 @@ func ConfigureNotchWindow(window uintptr) {
 	withPool(func() {
 		w := id(window)
 		unconstrainOnce.Do(func() {
-			unconstrainIMP = purego.NewCallback(func(_ id, _ objc.SEL, frameRect NSRect, _ id) NSRect {
-				return frameRect
+			// NSRect is an ARM64 HFA of four doubles (d0–d3), not a
+			// stacked struct. Spell the arguments as floats so the
+			// callback matches the C ABI; the ObjC type string still
+			// describes constrainFrameRect:toScreen:.
+			unconstrainIMP = purego.NewCallback(func(_ id, _ objc.SEL, fx, fy, fw, fh float64, _ id) NSRect {
+				return NSRect{Origin: NSPoint{X: fx, Y: fy}, Size: NSSize{Width: fw, Height: fh}}
 			})
 			cls := send(w, "class")
 			classReplaceMethod(uintptr(cls), sel("constrainFrameRect:toScreen:"), unconstrainIMP, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@")
 		})
-		send(w, "setLevel:", 25)
+		send(w, "setStyleMask:", nsWindowStyleMaskNonactivatingPanel)
+		send(w, "setLevel:", nsStatusWindowLevel)
 		send(w, "setHasShadow:", 0)
+		send(w, "setHidesOnDeactivate:", 0)
+		send(w, "setMovable:", 0)
+		send(w, "setOpaque:", 0)
+		send(w, "setBackgroundColor:", uintptr(send(class("NSColor"), "clearColor")))
+		send(w, "setCollectionBehavior:", notchCollectionBehavior)
+		if send(w, "respondsToSelector:", uintptr(sel("setFloatingPanel:"))) != 0 {
+			send(w, "setFloatingPanel:", 1)
+		}
+		send(w, "setIgnoresMouseEvents:", 0)
+		registerOverlayDropTypes(w)
+	})
+}
+
+// SetWindowFrame moves and resizes window in one setFrame:display: and then
+// pins the top-left corner. x, y, w and h are MyGo top-left screen
+// coordinates (the same convention as mygo Window.SetBounds). Splitting the
+// update into setFrameSize + setFrameOrigin leaves a half-moved rectangle
+// that can swallow drops meant for the apps underneath. Main thread only.
+func SetWindowFrame(window uintptr, x, y, w, h int) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() {
+		screenH := primaryScreenHeight()
+		r := NSRect{
+			Origin: NSPoint{X: float64(x), Y: screenH - float64(y) - float64(h)},
+			Size:   NSSize{Width: float64(w), Height: float64(h)},
+		}
+		msgSetRectBool(id(window), sel("setFrame:display:"), r, true)
+		// setFrame still consults constrainFrameRect; pin the top-left in
+		// case a titled ancestor shifted the origin down by the menu bar.
+		msgSetPoint(id(window), sel("setFrameTopLeftPoint:"), NSPoint{X: float64(x), Y: screenH - float64(y)})
 	})
 }
 
@@ -507,6 +573,12 @@ func ConfigureNotchWindow(window uintptr) {
 // clicks and drags (NSWindow.setIgnoresMouseEvents:). When true, clicks pass
 // straight through to the menu bar and underlying apps; when false, the
 // window intercepts clicks and drag-and-drop sessions at the notch.
+//
+// Clearing click-through is not just the AppKit flag. If the overlay was
+// ordered in while ignoring events (the idle strip), WindowServer keeps it
+// out of hit-testing until it is ordered in again — the peek pill then
+// paints but swallows no clicks. Nudge the level and re-order so the
+// hit-test list actually updates. Main thread only.
 func SetWindowIgnoresMouseEvents(window uintptr, ignore bool) {
 	if window == 0 {
 		return
@@ -515,11 +587,19 @@ func SetWindowIgnoresMouseEvents(window uintptr, ignore bool) {
 		return
 	}
 	withPool(func() {
+		w := id(window)
 		var arg uintptr
 		if ignore {
 			arg = 1
 		}
-		send(id(window), "setIgnoresMouseEvents:", arg)
+		send(w, "setIgnoresMouseEvents:", arg)
+		if ignore {
+			return
+		}
+		level := sendInt(w, "level")
+		send(w, "setLevel:", uintptr(level+1))
+		send(w, "setLevel:", uintptr(level))
+		send(w, "orderFrontRegardless")
 	})
 }
 
@@ -532,30 +612,6 @@ func primaryScreenHeight() float64 {
 		return 0
 	}
 	return msgRect(send(screens, "objectAtIndex:", 0), sel("frame")).Size.Height
-}
-
-// SetWindowFrame moves and resizes window in a single setFrame:display:
-// message. x, y, w and h are in MyGo top-left screen coordinates (the same
-// convention as mygo Window.SetPosition/SetSize, which send two separate
-// setFrame messages). Collapsing the two calls into one keeps the window
-// from ever occupying a half-moved frame between the size and position
-// updates — the shelf shrinks to the top-center strip the moment a drag
-// session begins, and a transient full-width frame there could still
-// swallow drops meant for the apps underneath. Main thread only.
-func SetWindowFrame(window uintptr, x, y, w, h int) {
-	if window == 0 {
-		return
-	}
-	if err := Init(); err != nil {
-		return
-	}
-	withPool(func() {
-		r := NSRect{
-			Origin: NSPoint{X: float64(x), Y: primaryScreenHeight() - float64(y) - float64(h)},
-			Size:   NSSize{Width: float64(w), Height: float64(h)},
-		}
-		msgSetRectBool(id(window), sel("setFrame:display:"), r, true)
-	})
 }
 
 // NotchTopInset returns the top safe-area inset in points (e.g. ~32 on a

@@ -56,13 +56,14 @@ func (a *shelf) view(c *ui.Context) {
 		openK = 1
 	}
 	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。
-	if a.win != nil && !a.visible && a.progress <= 0.01 && !a.peeking && a.peekProgress <= 0.01 {
-		idle := ui.Box(c.Key("shelf")).Fill()
-		// 空闲态也注册为拖放目标：拖拽一开始窗口缩成刘海顶边窄条并接管
-		// 鼠标事件（见 syncWindowFrame），WindowServer 在那里始终看到一个
-		// 合法拖放目标而非触发 Spaces 栏，窄条之外仍把事件让给下层应用。
-		ui.DataDragOver(idle, opts)
-		if drop, ok := ui.DropData(idle, opts); ok {
+	idle := a.win != nil && !a.visible && a.progress <= 0.01 && !a.peeking && a.peekProgress <= 0.01
+	// Keep one native drop target across all states. The transparent root does
+	// not paint the theme background; clipping contains every animation frame.
+	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center).Clip()
+	_, over := ui.DataDragOver(zone, opts)
+	if idle {
+		// 空闲态收到内容只入库不展开：那时窗口本就不显示，也无从接受拖放。
+		if drop, ok := ui.DropData(zone, opts); ok {
 			a.receive(drop.Data)
 		}
 		return
@@ -78,10 +79,9 @@ func (a *shelf) view(c *ui.Context) {
 	h0 := baseH + (peekH-baseH)*a.peekProgress
 	shellW := w0 + (expW-w0)*openK
 	shellH := h0 + (expH-h0)*openK
-	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center)
-	// 窗口帧随状态缩放（展开=面板全幅，探头/拖拽=刘海顶边窄条，见
-	// syncWindowFrame）：r.W/r.H 是当前帧的实际尺寸，壳只在水平方向居中、
-	// 顶端贴齐 Y=0，因此同一段路径代码对两种帧都成立。
+	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
+	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
+	// 刘海里长出来，而不是浮在菜单栏下方。
 	zone.Draw(func(p *ui.Painter, r ui.Rect) {
 		x0 := (r.W - shellW) / 2
 		x1 := x0 + shellW
@@ -100,7 +100,6 @@ func (a *shelf) view(c *ui.Context) {
 		path.Close()
 		p.FillPath(&path, ui.Hex("#000000"))
 	})
-	_, over := ui.DataDragOver(zone, opts)
 	zone.Children(func() {
 		if !expanded {
 			if !peeked {

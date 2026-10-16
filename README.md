@@ -73,9 +73,9 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 
 ## Features
 
-- Lives inside the notch: a resident transparent window sits flush at the top edge, so starting any drag makes the notch peek out ready to catch drops without triggering Mission Control or the Spaces bar
+- A transparent notch surface stays anchored at the top; hovering reveals a small black pill without moving the window
 - Hover the notch and the shelf peeks; click the peeked notch and it unfolds into a pure-black panel fused with the hardware notch
-- Drag files to the top-center edge while dragging anything and the shelf unfolds; drop straight onto the peeked notch to stash instantly
+- Drag files near the notch and the shelf unfolds; drop onto the peeked pill to stash instantly
 - Global hotkey ⌃⌥Space to show or hide the shelf; clicking outside collapses it back into the notch
 - Drag files, folders, text and images in — and drag them out to any app
 - Clipboard text history: keeps the last 30 items, duplicates move to the top instead of creating copies
@@ -91,7 +91,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | --- | --- |
 | Show or hide the shelf | Press `⌃⌥Space`, click the menu-bar icon, or hover the notch and click the peeked pill |
 | Peek at the shelf | Move the pointer onto the notch (no drag needed) — it bulges out; click it to unfold |
-| Stash what you're dragging | While dragging anything, touch the top-center edge and pause — or drop right onto the peeked notch |
+| Stash what you're dragging | While dragging anything, move near the notch — the shelf expands instantly; you can also drop right onto the peeked notch |
 | Drag an item out | Drag it from the shelf into the target app |
 | Copy a text item back | Click it once, then paste (`⌘V`) anywhere |
 | Remove an item | Click the × on its right; file references never delete the original file |
@@ -162,9 +162,9 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 
 ## 功能
 
-- 住在刘海里：常驻透明窗口贴齐屏幕上沿，开始任何拖拽的瞬间刘海探头（“松开放入托盘”），不会触发 Mission Control 或调度中心的空间栏
+- 刘海附近常驻透明接收区，悬停只改变胶囊画面，不再反复移动或缩放窗口
 - 悬停刘海即探头，单击探头展开成与硬件刘海融为一体的纯黑面板
-- 拖着任何东西碰到屏幕顶部中央，托盘自动展开；也可以直接拖到探头刘海上松开
+- 拖着内容靠近刘海时托盘会探头并展开；也可以直接拖到探头胶囊上松开
 - 全局快捷键 ⌃⌥Space 随时显示或收起；点击托盘外任意处自动缩回刘海
 - 文件、文件夹、文字、图片都可以拖进来，再拖到任意应用
 - 剪贴板文字历史：最多保留 30 条，重复内容移到顶部而不新增条目
@@ -181,7 +181,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | --- | --- |
 | 显示或收起托盘 | 按 `⌃⌥Space`、单击菜单栏图标，或悬停刘海后单击探头胶囊 |
 | 探头预览 | 空手把指针移到刘海上——它会向下鼓出；单击探头胶囊即展开 |
-| 暂存正在拖的内容 | 拖着任何东西碰到屏幕顶部中央并停留片刻，或直接拖到探头刘海上松开 |
+| 暂存正在拖的内容 | 拖着任何东西靠近刘海触发区，托盘瞬间展开；也可以直接拖到探头刘海上松开 |
 | 拖出项目 | 从托盘中拖住该项，到目标应用中松开 |
 | 把文字复制回来 | 单击该文字项，然后在任意应用中粘贴（`⌘V`） |
 | 移除项目 | 点击该项右侧的 ×；文件引用不会删除原文件 |
