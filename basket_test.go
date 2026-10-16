@@ -87,27 +87,28 @@ func TestBasketWindowShownAndPlaced(t *testing.T) {
 	if os.Getenv("SHELF_BASKET_HOLD") != "" {
 		time.Sleep(8 * time.Second)
 	}
+	// WindowServer can report a transient frame while the window orders in;
+	// poll until it matches the requested rect.
 	var got mac.NSRect
-	var ok bool
+	match := false
 	for i := range 60 {
-		onMain(func() { got, ok = mac.WindowScreenRect(num) })
-		if ok {
+		onMain(func() {
+			var ok bool
+			got, ok = mac.WindowScreenRect(num)
+			match = ok && int(got.Size.Width) == want.Width && int(got.Size.Height) == want.Height &&
+				int(got.Origin.X) == want.X && int(got.Origin.Y) == want.Y
+		})
+		if match {
 			break
 		}
 		if i == 59 {
-			t.Fatalf("window %d never appeared in CGWindowList", num)
+			t.Fatalf("window %d never settled to %+v; last seen %+v", num, want, got)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	onMain(func() {
-		t.Logf("AppKit frame=%v mygo Bounds=%+v", got, a.basket.win.Bounds())
+		t.Logf("mygo Bounds=%+v", a.basket.win.Bounds())
 	})
-	if int(got.Size.Width) != want.Width || int(got.Size.Height) != want.Height {
-		t.Fatalf("window size %v×%v, want %d×%d", got.Size.Width, got.Size.Height, want.Width, want.Height)
-	}
-	if int(got.Origin.X) != want.X || int(got.Origin.Y) != want.Y {
-		t.Fatalf("window origin %v,%v, want %d,%d", got.Origin.X, got.Origin.Y, want.X, want.Y)
-	}
 }
 
 // TestBasketFrameStaysInsideVisible clamps the card into the display's
