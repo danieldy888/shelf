@@ -95,8 +95,14 @@ func main() {
 		a.ready(*show)
 	})
 	mygo.App.OnActivate(func(bool) {
-		// macOS reopen（如 open -a / Finder 再次启动已运行的实例）等价于
-		// 菜单栏图标点击：切换而非强制展开，避免常驻窗口随激活事件自行弹出。
+		// macOS reopen（如 open -a / Finder 再次启动已运行的实例）：设置
+		// 窗口开着就归还给它；否则等价于菜单栏图标点击——切换而非强制
+		// 展开，避免常驻窗口随激活事件自行弹出。
+		if a.settingsWin != nil {
+			mac.ActivateSelf()
+			a.settingsWin.Focus()
+			return
+		}
 		if a.win != nil {
 			a.toggle()
 		}
@@ -204,6 +210,8 @@ func (a *shelf) trayMenu() *mygo.Menu {
 		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
 		{Label: "刘海岛", Type: mygo.MenuItemSubmenu, Submenu: a.islandMenu()},
 		mygo.Separator(),
+		{Label: "设置…", Accelerator: "CmdOrCtrl+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
+		mygo.Separator(),
 		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
 }
@@ -230,13 +238,14 @@ func (a *shelf) retentionMenu() []*mygo.MenuItem {
 
 // setRetention saves the new period and applies it at once.
 func (a *shelf) setRetention(days int) {
-	next := a.settings
-	next.RetentionDays = days
-	if err := settings.Save(a.dataDir, next); err != nil {
-		a.report(err)
+	if a.settings.RetentionDays == days {
 		return
 	}
-	a.settings = next
+	next := a.settings
+	next.RetentionDays = days
+	if !a.applySettings(next) {
+		return
+	}
 	a.removeExpired(time.Now())
 }
 
@@ -284,14 +293,7 @@ func (a *shelf) islandMenu() []*mygo.MenuItem {
 // setIsland applies one island toggle: the change is saved first and only
 // then applied, so a failed write leaves the running setting unchanged.
 func (a *shelf) setIsland(mutate func(*settings.Settings)) {
-	if a.settingsBroken {
-		return
-	}
 	next := a.settings
 	mutate(&next)
-	if err := settings.Save(a.dataDir, next); err != nil {
-		a.report(err)
-		return
-	}
-	a.settings = next
+	a.applySettings(next)
 }

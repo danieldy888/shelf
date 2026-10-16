@@ -15,7 +15,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
-	"shelf/internal/settings"
 	"shelf/internal/store"
 )
 
@@ -229,16 +228,33 @@ func (a *shelf) excludeClipboardApp(bundleID string) {
 	if !slices.Contains(a.settings.ExcludedApps, bundleID) {
 		next := a.settings
 		next.ExcludedApps = append(slices.Clone(a.settings.ExcludedApps), bundleID)
-		if err := settings.Save(a.dataDir, next); err != nil {
-			a.report(err)
+		if !a.applySettings(next) {
 			return
 		}
-		a.settings = next
 	}
 	a.status, a.statusUntil = "已不再记录来自「"+name+"」的内容", time.Now().Add(3*time.Second)
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+}
+
+// removeExcludedApp takes bundleID out of the excludedApps setting — the
+// per-row remove button of the Settings window's 排除的应用 list — and
+// saves at once, so the clipboard module records the app from the next
+// copy on. Every entry equal to it goes (case-insensitive, as Launch
+// Services compares bundle identifiers). Disabled while settings.json
+// could not be read, so a broken file is never overwritten.
+func (a *shelf) removeExcludedApp(bundleID string) {
+	if bundleID == "" || a.settingsBroken {
+		return
+	}
+	next := a.settings
+	next.ExcludedApps = slices.DeleteFunc(slices.Clone(a.settings.ExcludedApps),
+		func(id string) bool { return strings.EqualFold(strings.TrimSpace(id), bundleID) })
+	if slices.Equal(next.ExcludedApps, a.settings.ExcludedApps) {
+		return
+	}
+	a.applySettings(next)
 }
 
 // remove takes items off the shelf in one save; original files stay.

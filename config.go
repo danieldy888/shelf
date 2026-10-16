@@ -26,6 +26,9 @@ const (
 	panelAnimation  = 180 * time.Millisecond
 	panelWidth      = 440
 	panelHeight     = 400
+	// 设置窗口：普通有标题窗口的尺寸（设置内容超出时内部滚动）。
+	settingsWidth  = 460
+	settingsHeight = 520
 )
 
 // shortcutHint is what the panel footer shows for trayShortcut; it is

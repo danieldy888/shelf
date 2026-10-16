@@ -44,8 +44,11 @@ type shelf struct {
 	write                                      clipWriter        // where copies go; nil = the system clipboard
 	dragSerial                                 int64
 	dragging, suppressed, pointerDrag, ownDrag bool
-	dataDir                                    string // where state.json and settings.json live
-	settingsBroken                             bool   // settings.json unreadable: never overwrite it
+	dataDir                                    string       // where state.json and settings.json live
+	settingsBroken                             bool         // settings.json unreadable: never overwrite it
+	settingsWin                                *mygo.Window // the 设置 window; nil while closed
+	loginOn                                    bool         // 开机时自动启动，read back each time the window opens
+	loginErr                                   string       // last SetOpenAtLogin failure, shown inline
 	guard                                      dragGuard
 	escHeld, spaceHeld                         bool
 	selection                                  selection
@@ -183,24 +186,43 @@ func (a *shelf) completed(r transfer.Result) {
 	}
 }
 
+// applySettings is the only path that changes a preference: it saves next
+// to settings.json first and only then replaces the running copy, so a
+// failed write leaves the running setting unchanged and a broken file is
+// never overwritten. The tray menus and the Settings window both go
+// through it, so they can never disagree. After the save both windows
+// repaint, which keeps an open Settings window in sync with menu choices.
+// Side effects that follow a changed field (module start/stop, store
+// limit, an immediate cleanup pass) run in each setter after this returns.
+func (a *shelf) applySettings(next settings.Settings) bool {
+	if a.settingsBroken {
+		return false
+	}
+	if err := settings.Save(a.dataDir, next); err != nil {
+		a.report(err)
+		return false
+	}
+	a.settings = next
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+	a.repaintSettings()
+	return true
+}
+
 // setClipboardHistory saves the clipboardHistory setting and starts or
 // stops the clipboard module at once, without a restart. Disabled while
 // settings.json could not be read, so a broken file is never overwritten.
 func (a *shelf) setClipboardHistory(on bool) {
-	if a.settingsBroken || a.settings.ClipboardHistory == on {
+	if a.settings.ClipboardHistory == on {
 		return
 	}
 	next := a.settings
 	next.ClipboardHistory = on
-	if err := settings.Save(a.dataDir, next); err != nil {
-		a.report(err)
+	if !a.applySettings(next) {
 		return
 	}
-	a.settings = next
 	a.applyClipboardHistory()
-	if a.win != nil {
-		a.win.Invalidate()
-	}
 }
 
 // applyClipboardHistory makes the running modules match the setting: the
@@ -233,19 +255,17 @@ func (a *shelf) applyClipboardHistory() {
 // the store at once (the next add trims to it). Disabled while
 // settings.json could not be read, so a broken file is never overwritten.
 func (a *shelf) setClipboardLimit(n int) {
-	if a.settingsBroken {
-		return
-	}
 	if n < 1 {
 		n = settings.Default().ClipboardLimit
 	}
-	next := a.settings
-	next.ClipboardLimit = n
-	if err := settings.Save(a.dataDir, next); err != nil {
-		a.report(err)
+	if a.settings.ClipboardLimit == n {
 		return
 	}
-	a.settings = next
+	next := a.settings
+	next.ClipboardLimit = n
+	if !a.applySettings(next) {
+		return
+	}
 	if a.store != nil {
 		a.store.SetTextLimit(n)
 	}
