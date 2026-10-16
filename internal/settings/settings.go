@@ -27,7 +27,15 @@ type Settings struct {
 	ClipboardLimit int `json:"clipboardLimit"`
 	// ExcludedApps lists bundle identifiers whose copies are never
 	// recorded into the shelf.
+	// ExcludedApps lists bundle identifiers whose copies are never
+	// recorded into the shelf.
 	ExcludedApps []string `json:"excludedApps"`
+	// IslandNowPlaying shows live now-playing status in the notch island.
+	IslandNowPlaying bool `json:"islandNowPlaying"`
+	// IslandBattery shows battery level and charging in the notch island.
+	IslandBattery bool `json:"islandBattery"`
+	// IslandVolume shows a transient island when the volume changes.
+	IslandVolume bool `json:"islandVolume"`
 }
 
 // defaultClipboardLimit is the clipboard text history cap a fresh
@@ -36,7 +44,7 @@ const defaultClipboardLimit = 30
 
 // Default is what a fresh install uses.
 func Default() Settings {
-	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit}
+	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, IslandBattery: true, IslandVolume: true}
 }
 
 // Save replaces dir/settings.json with s, atomically.
