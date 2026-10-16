@@ -23,11 +23,12 @@ func symbol(paths string) *ui.SVG {
 
 // 展开态配色：纯黑刘海壳上只放深色 UI，让托盘看起来像一整块硬件黑岛。
 var (
-	textPrimary = ui.Hex("#F3F4F6")
-	textMuted   = ui.Hex("#9CA3AF")
-	cardSurface = ui.RGBA(255, 255, 255, 0.08)
-	cardHover   = ui.RGBA(255, 255, 255, 0.14)
-	hairline    = ui.RGBA(255, 255, 255, 0.10)
+	textPrimary  = ui.Hex("#F3F4F6")
+	textMuted    = ui.Hex("#9CA3AF")
+	cardSurface  = ui.RGBA(255, 255, 255, 0.08)
+	cardHover    = ui.RGBA(255, 255, 255, 0.14)
+	cardSelected = ui.RGBA(10, 132, 255, 0.45)
+	hairline     = ui.RGBA(255, 255, 255, 0.10)
 )
 
 // view 把刘海画成三态形态：收起（窗口常驻但完全不绘制）、探头（硬件刘海
@@ -35,7 +36,7 @@ var (
 // nil，直接按完整展开态渲染。
 func (a *shelf) view(c *ui.Context) {
 	if c.Shortcut(0, ui.KeyEscape) {
-		a.hide()
+		a.escape()
 	}
 	c.OnShortcut(ui.Cmd, ui.KeyQ, mygo.App.Quit)
 	t := c.Theme()
@@ -136,6 +137,7 @@ func (a *shelf) view(c *ui.Context) {
 							a.report(err)
 						} else {
 							a.clearThumbnails()
+							a.selection.clear()
 							if a.win != nil {
 								a.win.Invalidate()
 							}
@@ -185,12 +187,16 @@ func (a *shelf) view(c *ui.Context) {
 			if a.status != "" {
 				ui.Text(c, a.status).MaxLines(3).FontSize(11).TextColor(textMuted)
 			} else {
-				count := 0
+				count, selected := 0, a.selection.count()
 				if a.store != nil {
 					count = len(a.store.Items)
 				}
+				footer := fmt.Sprintf("%d 项 · 右键更多操作 · ⌘/⇧ 多选", count)
+				if selected > 1 {
+					footer = fmt.Sprintf("已选 %d 项 · 一起拖出 · 空格预览", selected)
+				}
 				ui.Row(c).Children(func() {
-					ui.Text(c, fmt.Sprintf("%d 项 · 拖出不删除", count)).Grow(1).FontSize(11).TextColor(textMuted)
+					ui.Text(c, footer).Grow(1).SingleLine().FontSize(11).TextColor(textMuted)
 					ui.Text(c, shortcutHint).FontSize(11).TextColor(textMuted)
 				})
 			}

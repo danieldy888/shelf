@@ -125,10 +125,10 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 		return
 	}
 	if inside {
-		a.holdEscape()
+		a.holdKeys()
 		return
 	}
-	a.releaseEscape()
+	a.releaseKeys()
 	inMenuBar := p.Y >= a.notchY && p.Y <= a.notchY+max(36, a.notchH+4)
 	if a.visible && !a.dragging && !inMenuBar {
 		a.hide()
@@ -189,28 +189,47 @@ func (a *shelf) show(edge bool) {
 	a.syncMousePassThrough()
 	if a.win != nil {
 		a.win.ShowInactive()
-		// ShowInactive 不夺焦，面板收不到按键，只能临时注册全局 Esc。
-		a.holdEscape()
+		// ShowInactive 不夺焦，面板收不到按键，只能临时注册全局 Esc 与空格。
+		a.holdKeys()
 		a.win.Invalidate()
 	}
 }
 
-func (a *shelf) holdEscape() {
-	if a.escHeld {
-		return
+// holdKeys takes Esc (close Quick Look, then collapse) and Space (Quick
+// Look the selection) while the shelf is in use; releaseKeys returns them
+// as soon as the user clicks in another app.
+func (a *shelf) holdKeys() {
+	if !a.escHeld {
+		if err := mygo.GlobalShortcut.Register("Escape", a.escape); err != nil {
+			a.report(fmt.Errorf("Esc 被其他应用占用，请用快捷键或收起按钮：%w", err))
+		} else {
+			a.escHeld = true
+		}
 	}
-	if err := mygo.GlobalShortcut.Register("Escape", a.hide); err != nil {
-		a.report(fmt.Errorf("Esc 被其他应用占用，请用快捷键或收起按钮：%w", err))
-		return
+	if !a.spaceHeld {
+		// Without Space, Quick Look stays available from the context menu.
+		a.spaceHeld = mygo.GlobalShortcut.Register("Space", a.toggleQuickLook) == nil
 	}
-	a.escHeld = true
 }
 
-func (a *shelf) releaseEscape() {
+func (a *shelf) releaseKeys() {
 	if a.escHeld {
 		mygo.GlobalShortcut.Unregister("Escape")
 		a.escHeld = false
 	}
+	if a.spaceHeld {
+		mygo.GlobalShortcut.Unregister("Space")
+		a.spaceHeld = false
+	}
+}
+
+// escape closes Quick Look first, like Finder, then collapses the shelf.
+func (a *shelf) escape() {
+	if mac.QuickLookVisible() {
+		mac.CloseQuickLook()
+		return
+	}
+	a.hide()
 }
 
 func (a *shelf) hide() {
@@ -220,7 +239,8 @@ func (a *shelf) hide() {
 	a.visible, a.edgeOpened, a.peeking = false, false, false
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.peekFrom, a.peekAnimStart = a.peekProgress, time.Now()
-	a.releaseEscape()
+	a.releaseKeys()
+	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
 	a.syncMousePassThrough()

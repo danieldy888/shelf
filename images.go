@@ -102,6 +102,19 @@ func (a *shelf) clearThumbnails() {
 	}
 }
 
+// dropStaleThumbnails discards cached thumbnails of items no longer stored.
+func (a *shelf) dropStaleThumbnails() {
+	present := make(map[string]bool, len(a.store.Items))
+	for _, it := range a.store.Items {
+		present[it.ID] = true
+	}
+	for id := range a.thumbnails {
+		if !present[id] {
+			a.invalidateThumbnail(id)
+		}
+	}
+}
+
 func trayIcon() []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
 	ink := image.NewUniform(color.NRGBA{A: 255})

@@ -7,29 +7,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/store"
 )
 
-// One row per stored item: its look, click-to-copy, removal and drag-out.
+// One row per stored item: its look, selection, click-to-copy, right-click
+// menu, removal and drag-out.
 
 func (a *shelf) itemView(c *ui.Context, item store.Item) {
 	title := itemTitle(item)
 	row := ui.Row(c.Key(item.ID)).Padding(10).Gap(10).Radius(8).Label(title)
-	if row.Hovered() {
+	switch {
+	case a.selection.has(item.ID):
+		row.Background(cardSelected)
+	case row.Hovered():
 		row.Background(cardHover)
-	} else {
+	default:
 		row.Background(cardSurface)
 	}
 	if !item.Missing {
-		row.DragDataFrom(func() transfer.Data { return a.dragData(item) }, transfer.DragOptions{Operations: transfer.Copy, Done: a.completed})
+		row.DragDataFrom(func() transfer.Data { return a.dragOut(item) }, transfer.DragOptions{Operations: transfer.Copy, Done: a.completed})
 	}
+	row.ContextMenu(func(m *ui.Menu) { a.itemMenu(m, item) })
 	row.Children(func() {
 		icon := fileSymbol
 		if item.Kind == store.KindText {
@@ -64,22 +67,17 @@ func (a *shelf) itemView(c *ui.Context, item store.Item) {
 		remove := ui.ButtonBase(c.Key("remove")).Size(26, 26).Padding(0).Center().Radius(13).Label("移除 " + title)
 		remove.Children(func() { ui.Icon(c, closeSymbol).Size(12, 12).TextColor(textMuted) })
 		if remove.Clicked() {
-			if err := a.store.Remove(item.ID); err != nil {
-				a.report(err)
-			} else {
-				a.invalidateThumbnail(item.ID)
-				if a.win != nil {
-					a.win.Invalidate()
-				}
-			}
+			a.remove([]store.Item{item})
 		}
 	})
-	if row.Clicked() && item.Kind == store.KindText {
-		if err := mygo.Clipboard.Write(transfer.TextData(item.Text)); err != nil {
-			a.report(err)
-		} else {
-			a.clip.skipCurrent()
-			a.status, a.statusUntil = "已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second)
+	if row.Clicked() {
+		mods := row.ClickModifiers()
+		a.selection.click(a.store.Items, item.ID, mods)
+		if mods&(ui.Cmd|ui.Shift) == 0 && item.Kind == store.KindText {
+			a.copyText(item.Text)
+		}
+		if a.win != nil {
+			a.win.Invalidate()
 		}
 	}
 }

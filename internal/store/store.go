@@ -564,13 +564,109 @@ func (s *Store) Remove(id string) error {
 		s.Items = old
 		return err
 	}
-	if removed.Kind == KindImage && removed.Path != "" &&
-		s.managedPath(removed.Path) && !s.pathReferenced(removed.Path) {
-		if err := os.Remove(removed.Path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("store: item removed, but deleting managed image %s failed: %w", removed.Path, err)
-		}
+	failed, err := s.deleteManagedImages([]Item{removed}, true)
+	if err != nil {
+		return fmt.Errorf("store: item removed, but deleting managed image %s failed: %w", failed, err)
 	}
 	return nil
+}
+
+// RemoveMany removes the items with the given IDs and saves once. Unknown
+// IDs are ignored; nothing to remove => no write. Returns how many were
+// removed. Guarantees match Clear: on save failure memory is rolled back
+// and no file is deleted; afterwards only managed images no longer
+// referenced by any remaining item are deleted; files referenced by
+// KindFile items are never touched.
+func (s *Store) RemoveMany(ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	return s.removeMatching(func(it Item) bool {
+		_, ok := want[it.ID]
+		return ok
+	})
+}
+
+// RemoveOlderThan removes every item added before cutoff and saves once.
+// It returns how many items it removed. Guarantees match Clear: on save
+// failure memory is rolled back and no file is deleted; afterwards only
+// managed images no longer referenced by any remaining item are deleted;
+// files referenced by KindFile items are never touched. Re-adding an
+// existing item refreshes its timestamp, so "added" means last surfaced:
+// items at the cutoff or newer are kept.
+func (s *Store) RemoveOlderThan(cutoff time.Time) (int, error) {
+	return s.removeMatching(func(it Item) bool {
+		return it.CreatedAt.Before(cutoff)
+	})
+}
+
+// removeMatching drops every item match accepts and persists once.
+// Nothing matched => no write, (0, nil). On save failure memory is
+// rolled back and nothing is deleted. After the save succeeds, managed
+// image files the removed items referenced are deleted only when no
+// remaining item still references them. Returns how many items were
+// removed; a cleanup failure reports that count plus the first error.
+func (s *Store) removeMatching(match func(Item) bool) (int, error) {
+	old := s.Items
+	kept := make([]Item, 0, len(s.Items))
+	var removed []Item
+	for _, it := range s.Items {
+		if match(it) {
+			removed = append(removed, it)
+		} else {
+			kept = append(kept, it)
+		}
+	}
+	if len(removed) == 0 {
+		return 0, nil
+	}
+	if kept == nil {
+		kept = []Item{}
+	}
+	s.Items = kept
+	if err := s.Save(); err != nil {
+		s.Items = old
+		return 0, err
+	}
+	failed, err := s.deleteManagedImages(removed, true)
+	if err != nil {
+		return len(removed), fmt.Errorf("store: items removed, but deleting managed image %s failed: %w", failed, err)
+	}
+	return len(removed), nil
+}
+
+// deleteManagedImages deletes the managed image file each item in removed
+// points at — KindImage items only, only paths inside <root>/images, each
+// distinct path once. With onlyUnreferenced it first skips any file a
+// remaining item still references (Clear passes false: its item list is
+// already empty, so nothing can be referenced). Returns the path of the
+// first deletion error for callers to embed in their message; the other
+// files are still removed.
+func (s *Store) deleteManagedImages(removed []Item, onlyUnreferenced bool) (string, error) {
+	var firstErr error
+	var failedPath string
+	seen := map[string]bool{}
+	for _, it := range removed {
+		if it.Kind != KindImage || it.Path == "" || !s.managedPath(it.Path) {
+			continue
+		}
+		p := filepath.Clean(it.Path)
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		if onlyUnreferenced && s.pathReferenced(it.Path) {
+			continue
+		}
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr, failedPath = err, it.Path
+		}
+	}
+	return failedPath, firstErr
 }
 
 // Clear removes every item and persists atomically (memory rolls back on
@@ -589,24 +685,9 @@ func (s *Store) Clear() error {
 		s.Items = old
 		return err
 	}
-	var firstErr error
-	var failedPath string
-	seen := map[string]bool{}
-	for _, it := range old {
-		if it.Kind != KindImage || it.Path == "" || !s.managedPath(it.Path) {
-			continue
-		}
-		p := filepath.Clean(it.Path)
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
-			firstErr, failedPath = err, p
-		}
-	}
-	if firstErr != nil {
-		return fmt.Errorf("store: items cleared, but deleting managed image %s failed: %w", failedPath, firstErr)
+	failed, err := s.deleteManagedImages(old, false)
+	if err != nil {
+		return fmt.Errorf("store: items cleared, but deleting managed image %s failed: %w", failed, err)
 	}
 	return nil
 }

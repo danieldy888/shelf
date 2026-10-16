@@ -35,8 +35,11 @@ type shelf struct {
 	clip                                      *clipboardModule // nil while clipboard history is off
 	dragSerial                                int64
 	dragging, suppressed, pointerDrag         bool
+	dataDir                                   string // where state.json and settings.json live
+	settingsBroken                            bool   // settings.json unreadable: never overwrite it
 	guard                                     dragGuard
-	escHeld                                   bool
+	escHeld, spaceHeld                        bool
+	selection                                 selection
 	stopMouseObservation, stopDragObservation func()
 	leftSince                                 time.Time
 	h, topInset                               int

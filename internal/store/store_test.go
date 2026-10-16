@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newStore(t *testing.T) (*Store, string) {
@@ -92,6 +93,28 @@ func filePerm(t *testing.T, path string) os.FileMode {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return fi.Mode().Perm()
+}
+
+// itemIDs returns the IDs of s.Items in order.
+func itemIDs(s *Store) []string {
+	ids := make([]string, len(s.Items))
+	for i, it := range s.Items {
+		ids[i] = it.ID
+	}
+	return ids
+}
+
+// setAge backdates or forward-dates an item's CreatedAt directly so
+// retention tests never depend on wall-clock waits.
+func setAge(t *testing.T, s *Store, id string, at time.Time) {
+	t.Helper()
+	for i := range s.Items {
+		if s.Items[i].ID == id {
+			s.Items[i].CreatedAt = at
+			return
+		}
+	}
+	t.Fatalf("no item with id %q", id)
 }
 
 func TestTextHistoryLimitDedupAndOrder(t *testing.T) {
@@ -1704,5 +1727,431 @@ func TestClearEmptyIsNoOp(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, stateFileName)); !os.IsNotExist(err) {
 		t.Fatalf("empty Clear wrote state.json: %v", err)
+	}
+}
+
+// RemoveOlderThan keeps items at the cutoff or newer and drops the rest:
+// managed images that survive are only the ones a kept item still
+// references, user files (including KindFile items inside images/) are
+// never touched, and the surviving order is persisted.
+func TestRemoveOlderThanMixedKeepsCutoffAndReferences(t *testing.T) {
+	s, root := newStore(t)
+	dir := t.TempDir()
+	oldUser := filepath.Join(dir, "old-user.txt")
+	if err := os.WriteFile(oldUser, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newUser := filepath.Join(dir, "new-user.txt")
+	if err := os.WriteFile(newUser, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 1, A: 255})); err != nil {
+		t.Fatalf("AddImage A: %v", err)
+	}
+	managedA, imgAID := s.Items[0].Path, s.Items[0].ID
+	// A file-kind item ends up referencing the managed file (user dropped
+	// it back in): the image item may go, the file must stay.
+	if err := s.AddFiles([]string{managedA}); err != nil {
+		t.Fatalf("AddFiles refA: %v", err)
+	}
+	refAID := s.Items[0].ID
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 2, A: 255})); err != nil {
+		t.Fatalf("AddImage B: %v", err)
+	}
+	managedB, imgBID := s.Items[0].Path, s.Items[0].ID
+	// References among removed items do not count: this image goes with
+	// its own file-kind reference.
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 3, A: 255})); err != nil {
+		t.Fatalf("AddImage C: %v", err)
+	}
+	managedC, imgCID := s.Items[0].Path, s.Items[0].ID
+	if err := s.AddFiles([]string{managedC}); err != nil {
+		t.Fatalf("AddFiles refC: %v", err)
+	}
+	refCID := s.Items[0].ID
+	// An image item whose file is already gone: removal must not report
+	// IsNotExist as a cleanup failure.
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 4, A: 255})); err != nil {
+		t.Fatalf("AddImage D: %v", err)
+	}
+	imgDID := s.Items[0].ID
+	if err := os.Remove(s.Items[0].Path); err != nil {
+		t.Fatalf("setup remove: %v", err)
+	}
+	s.Items[0].Missing = true
+	if err := s.AddFiles([]string{oldUser, newUser}); err != nil {
+		t.Fatalf("AddFiles users: %v", err)
+	}
+	newUserID, oldUserID := s.Items[0].ID, s.Items[1].ID
+	if err := s.AddText("old text"); err != nil {
+		t.Fatalf("AddText old: %v", err)
+	}
+	oldTextID := s.Items[0].ID
+	if err := s.AddText("new text"); err != nil {
+		t.Fatalf("AddText new: %v", err)
+	}
+	newTextID := s.Items[0].ID
+	// A KindFile item pointing inside images/ is never a deletion target.
+	stray := filepath.Join(realRoot(t, root), imagesDirName, "stray.txt")
+	if err := os.WriteFile(stray, []byte("stray"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{stray}); err != nil {
+		t.Fatalf("AddFiles stray: %v", err)
+	}
+	strayID := s.Items[0].ID
+	if len(s.Items) != 11 {
+		t.Fatalf("setup items: %d", len(s.Items))
+	}
+
+	cutoff := time.Now()
+	old := cutoff.Add(-time.Hour)
+	newish := cutoff.Add(time.Hour)
+	setAge(t, s, oldUserID, old)    // removed; its file must stay
+	setAge(t, s, newUserID, cutoff) // exactly at cutoff → kept
+	setAge(t, s, oldTextID, old)
+	setAge(t, s, newTextID, newish)
+	setAge(t, s, imgAID, old)    // removed; file kept via refA
+	setAge(t, s, refAID, newish) // kept → managedA survives
+	setAge(t, s, imgBID, newish) // kept with its file
+	setAge(t, s, imgCID, old)    // removed; refC gone too → file deleted
+	setAge(t, s, refCID, old)
+	setAge(t, s, imgDID, old)
+	setAge(t, s, strayID, old) // removed; stray file must stay
+
+	n, err := s.RemoveOlderThan(cutoff)
+	if err != nil {
+		t.Fatalf("RemoveOlderThan: %v", err)
+	}
+	if n != 7 {
+		t.Fatalf("removed %d, want 7 (items: %+v)", n, s.Items)
+	}
+	// Kept items preserve their relative order.
+	if len(s.Items) != 4 {
+		t.Fatalf("kept %d items: %+v", len(s.Items), s.Items)
+	}
+	wantIDs := []string{newTextID, newUserID, imgBID, refAID}
+	for i, id := range wantIDs {
+		if s.Items[i].ID != id {
+			t.Fatalf("kept[%d] = %+v, want id %s", i, s.Items[i], id)
+		}
+	}
+	if _, err := os.Stat(managedA); err != nil {
+		t.Fatalf("referenced managed image deleted: %v", err)
+	}
+	if _, err := os.Stat(managedB); err != nil {
+		t.Fatalf("kept item's image deleted: %v", err)
+	}
+	if _, err := os.Stat(managedC); !os.IsNotExist(err) {
+		t.Fatalf("unreferenced managed image kept: %v", err)
+	}
+	if _, err := os.Stat(oldUser); err != nil {
+		t.Fatalf("removed item's user file deleted: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("file item inside images dir deleted: %v", err)
+	}
+	// Persisted: reopen shows exactly the kept items.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if len(s2.Items) != 4 {
+		t.Fatalf("removal not persisted: %+v", s2.Items)
+	}
+}
+
+// With no items older than the cutoff RemoveOlderThan is a no-op: no
+// write to state.json (bytes and mtime unchanged — it even succeeds on a
+// read-only root), and (0, nil) both ways.
+func TestRemoveOlderThanNoMatchNoWrite(t *testing.T) {
+	es, emptyRoot := newStore(t)
+	n, err := es.RemoveOlderThan(time.Now().Add(time.Hour))
+	if err != nil || n != 0 {
+		t.Fatalf("empty store: n=%d err=%v", n, err)
+	}
+	if _, err := os.Stat(filepath.Join(emptyRoot, stateFileName)); !os.IsNotExist(err) {
+		t.Fatalf("empty no-op wrote state.json: %v", err)
+	}
+
+	s, root := newStore(t)
+	if err := s.AddText("recent"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	statePath := filepath.Join(root, stateFileName)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fiBefore, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err = s.RemoveOlderThan(time.Now().Add(-time.Hour))
+	if err != nil || n != 0 {
+		t.Fatalf("no-match: n=%d err=%v", n, err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("state.json bytes changed on no-op: %v", err)
+	}
+	fiAfter, err := os.Stat(statePath)
+	if err != nil || !fiAfter.ModTime().Equal(fiBefore.ModTime()) {
+		t.Fatalf("state.json rewritten on no-op")
+	}
+	// A write here would fail on the read-only root; (0, nil) proves none.
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+	n, err = s.RemoveOlderThan(time.Now().Add(-time.Hour))
+	if err != nil || n != 0 {
+		t.Fatalf("no-match on read-only root: n=%d err=%v", n, err)
+	}
+	if len(s.Items) != 1 {
+		t.Fatalf("items changed: %+v", s.Items)
+	}
+}
+
+// Save failure (read-only root) rolls memory back exactly and deletes
+// nothing: state.json bytes and the managed PNG survive untouched.
+func TestRemoveOlderThanSaveFailureRollsBack(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("old text"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{A: 9})); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	managed := s.Items[0].Path
+	ids := itemIDs(s)
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+
+	n, err := s.RemoveOlderThan(time.Now().Add(time.Hour))
+	if err == nil {
+		t.Fatal("expected save error with read-only root")
+	}
+	if n != 0 {
+		t.Fatalf("save failed but reported %d removed", n)
+	}
+	got := itemIDs(s)
+	if len(got) != len(ids) {
+		t.Fatalf("memory not rolled back: %+v", s.Items)
+	}
+	for i := range ids {
+		if got[i] != ids[i] {
+			t.Fatalf("item order changed on rollback: %+v", s.Items)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("state.json changed on failed save")
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted on failed save: %v", err)
+	}
+}
+
+// A store whose migration has no recovery point rejects the removal
+// before touching anything: error, memory and state.json unchanged.
+func TestRemoveOlderThanMigrationBlocked(t *testing.T) {
+	root := t.TempDir()
+	original, name := writeLegacyStateWithImage(t, root, color.RGBA{B: 41, A: 255})
+	for _, n := range migrationBackupNames {
+		if err := os.Mkdir(filepath.Join(root, n), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if s.MigrationError() == nil {
+		t.Fatal("expected migration blocked")
+	}
+	idsBefore := itemIDs(s)
+	n, err := s.RemoveOlderThan(time.Now().Add(24 * time.Hour))
+	if err == nil {
+		t.Fatal("RemoveOlderThan must fail without a recovery point")
+	}
+	if n != 0 {
+		t.Fatalf("failed removal reported %d removed", n)
+	}
+	got := itemIDs(s)
+	if len(got) != len(idsBefore) {
+		t.Fatalf("items changed on blocked store: %+v", s.Items)
+	}
+	for i := range got {
+		if got[i] != idsBefore[i] {
+			t.Fatalf("items changed on blocked store: %+v", s.Items)
+		}
+	}
+	state, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(state, original) {
+		t.Fatalf("original state.json changed without recovery point: %v", err)
+	}
+	img := filepath.Join(realRoot(t, root), imagesDirName, name)
+	if _, err := os.Stat(img); err != nil {
+		t.Fatalf("managed image deleted on blocked store: %v", err)
+	}
+}
+
+// A cleanup error is reported together with the removal count: items are
+// gone and persisted, the failing file still exists.
+func TestRemoveOlderThanImageCleanupError(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 99, A: 255})); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	managed := s.Items[0].Path
+	if err := os.Chmod(filepath.Join(root, imagesDirName), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(root, imagesDirName), 0o755) })
+
+	n, err := s.RemoveOlderThan(time.Now().Add(time.Hour))
+	if err == nil {
+		t.Fatal("expected cleanup error with read-only images dir")
+	}
+	if n != 1 {
+		t.Fatalf("removed count = %d, want 1", n)
+	}
+	if !strings.Contains(err.Error(), "deleting managed image") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(s.Items) != 0 {
+		t.Fatalf("items not removed: %+v", s.Items)
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("file gone despite failed deletion: %v", err)
+	}
+}
+
+// RemoveMany dedupes and ignores unknown IDs: a managed image referenced
+// by a kept file item survives, an unreferenced one is deleted once.
+func TestRemoveMany(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 7, A: 255})); err != nil {
+		t.Fatalf("AddImage 1: %v", err)
+	}
+	img1Path, img1ID := s.Items[0].Path, s.Items[0].ID
+	if err := s.AddFiles([]string{img1Path}); err != nil {
+		t.Fatalf("AddFiles: %v", err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{R: 8, A: 255})); err != nil {
+		t.Fatalf("AddImage 2: %v", err)
+	}
+	img2Path, img2ID := s.Items[0].Path, s.Items[0].ID
+	if err := s.AddText("keep"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+
+	// No matching IDs → no write, even on a read-only root.
+	statePath := filepath.Join(root, stateFileName)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.RemoveMany([]string{"nope", ""})
+	if err != nil || n != 0 {
+		t.Fatalf("no-match: n=%d err=%v", n, err)
+	}
+	n, err = s.RemoveMany(nil)
+	if err != nil || n != 0 {
+		t.Fatalf("nil ids: n=%d err=%v", n, err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("state.json written for a no-op")
+	}
+	if len(s.Items) != 4 {
+		t.Fatalf("items changed by no-op: %+v", s.Items)
+	}
+
+	// Duplicate IDs count once; unknown ones are ignored.
+	n, err = s.RemoveMany([]string{img1ID, img1ID, "no-such-id", img2ID})
+	if err != nil {
+		t.Fatalf("RemoveMany: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("removed %d, want 2", n)
+	}
+	if len(s.Items) != 2 {
+		t.Fatalf("items after removal: %+v", s.Items)
+	}
+	for _, it := range s.Items {
+		if it.ID == img1ID || it.ID == img2ID {
+			t.Fatalf("removed id still present: %+v", it)
+		}
+	}
+	if _, err := os.Stat(img1Path); err != nil {
+		t.Fatalf("still-referenced managed image deleted: %v", err)
+	}
+	if _, err := os.Stat(img2Path); !os.IsNotExist(err) {
+		t.Fatalf("unreferenced managed image kept: %v", err)
+	}
+}
+
+// Save failure (read-only root) rolls RemoveMany back with nothing
+// deleted: all items and the managed PNG survive.
+func TestRemoveManySaveFailureRollsBack(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("one"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{B: 5, A: 255})); err != nil {
+		t.Fatalf("AddImage: %v", err)
+	}
+	managed := s.Items[0].Path
+	ids := itemIDs(s)
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+
+	n, err := s.RemoveMany(ids)
+	if err == nil {
+		t.Fatal("expected save error with read-only root")
+	}
+	if n != 0 {
+		t.Fatalf("save failed but reported %d removed", n)
+	}
+	got := itemIDs(s)
+	if len(got) != len(ids) {
+		t.Fatalf("memory not rolled back: %+v", s.Items)
+	}
+	for i := range ids {
+		if got[i] != ids[i] {
+			t.Fatalf("item order changed on rollback: %+v", s.Items)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("state.json changed on failed save")
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted on failed save: %v", err)
 	}
 }

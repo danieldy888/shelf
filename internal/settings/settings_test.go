@@ -51,6 +51,18 @@ func TestExplicitValueIsHonoured(t *testing.T) {
 	}
 }
 
+func TestSaveRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	want := Settings{ClipboardHistory: false, RetentionDays: 7}
+	if err := Save(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil || got != want {
+		t.Fatalf("Load after Save = %+v, %v; want %+v", got, err, want)
+	}
+}
+
 func TestInvalidFileIsNeverRewritten(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)

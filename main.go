@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -62,8 +63,9 @@ func main() {
 		}
 	}
 	prefs, perr := settings.Load(*dataDir)
-	a := &shelf{store: s, settings: prefs, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
+	a := &shelf{store: s, settings: prefs, dataDir: *dataDir, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: make(map[string]bool)}
 	if perr != nil {
+		a.settingsBroken = true
 		a.notice("设置文件无法读取，本次使用默认设置：" + perr.Error())
 	}
 	mygo.App.SetName(appName)
@@ -143,6 +145,7 @@ func (a *shelf) ready(show bool) {
 		a.clip = newClipboardModule(a)
 		a.modules = append(a.modules, a.clip)
 	}
+	a.modules = append(a.modules, &retentionModule{host: a})
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。
@@ -166,8 +169,9 @@ func (a *shelf) ready(show bool) {
 	log.Print("Shelf ready")
 }
 
-// trayMenu is rebuilt on every right-click so the protection item reflects
-// the current Accessibility state, which the user changes in System Settings.
+// trayMenu is rebuilt on every right-click so it reflects the current
+// Accessibility state, which the user changes in System Settings, and the
+// current settings.
 func (a *shelf) trayMenu() *mygo.Menu {
 	guard := &mygo.MenuItem{Label: "刘海拖放保护已开启", Disabled: true}
 	if !mac.AccessibilityTrusted() {
@@ -178,7 +182,40 @@ func (a *shelf) trayMenu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "显示 / 收起 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
 		guard,
+		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
 		mygo.Separator(),
 		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
+}
+
+// retentionMenu offers the retention periods. It is disabled while
+// settings.json could not be read, so a broken file is never overwritten.
+func (a *shelf) retentionMenu() []*mygo.MenuItem {
+	choice := func(label string, days int) *mygo.MenuItem {
+		current := a.settings.RetentionDays
+		if current < 0 {
+			current = 0
+		}
+		return &mygo.MenuItem{
+			Label: label, Type: mygo.MenuItemRadio, Checked: current == days, Disabled: a.settingsBroken,
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.setRetention(days) },
+		}
+	}
+	items := []*mygo.MenuItem{choice("不自动清理", 0)}
+	for _, d := range retentionChoices {
+		items = append(items, choice(fmt.Sprintf("清理超过 %d 天的内容", d), d))
+	}
+	return items
+}
+
+// setRetention saves the new period and applies it at once.
+func (a *shelf) setRetention(days int) {
+	next := a.settings
+	next.RetentionDays = days
+	if err := settings.Save(a.dataDir, next); err != nil {
+		a.report(err)
+		return
+	}
+	a.settings = next
+	a.removeExpired(time.Now())
 }

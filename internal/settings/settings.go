@@ -19,11 +19,22 @@ const FileName = "settings.json"
 type Settings struct {
 	// ClipboardHistory records copied text and images into the shelf.
 	ClipboardHistory bool `json:"clipboardHistory"`
+	// RetentionDays removes items older than this many days; 0 or less
+	// keeps everything.
+	RetentionDays int `json:"retentionDays"`
 }
 
 // Default is what a fresh install uses.
 func Default() Settings {
 	return Settings{ClipboardHistory: true}
+}
+
+// Save replaces dir/settings.json with s, atomically.
+func Save(dir string, s Settings) error {
+	if err := write(dir, s); err != nil {
+		return fmt.Errorf("settings: saving %s: %w", FileName, err)
+	}
+	return nil
 }
 
 // Load reads dir/settings.json over the defaults.
