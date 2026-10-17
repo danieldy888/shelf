@@ -38,13 +38,19 @@ const (
 var (
 	updateEnabled = func() bool { return mygo.Updater.Enabled() }
 	updateCheck   = func(ctx context.Context) (*mygo.Update, error) { return mygo.Updater.Check(ctx) }
-	runInstall    = func(up *mygo.Update, progress func(downloaded, total int64)) error {
-		return up.Install(context.Background(), progress)
+	runInstall    = func(ctx context.Context, up *mygo.Update, progress func(downloaded, total int64)) error {
+		return up.Install(ctx, progress)
 	}
 	dispatchMain = mygo.RunOnMain
 	// goWork runs the slow part of a check or install off the main thread.
 	goWork      = func(fn func()) { go fn() }
 	relaunchApp = func() { mygo.App.Relaunch() }
+	// Timeouts bound the network work: go's HTTP client has none, so a
+	// stalled GitHub request would otherwise leave updateChecking or
+	// updateInstalling set forever and silence every later check. Variables
+	// so tests can shrink them.
+	updateCheckTimeout   = 30 * time.Second
+	updateInstallTimeout = 10 * time.Minute
 )
 
 // nextAutoCheck returns when the next automatic check is due after one ran
@@ -97,7 +103,9 @@ func (a *shelf) checkUpdates(user bool) {
 		}
 	}
 	goWork(func() {
-		up, err := updateCheck(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
+		defer cancel()
+		up, err := updateCheck(ctx)
 		dispatchMain(func() { a.checkedUpdate(user, up, err) })
 	})
 }
@@ -165,8 +173,10 @@ func (a *shelf) installUpdate() {
 		a.win.Invalidate()
 	}
 	goWork(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), updateInstallTimeout)
+		defer cancel()
 		lastPct := -1
-		err := runInstall(up, func(n, total int64) {
+		err := runInstall(ctx, up, func(n, total int64) {
 			if total <= 0 {
 				return
 			}

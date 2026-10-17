@@ -131,7 +131,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 
 ## Privacy
 
-Everything stays on your Mac: no telemetry, no cloud sync. The single exception is update checks: while enabled (default), Shelf queries this repository's latest GitHub release once shortly after launch and then once a day; the request carries nothing but the URL it asks for — no personal data, no identifiers. Turn it off in Settings → General → 「自动检查更新」 or with `"autoCheckUpdates": false` in `settings.json`; right-clicking the menu-bar icon → 「检查更新…」 always works on demand. When a new version is found, a notice appears in the shelf footer and an 「安装更新（vX）…」 item in the menu-bar menu — nothing downloads until you choose it. Text history is stored in plaintext at `~/Library/Application Support/Shelf/`, so avoid copying secrets you don't want recorded there.
+Everything stays on your Mac: no telemetry, no cloud sync. The single exception is update checks: while enabled (default), Shelf queries this repository's latest GitHub release once shortly after launch and then once a day; the only data it sends is the app version in the standard User-Agent header (e.g. `MyGo/0.5.5 Shelf/1.0.8`) — no personal data, no identifiers. Turn it off in Settings → General → 「自动检查更新」 or with `"autoCheckUpdates": false` in `settings.json`; right-clicking the menu-bar icon → 「检查更新…」 always works on demand. When a new version is found, a notice appears in the shelf footer and an 「安装更新（vX）…」 item in the menu-bar menu — nothing downloads until you choose it. Text history is stored in plaintext at `~/Library/Application Support/Shelf/`, so avoid copying secrets you don't want recorded there.
 
 ## Build from source
 
@@ -251,7 +251,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 
 ## 隐私
 
-一切都在本机：无遥测、无云同步。唯一的网络请求是自动更新检查：默认开启时，Shelf 在启动后不久向本仓库 GitHub 的最新 Release 查询一次，之后每天一次；请求只包含要下载的地址，不携带任何个人信息或标识。可以在 设置… → 通用 → 「自动检查更新」关闭，或把 `settings.json` 里的 `"autoCheckUpdates"` 改成 `false`；关闭后仍可用右键菜单的「检查更新…」手动查询。发现新版本时只在托盘底部和菜单里提示，不会自动下载。文字历史以明文保存在 `~/Library/Application Support/Shelf/`，不希望被记录的密码、验证码等内容请先退出 Shelf 再复制。
+一切都在本机：无遥测、无云同步。唯一的网络请求是自动更新检查：默认开启时，Shelf 在启动后不久向本仓库 GitHub 的最新 Release 查询一次，之后每天一次；请求只带一个标准的 User-Agent 头（应用名与版本，如 `MyGo/0.5.5 Shelf/1.0.8`），不携带任何个人信息或标识。可以在 设置… → 通用 → 「自动检查更新」关闭，或把 `settings.json` 里的 `"autoCheckUpdates"` 改成 `false`；关闭后仍可用右键菜单的「检查更新…」手动查询。发现新版本时只在托盘底部和菜单里提示，不会自动下载。文字历史以明文保存在 `~/Library/Application Support/Shelf/`，不希望被记录的密码、验证码等内容请先退出 Shelf 再复制。
 
 ## 从源码构建
 

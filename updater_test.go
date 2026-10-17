@@ -33,7 +33,7 @@ type updateProbe struct {
 	runs     int
 	relaunch int
 	checkFn  func(context.Context) (*mygo.Update, error)
-	runFn    func(*mygo.Update, func(int64, int64)) error
+	runFn    func(context.Context, *mygo.Update, func(int64, int64)) error
 	drain    chan func()
 	enabled  bool
 }
@@ -43,6 +43,7 @@ func stubUpdater(t *testing.T) *updateProbe {
 	p := &updateProbe{drain: make(chan func(), 64), enabled: true}
 	origEnabled, origCheck, origRun := updateEnabled, updateCheck, runInstall
 	origDispatch, origRelaunch, origWork := dispatchMain, relaunchApp, goWork
+	origCheckTO, origInstallTO := updateCheckTimeout, updateInstallTimeout
 	updateEnabled = func() bool { return p.enabled }
 	updateCheck = func(ctx context.Context) (*mygo.Update, error) {
 		p.mu.Lock()
@@ -53,14 +54,14 @@ func stubUpdater(t *testing.T) *updateProbe {
 		}
 		return p.checkFn(ctx)
 	}
-	runInstall = func(up *mygo.Update, progress func(int64, int64)) error {
+	runInstall = func(ctx context.Context, up *mygo.Update, progress func(int64, int64)) error {
 		p.mu.Lock()
 		p.runs++
 		p.mu.Unlock()
 		if p.runFn == nil {
 			return nil
 		}
-		return p.runFn(up, progress)
+		return p.runFn(ctx, up, progress)
 	}
 	dispatchMain = func(fn func()) { p.drain <- fn }
 	relaunchApp = func() { p.mu.Lock(); p.relaunch++; p.mu.Unlock() }
@@ -68,6 +69,7 @@ func stubUpdater(t *testing.T) *updateProbe {
 	t.Cleanup(func() {
 		updateEnabled, updateCheck, runInstall = origEnabled, origCheck, origRun
 		dispatchMain, relaunchApp, goWork = origDispatch, origRelaunch, origWork
+		updateCheckTimeout, updateInstallTimeout = origCheckTO, origInstallTO
 	})
 	return p
 }
@@ -250,11 +252,45 @@ func TestCheckedUpdateNilAndError(t *testing.T) {
 	}
 }
 
+// A stalled feed must not leave updateChecking set forever: the check runs
+// under a deadline, and its deadline cancels the request, resets the state
+// and schedules the next attempt.
+func TestCheckTimeoutResetsState(t *testing.T) {
+	p := stubUpdater(t)
+	updateCheckTimeout = 40 * time.Millisecond
+	a := updateShelf()
+	p.checkFn = func(ctx context.Context) (*mygo.Update, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("check ran without a deadline")
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	a.checkUpdates(true)
+	p.settle()
+	if a.updateChecking {
+		t.Fatal("timed-out check left updateChecking set")
+	}
+	if !a.updateNext.After(time.Now()) {
+		t.Fatal("timed-out check did not reschedule")
+	}
+	if !strings.Contains(a.status, "检查更新失败") {
+		t.Fatalf("timeout status = %q", a.status)
+	}
+	// The next check is not blocked.
+	p.checkFn = nil
+	a.checkUpdates(false)
+	p.settle()
+	if p.checkCount() != 2 {
+		t.Fatalf("checks after timeout = %d, want 2", p.checkCount())
+	}
+}
+
 func TestInstallUpdateFlow(t *testing.T) {
 	p := stubUpdater(t)
 	a := updateShelf()
 	a.update = &mygo.Update{Version: "1.2.3"}
-	p.runFn = func(up *mygo.Update, progress func(int64, int64)) error {
+	p.runFn = func(_ context.Context, up *mygo.Update, progress func(int64, int64)) error {
 		progress(50, 100)
 		progress(100, 100)
 		return nil
@@ -288,11 +324,45 @@ func TestInstallUpdateFlow(t *testing.T) {
 	}
 }
 
+// A stalled download must release updateInstalling, keep the offer for a
+// retry, and let a later install succeed.
+func TestInstallTimeoutResetsState(t *testing.T) {
+	p := stubUpdater(t)
+	updateInstallTimeout = 40 * time.Millisecond
+	a := updateShelf()
+	a.update = &mygo.Update{Version: "1.2.3"}
+	p.runFn = func(ctx context.Context, _ *mygo.Update, _ func(int64, int64)) error {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("install ran without a deadline")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	a.installUpdate()
+	p.settle()
+	if a.updateInstalling || a.updateInstalled {
+		t.Fatal("timed-out install left the installing/installed state set")
+	}
+	if !strings.Contains(a.status, "安装更新失败") {
+		t.Fatalf("timeout status = %q", a.status)
+	}
+	if item := a.updateMenu(); !strings.Contains(item.Label, "安装更新（v1.2.3）") {
+		t.Fatalf("post-timeout menu = %q", item.Label)
+	}
+	// Retrying the same offer works.
+	p.runFn = nil
+	a.installUpdate()
+	p.settle()
+	if !a.updateInstalled {
+		t.Fatal("retry after the timeout did not install")
+	}
+}
+
 func TestInstallUpdateFailure(t *testing.T) {
 	p := stubUpdater(t)
 	a := updateShelf()
 	a.update = &mygo.Update{Version: "1.2.3"}
-	p.runFn = func(*mygo.Update, func(int64, int64)) error { return errors.New("disk full") }
+	p.runFn = func(context.Context, *mygo.Update, func(int64, int64)) error { return errors.New("disk full") }
 	a.installUpdate()
 	p.settle()
 	if a.updateInstalled || a.updateInstalling {
