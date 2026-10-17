@@ -14,16 +14,15 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
 )
 
-// TestNowPlayingPeekSmokeScreenshot draws the compact player in the real
-// notch window, screenshots it with `screencapture -l <id>` and checks the
-// picture: the drawn pill must be much wider than the hardware notch (the
-// player needs room for cover, title and control) and must contain the
-// cover's colours. Run with SHELF_BASKET_SMOKE=1 (see basket_test.go).
+// TestNowPlayingPeekSmokeScreenshot draws the now-playing peek pill in the
+// real notch window, screenshots it with `screencapture -l <id>` and checks
+// the picture: the drawn pill must reach the design width (notch +120 for
+// cover plus equalizer bars) and must contain the cover's colours. Run with
+// SHELF_BASKET_SMOKE=1 (see basket_test.go).
 func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
 		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native now-playing smoke test")
@@ -57,7 +56,7 @@ func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 		a.settings.IslandNowPlaying = true
 		a.np = mod
 		mod.host = a
-		mod.art = ui.NewBitmap(art)
+		mod.rememberArt(art, false) // same path as decodeArt: bitmap + glow
 		mod.have = true
 		mod.last = mac.NowPlayingState{
 			Playing: true, Title: "Fashion Killa", Artist: "A$AP Rocky",
@@ -71,13 +70,10 @@ func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 		a.win.ShowInactive()
 		a.win.Invalidate()
 	})
-	if btn := mod.peekBtn; btn.Width == 0 {
-		onMain(func() { a.win.Invalidate() })
-		time.Sleep(200 * time.Millisecond)
-		if mod.peekBtn.Width == 0 {
-			t.Fatal("the peek player never drew (no recorded button)")
-		}
-	}
+	// No controls to find anymore: the draw is verified by the
+	// screenshot below. One extra invalidate lets a frame settle.
+	onMain(func() { a.win.Invalidate() })
+	time.Sleep(200 * time.Millisecond)
 	num := mac.WindowNumber(a.win.NativeHandle())
 	if num == 0 {
 		t.Fatal("notch window has no CGWindowID")
@@ -98,8 +94,10 @@ func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 		t.Fatalf("decode %s: %v", shot, err)
 	}
 	box := opaqueBounds(img)
-	if box.Dx() < npPeekWidth {
-		t.Fatalf("screenshot %s shows %dpt of paint; the player pill must be %dpt wide", shot, box.Dx(), npPeekWidth)
+	var wantW float32
+	onMain(func() { wantW, _ = a.peekSize() })
+	if box.Dx() < int(wantW) {
+		t.Fatalf("screenshot %s shows %dpt of paint; the player pill must be %.0fpt wide", shot, box.Dx(), wantW)
 	}
 	if !hasColour(img) {
 		t.Fatalf("screenshot %s has no cover colours; the artwork did not draw", shot)

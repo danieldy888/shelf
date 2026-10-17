@@ -18,8 +18,8 @@ import (
 // the window, its placement and its lifetime.
 
 const (
-	basketWidth    = 220
-	basketHeight   = 160
+	basketWidth    = 200 // 设计:200×132 圆角 22 纯黑
+	basketHeight   = 132
 	basketGap      = 18 // 光标与篮子之间留出的安全距离
 	basketPad      = 8  // 篮子离可见屏缘的内边距
 	basketEdge     = 10 // 卡片四周的透明余量
@@ -210,12 +210,12 @@ func (a *shelf) basketView(c *ui.Context) {
 	zone := ui.Column(c.Key("basket")).Fill().Padding(basketEdge).Clip()
 	_, over := ui.DataDragOver(zone, opts)
 	zone.Children(func() {
-		card := ui.Column(c.Key("card")).Fill().Radius(20).Center().Gap(10).Padding(10)
+		card := ui.Column(c.Key("card")).Fill().Radius(22).Center().Gap(8).Padding(10)
 		accent := c.Theme().Accent
+		card.Background(ui.Hex("#000000"))
 		if a.basket.dropped || over {
-			card.Background(ui.Hex("#000000")).Border(2, accent)
-		} else {
-			card.Background(ui.Hex("#000000")).Border(2, hairline)
+			// 拖到上方：2pt accent 描边；空闲无描边。
+			card.Border(2, accent)
 		}
 		card.Children(func() {
 			label := "放到这里"
@@ -225,14 +225,16 @@ func (a *shelf) basketView(c *ui.Context) {
 			case a.basket.failed:
 				label = "放入失败"
 			}
-			iconColor := accent
+			iconColor := ink
 			if a.basket.failed {
-				iconColor = textMuted
+				iconColor = ink3
 			}
-			ui.Icon(c, shelfSymbol).Size(40, 40).TextColor(iconColor)
-			ui.Text(c, label).FontSize(14).FontWeight(600).TextColor(textPrimary)
+			ui.Icon(c, shelfSymbol).Size(28, 28).TextColor(iconColor)
+			ui.Text(c, label).FontSize(13).FontWeight(600).TextColor(ink)
 			if a.basket.failed && a.basket.failMsg != "" {
-				ui.Text(c, a.basket.failMsg).MaxLines(2).TextAlign(ui.Center).FontSize(11).TextColor(textMuted)
+				ui.Text(c, a.basket.failMsg).MaxLines(2).TextAlign(ui.Center).FontSize(11).TextColor(ink3)
+			} else {
+				ui.Text(c, "松开即放入 Shelf").SingleLine().FontSize(11).TextColor(ink3)
 			}
 		})
 	})

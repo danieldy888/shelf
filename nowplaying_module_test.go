@@ -183,22 +183,22 @@ func TestNowPlayingCardDrawsTrackAndControls(t *testing.T) {
 
 func TestPeekSizeWidensForATrack(t *testing.T) {
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}, notchW: 180, notchH: 32}
-	if w, h := a.peekSize(); w != 236 || h != 50 {
-		t.Fatalf("idle peek pill = %.0fx%.0f, want 236x50", w, h)
+	if w, h := a.peekSize(); w != 220 || h != 44 {
+		t.Fatalf("idle peek pill = %.0fx%.0f, want 220x44 (notch +40/+12)", w, h)
 	}
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T"}}
-	if w, _ := a.peekSize(); w != npPeekWidth {
-		t.Fatalf("the peek player needs %dpt, got %.0f", npPeekWidth, w)
+	if w, h := a.peekSize(); w != 300 || h != 38 {
+		t.Fatalf("the music peek pill must be notch +120/+6 = 300x38, got %.0fx%.0f", w, h)
 	}
 	// Switching the feature off collapses the pill again even before the
 	// next tick stops the helper.
 	a.settings.IslandNowPlaying = false
-	if w, _ := a.peekSize(); w != 236 {
+	if w, _ := a.peekSize(); w != 220 {
 		t.Fatalf("the pill must shrink when now playing is off, got %.0f", w)
 	}
 }
 
-func TestNowPlayingPeekPlayerShowsTrackAndControl(t *testing.T) {
+func TestNowPlayingPeekPlayerIsClickToExpand(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{
@@ -213,29 +213,20 @@ func TestNowPlayingPeekPlayerShowsTrackAndControl(t *testing.T) {
 	a.np = s.mod
 	a.modules = []module{s.mod}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	if !view.HasText("夜曲") || !view.HasText("周杰伦") {
-		t.Fatal("the peek player must show title and artist")
+	// The design's pill carries no text and no controls: artwork plus EQ
+	// bars, and a press anywhere on it expands the shelf.
+	if _, ok := view.Find("暂停"); ok {
+		t.Fatal("the peek pill must not carry a play/pause button")
 	}
-	if _, ok := view.Find("暂停"); !ok {
-		t.Fatal("the peek player must expose play/pause")
+	if err := view.Click("展开 Shelf"); err != nil {
+		t.Fatalf("the peek pill must be one expand affordance: %v", err)
 	}
-	if s.mod.peekBtn.Width == 0 {
-		t.Fatal("drawing the peek player must record its button for the click observer")
-	}
-	// A press on the toggle sends the command and leaves the panel collapsed.
-	if err := view.Click("暂停"); err != nil {
-		t.Fatal(err)
-	}
-	s.expectCommand(t, "toggle")
-	if a.visible {
-		t.Fatal("the peek control must not expand the panel")
-	}
-	if s.mod.last.Playing {
-		t.Fatal("the peek toggle must flip optimistically, like the card's")
+	if !a.visible {
+		t.Fatal("a press on the peek pill must expand the panel")
 	}
 }
 
-func TestPeekPlayerPressOnToggleDoesNotExpand(t *testing.T) {
+func TestPeekPressExpandsAndSendsNoCommand(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","artist":"A","duration":100,"elapsed":5}`)
 	a := &shelf{
@@ -249,43 +240,23 @@ func TestPeekPlayerPressOnToggleDoesNotExpand(t *testing.T) {
 	s.mod.host = a
 	a.np = s.mod
 	a.modules = []module{s.mod}
-	_ = ui.NewTester(a.view, panelWidth, panelHeight) // draws the pill and records its button
-	btn := s.mod.peekBtn
-	if btn.Width == 0 {
-		t.Fatal("no peek button box recorded")
-	}
-	center := mygo.Point{X: btn.X + btn.Width/2, Y: btn.Y + btn.Height/2}
-	// WindowServer delivered the press to the menu bar (inside=false): the
-	// button's Clicked never runs, so the observer must forward the toggle
-	// itself, once, without expanding.
-	a.mouseDown(false, center)
-	s.expectCommand(t, "toggle")
-	if a.visible {
-		t.Fatal("a press on the peek toggle must not expand the panel")
-	}
-	if s.mod.last.Playing {
-		t.Fatal("the menu-bar-delivered press must flip the state optimistically")
-	}
-	// An inside press is the UI frame's: the observer must not send a
-	// second command, and still must not expand the panel.
-	a.mouseDown(true, center)
-	select {
-	case got := <-s.cmds:
-		t.Fatalf("an inside press sent %q from the observer; the button reports it", got)
-	case <-time.After(50 * time.Millisecond):
-	}
-	if a.visible {
-		t.Fatal("a press on the peek toggle must not expand the panel")
-	}
-	// Any other point on the pill still expands it.
+	_ = ui.NewTester(a.view, panelWidth, panelHeight) // draws the pill
 	origReg, origUnreg := registerKey, unregisterKey
 	registerKey = func(string, func()) error { return nil }
 	unregisterKey = func(string) {}
 	defer func() { registerKey, unregisterKey = origReg, origUnreg }()
+	// WindowServer delivered the press to the menu bar (inside=false): the
+	// observer expands the pill it sits on and must not send anything to
+	// the helper — the pill has no transport buttons.
 	pill := a.peekPillRect()
-	a.mouseDown(true, mygo.Point{X: pill.X + 20, Y: pill.Y + pill.Height - 10})
+	a.mouseDown(false, mygo.Point{X: pill.X + pill.Width - 12, Y: pill.Y + pill.Height/2})
 	if !a.visible {
-		t.Fatal("a press on the pill body must expand the panel")
+		t.Fatal("a press on the pill must expand the panel")
+	}
+	select {
+	case got := <-s.cmds:
+		t.Fatalf("a pill press sent %q; the pill has no controls", got)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -492,7 +463,7 @@ func TestNowPlayingStartFailureIsRetriedLater(t *testing.T) {
 }
 
 func TestPlayPauseAffordances(t *testing.T) {
-	if toggleSymbol(true) != pauseSymbol2 || toggleSymbol(false) != playSymbol {
+	if toggleSymbol(true) != pauseFill || toggleSymbol(false) != playFill {
 		t.Fatal("the toggle glyph must match the playing state")
 	}
 	if playPauseLabel(true) != "暂停" || playPauseLabel(false) != "播放" {

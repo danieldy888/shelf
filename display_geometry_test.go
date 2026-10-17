@@ -20,7 +20,7 @@ import (
 func secondaryShelfBelow() *shelf {
 	return &shelf{
 		dispBounds: mygo.Rectangle{X: 0, Y: 1440, Width: 1470, Height: 956},
-		x:          515, // (1470-440)/2
+		x:          475, // (1470-520)/2
 		y:          1440,
 		h:          400,
 		notchX:     646, notchY: 1440, notchW: 180, notchH: 32,

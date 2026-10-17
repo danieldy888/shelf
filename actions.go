@@ -149,10 +149,7 @@ func (a *shelf) copyText(text string) bool {
 		return false
 	}
 	a.clip.skipCurrent()
-	a.status, a.statusUntil = "已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second)
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	a.toastStatus("已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second), false)
 	return true
 }
 
@@ -173,10 +170,7 @@ func (a *shelf) copyItem(item store.Item) bool {
 			return false
 		}
 		a.clip.skipCurrent()
-		a.status, a.statusUntil = "已复制图片 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second)
-		if a.win != nil {
-			a.win.Invalidate()
-		}
+		a.toastStatus("已复制图片 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second), false)
 		return true
 	}
 	a.report(errors.New("这一项不能复制到剪贴板"))
@@ -232,10 +226,7 @@ func (a *shelf) excludeClipboardApp(bundleID string) {
 			return
 		}
 	}
-	a.status, a.statusUntil = "已不再记录来自「"+name+"」的内容", time.Now().Add(3*time.Second)
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	a.toastStatus("已不再记录来自「"+name+"」的内容", time.Now().Add(3*time.Second), false)
 }
 
 // removeExcludedApp takes bundleID out of the excludedApps setting — the

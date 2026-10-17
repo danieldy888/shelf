@@ -97,10 +97,8 @@ func (a *shelf) checkUpdates(user bool) {
 	}
 	a.updateChecking = true
 	if user {
-		a.status, a.statusUntil = "正在检查更新…", time.Time{}
-		if a.win != nil {
-			a.win.Invalidate()
-		}
+		// In-progress note: the check is fast, so the toast outlives it rarely.
+		a.toastStatus("正在检查更新…", time.Now().Add(6*time.Second), false)
 	}
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
@@ -121,12 +119,9 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 		log.Printf("Shelf: 检查更新失败：%v", err)
 		if user {
 			if errors.Is(err, mygo.ErrUpdatesDisabled) {
-				a.status, a.statusUntil = "此构建未启用自动更新（开发构建或未签名的安装）", time.Time{}
+				a.toastStatus("此构建未启用自动更新（开发构建或未签名的安装）", time.Now().Add(8*time.Second), false)
 			} else {
-				a.status, a.statusUntil = "检查更新失败："+err.Error(), time.Now().Add(8*time.Second)
-			}
-			if a.win != nil {
-				a.win.Invalidate()
+				a.toastStatus("检查更新失败："+err.Error(), time.Now().Add(8*time.Second), true)
 			}
 		}
 		return
@@ -134,7 +129,7 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 	if up == nil {
 		a.update = nil
 		if user {
-			a.status, a.statusUntil = "已是最新版本", time.Now().Add(4*time.Second)
+			a.toastStatus("已是最新版本", time.Now().Add(4*time.Second), false)
 			if a.win != nil {
 				a.win.Invalidate()
 			}
@@ -168,10 +163,7 @@ func (a *shelf) installUpdate() {
 		return
 	}
 	a.updateInstalling, a.updateProgress = true, 0
-	a.status, a.statusUntil = fmt.Sprintf("正在下载更新 v%s…", up.Version), time.Time{}
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	a.toastStatus(fmt.Sprintf("正在下载更新 v%s…", up.Version), time.Now().Add(updateInstallTimeout), false)
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), updateInstallTimeout)
 		defer cancel()
@@ -203,14 +195,11 @@ func (a *shelf) installedUpdate(up *mygo.Update, err error) {
 	a.updateInstalling, a.updateProgress = false, 0
 	if err != nil {
 		log.Printf("Shelf: 安装更新失败：%v", err)
-		a.status, a.statusUntil = "安装更新失败："+err.Error(), time.Time{}
+		a.toastStatus("安装更新失败："+err.Error(), time.Now().Add(8*time.Second), true)
 	} else {
 		a.updateInstalled = true
 		log.Printf("Shelf: 更新 v%s 已安装，重启后生效", up.Version)
-		a.status, a.statusUntil = fmt.Sprintf("v%s 已安装 · 重新启动 Shelf 后生效", up.Version), time.Time{}
-	}
-	if a.win != nil {
-		a.win.Invalidate()
+		a.toastStatus(fmt.Sprintf("v%s 已安装 · 重新启动 Shelf 后生效", up.Version), time.Now().Add(8*time.Second), false)
 	}
 }
 

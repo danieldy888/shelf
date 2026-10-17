@@ -3,9 +3,10 @@
 package main
 
 import (
+	"bytes"
+	"image/png"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
@@ -50,22 +51,18 @@ type nowPlayingModule struct {
 	snap      npSnap
 	art       *ui.Bitmap // artwork or app icon of the current track
 	artIsIcon bool       // art is the app icon fallback, not the cover
+	artColor  ui.Color   // the artwork's average colour: EQ bars and glow
+	glow      *ui.Bitmap // precomputed radial glow in that colour
 	artDone   string     // artID decoded once (success or undecodable blob)
 	iconFor   string     // artID whose app-icon fallback was looked up
 
-	// icons caches app icons by bundle id: the fallback is looked up once
-	// per app, not once per track.
-	icons map[string]*ui.Bitmap
+	// iconPNGs caches app icons by bundle id: the fallback is looked up
+	// once per app, not once per track.
+	iconPNGs map[string][]byte
 
 	// newIcon resolves a bundle id's icon; nil means mac.AppIcon. A seam
 	// for tests, which must not start AppKit.
 	newIcon func(bundle string) *ui.Bitmap
-
-	// peekBtn is the on-screen box of the peek player's play/pause button,
-	// written while the peek pill is drawn. The native mouse-down observer
-	// reads it so a press there toggles the track instead of expanding the
-	// panel.
-	peekBtn mygo.Rectangle
 
 	// A play/pause press answers at once. Until the helper agrees (or
 	// npOptimisticWindow passes), a contradicting line is treated as stale:
@@ -90,6 +87,15 @@ type npSnap struct {
 	position int // whole seconds, so a playing track redraws once a second
 	art      int // 0 none, 1 real cover, 2 app icon fallback
 }
+
+// npArtNone / npArtCover / npArtIcon classify the picture the card shows
+// in npSnap.art, so a same-track swap between cover, app icon and nothing
+// still invalidates the window.
+const (
+	npArtNone = iota
+	npArtCover
+	npArtIcon
+)
 
 // npSnapOf is the pure projection from a state to the compared snapshot.
 // Position counts only while the expanded panel can show it: with the
@@ -116,33 +122,6 @@ func npSnapOf(st mac.NowPlayingState, have, panelVisible bool, now time.Time) np
 // npRetryDelay is how long the module waits before starting the helper
 // again after a failed attempt (perl missing, bundle unreadable).
 const npRetryDelay = 30 * time.Second
-
-// npPeekWidth is the collapsed-hover player's width: room for the cover,
-// a readable title, the playing indicator and the play/pause button. The
-// resident strip is at least this wide so every part of the pill, not just
-// the hardware notch, can receive the press.
-const npPeekWidth = 336
-
-// npArtNone, npArtCover and npArtIcon classify what the card shows.
-const (
-	npArtNone = iota
-	npArtCover
-	npArtIcon
-)
-
-// Now-playing control glyphs, in the same 24×24 stroke style as the
-// panel's own symbols.
-var (
-	musicSymbol  = symbol(`<path d="M9 18V6l10-2v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM19 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>`)
-	playSymbol   = symbol(`<path d="M8 5.5 19 12 8 18.5z"/>`)
-	pauseSymbol2 = symbol(`<path d="M9 5v14M15 5v14"/>`)
-	prevSymbol   = symbol(`<path d="M18 6v12L9 12zM6 6v12"/>`)
-	nextSymbol   = symbol(`<path d="M6 6v12l9-6zM18 6v12"/>`)
-	// eqSymbol is the compact "playing" mark beside the peek title: four
-	// bars, the same idea as Droppy's waveform, without pretending to be a
-	// live spectrum we cannot read.
-	eqSymbol = symbol(`<path d="M5 14v-4M10 18V6M15 16V8M20 14v-4"/>`)
-)
 
 // tick keeps the helper alive according to the setting and folds new
 // helper lines into the displayed state.
@@ -171,7 +150,8 @@ func (m *nowPlayingModule) tick(now time.Time) {
 		m.np, m.started = nil, false
 		m.retryAt = now.Add(npRetryDelay)
 		m.last, m.have = mac.NowPlayingState{}, false
-		m.art, m.artIsIcon, m.artDone, m.iconFor = nil, false, "", ""
+		m.forgetArt()
+		m.artDone, m.iconFor = "", ""
 		m.optUntil = time.Time{}
 		m.invalidate(npSnap{})
 		return
@@ -219,7 +199,7 @@ func (m *nowPlayingModule) refresh(now time.Time) {
 	if have && st.ArtID != m.last.ArtID {
 		// A new track starts without last track's picture: the card must
 		// not keep showing stale art while the new one is being read.
-		m.art, m.artIsIcon = nil, false
+		m.forgetArt()
 	}
 	m.last, m.have = st, have
 	if have {
@@ -260,16 +240,17 @@ func (m *nowPlayingModule) artState() int {
 // decodeArt decodes the artwork of a newly seen track once, on the main
 // thread (the view's thread), and drops the previous track's bitmap. A
 // late line that finally carries the cover replaces an earlier app-icon
-// fallback for the same track.
+// fallback for the same track. rememberArt computes the average colour
+// and glow bitmap once per artwork.
 func (m *nowPlayingModule) decodeArt(st mac.NowPlayingState) {
 	if st.ArtID == "" || st.ArtID == m.artDone {
 		return
 	}
 	if len(st.Art) > 0 {
 		m.artDone = st.ArtID
-		m.art, m.artIsIcon = nil, false
-		if b, err := ui.DecodeBitmap(st.Art); err == nil {
-			m.art = b
+		m.forgetArt()
+		if img, err := png.Decode(bytes.NewReader(st.Art)); err == nil {
+			m.rememberArt(img, false)
 		}
 		return
 	}
@@ -280,39 +261,42 @@ func (m *nowPlayingModule) decodeArt(st mac.NowPlayingState) {
 		return
 	}
 	m.iconFor = st.ArtID
-	m.art, m.artIsIcon = m.icon(st.App), true
+	if icon := m.icon(st.App); icon != nil {
+		// 测试缝提供了现成位图：没有可平均的 PNG，光晕保持关闭。
+		m.art, m.artIsIcon = icon, true
+		return
+	}
+	if pngBytes := m.appIconPNG(st.App); len(pngBytes) > 0 {
+		if img, err := png.Decode(bytes.NewReader(pngBytes)); err == nil {
+			m.rememberArt(img, true)
+		}
+	}
+}
+
+// appIconPNG returns the playing app's icon PNG, cached per bundle id:
+// NetEase and other apps that never publish artwork still identify
+// themselves, so the card shows a real app icon instead of a generic
+// music glyph.
+func (m *nowPlayingModule) appIconPNG(bundle string) []byte {
+	if bundle == "" {
+		return nil
+	}
+	if m.iconPNGs == nil {
+		m.iconPNGs = make(map[string][]byte)
+	}
+	if b, ok := m.iconPNGs[bundle]; ok {
+		return b
+	}
+	m.iconPNGs[bundle] = mac.AppIcon(bundle, 64)
+	return m.iconPNGs[bundle]
 }
 
 // icon resolves an app icon through the test seam when one is set.
 func (m *nowPlayingModule) icon(bundle string) *ui.Bitmap {
-	if m.newIcon != nil {
-		return m.newIcon(bundle)
-	}
-	return m.appIcon(bundle)
-}
-
-// appIcon returns the playing app's icon as a decoded bitmap, or nil. The
-// answer is cached per bundle id: NetEase and other apps that never
-// publish artwork still identify themselves, so the card shows a real
-// app icon instead of a generic music glyph.
-func (m *nowPlayingModule) appIcon(bundle string) *ui.Bitmap {
-	if bundle == "" {
+	if m.newIcon == nil {
 		return nil
 	}
-	if m.icons == nil {
-		m.icons = make(map[string]*ui.Bitmap)
-	}
-	if b, ok := m.icons[bundle]; ok {
-		return b
-	}
-	var b *ui.Bitmap
-	if png := mac.AppIcon(bundle, 64); len(png) > 0 {
-		if decoded, err := ui.DecodeBitmap(png); err == nil {
-			b = decoded
-		}
-	}
-	m.icons[bundle] = b
-	return b
+	return m.newIcon(bundle)
 }
 
 // stop ends the helper and forgets its state; called when the setting is
@@ -325,7 +309,8 @@ func (m *nowPlayingModule) stop() {
 	m.started = false
 	m.retryAt = time.Time{}
 	m.last, m.have = mac.NowPlayingState{}, false
-	m.art, m.artIsIcon, m.artDone, m.iconFor = nil, false, "", ""
+	m.forgetArt()
+	m.artDone, m.iconFor = "", ""
 	m.optUntil = time.Time{}
 	m.invalidate(npSnap{})
 }
@@ -352,133 +337,6 @@ func (m *nowPlayingModule) hasTrack() bool {
 // playing reports whether something is playing right now.
 func (m *nowPlayingModule) playing() bool {
 	return m.have && m.last.Playing
-}
-
-// peekPlayer draws the compact player in the peeking notch pill: artwork,
-// title and artist, the playing mark and a play/pause button. It reports
-// whether it drew anything; a drag in flight keeps the drop hint instead.
-func (m *nowPlayingModule) peekPlayer(c *ui.Context) bool {
-	st, ok := m.track()
-	if !ok || !m.host.settings.IslandNowPlaying || m.host.dragging {
-		m.peekBtn = mygo.Rectangle{}
-		return false
-	}
-	shellW, shellH := m.host.shellSize(0)
-	x0 := float32(m.host.stripCenter()) - shellW/2
-	y0 := float32(m.host.y)
-	t := c.Theme()
-	const (
-		pad     = float32(10)
-		artSize = float32(34)
-		btnSize = float32(28)
-	)
-	m.peekBtn = mygo.Rectangle{
-		X:      int(x0 + shellW - pad - btnSize),
-		Y:      int(y0 + (shellH-btnSize)/2),
-		Width:  int(btnSize),
-		Height: int(btnSize),
-	}
-	ui.Row(c.Key("np-peek")).Width(shellW).Height(shellH).
-		Padding(0, pad, 0, pad).AlignItems(ui.Center).Gap(8).Children(func() {
-		if m.art != nil {
-			img := ui.Image(c.Key("np-peek-art"), m.art).Size(artSize, artSize)
-			if !m.artIsIcon {
-				img.Radius(7).Fit(ui.Cover)
-			}
-		} else {
-			ui.Icon(c.Key("np-peek-glyph"), musicSymbol).Size(artSize, artSize).TextColor(textMuted)
-		}
-		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Justify(ui.Center).Children(func() {
-			ui.Text(c.Key("np-peek-title"), st.Title).SingleLine().FontSize(12).FontWeight(600).TextColor(textPrimary)
-			if st.Artist != "" {
-				ui.Text(c.Key("np-peek-artist"), st.Artist).SingleLine().FontSize(10).TextColor(textMuted)
-			}
-		})
-		eq := t.Accent
-		if !st.Playing {
-			eq = textMuted
-		}
-		ui.Icon(c.Key("np-peek-eq"), eqSymbol).Size(16, 16).TextColor(eq)
-		m.controlButton(c, "np-peek-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, btnSize)
-	})
-	return true
-}
-
-// overPeekButton reports whether a screen point lands on the peek player's
-// play/pause button; a native press there must reach the button rather than
-// expanding the panel.
-func (m *nowPlayingModule) overPeekButton(p mygo.Point) bool {
-	r := m.peekBtn
-	return r.Width > 0 && r.Height > 0 &&
-		p.X >= r.X && p.X < r.X+r.Width &&
-		p.Y >= r.Y && p.Y < r.Y+r.Height
-}
-
-// card draws the now-playing card at the top of the expanded panel's
-// tray tab: artwork, title and artist, transport controls and a progress
-// bar timed from the last helper line. It reports whether it drew
-// anything.
-func (m *nowPlayingModule) card(c *ui.Context) bool {
-	st, ok := m.track()
-	if !ok {
-		return false
-	}
-	now := time.Now()
-	ui.Column(c.Key("nowplaying")).Gap(8).Padding(10).Radius(8).
-		Background(cardSurface).Children(func() {
-		ui.Row(c).Gap(10).Children(func() {
-			switch {
-			case m.art != nil && !m.artIsIcon:
-				ui.Image(c.Key("np-art"), m.art).Size(48, 48).Radius(6).Fit(ui.Cover)
-			case m.art != nil:
-				// The app icon already carries its own rounded shape.
-				ui.Image(c.Key("np-art"), m.art).Size(48, 48)
-			default:
-				ui.Icon(c.Key("np-art-icon"), musicSymbol).Size(40, 40).TextColor(textMuted)
-			}
-			ui.Column(c).Grow(1).MinWidth(0).Gap(3).Justify(ui.Center).Children(func() {
-				ui.Text(c.Key("np-title"), st.Title).SingleLine().FontSize(13).FontWeight(600).TextColor(textPrimary)
-				if st.Artist != "" {
-					ui.Text(c.Key("np-artist"), st.Artist).SingleLine().FontSize(11).TextColor(textMuted)
-				}
-			})
-			ui.Row(c.Key("np-controls")).Gap(4).Children(func() {
-				m.controlButton(c, "np-prev", prevSymbol, "上一首", mac.NPPrevious, 30)
-				m.controlButton(c, "np-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, 30)
-				m.controlButton(c, "np-next", nextSymbol, "下一首", mac.NPNext, 30)
-			})
-		})
-		ui.Row(c.Key("np-progress")).Gap(8).AlignItems(ui.Center).Children(func() {
-			elapsed := st.Position(now)
-			ui.Text(c, mac.FormatClock(elapsed)).SingleLine().FontSize(10).TextColor(textMuted)
-			value := float64(-1) // unknown length: an active bar
-			if st.Duration > 0 {
-				value = min(max(elapsed/st.Duration, 0), 1)
-			}
-			ui.Progress(c.Key("np-bar"), value).Grow(1)
-			if st.Duration > 0 {
-				// Counting down, as the streaming player shows it.
-				ui.Text(c, "-"+mac.FormatClock(st.Duration-elapsed)).SingleLine().FontSize(10).TextColor(textMuted)
-			}
-		})
-	})
-	return true
-}
-
-// controlButton is one transport button with an accessibility label.
-func (m *nowPlayingModule) controlButton(c *ui.Context, key string, icon *ui.SVG, label string, command mac.NowPlayingCommand, size float32) {
-	b := ui.ButtonBase(c.Key(key)).Size(size, size).Center().Radius(size / 2).Label(label)
-	if b.Hovered() {
-		b.Background(cardHover)
-	} else {
-		b.Background(cardSurface)
-	}
-	b.Children(func() {
-		ui.Icon(c, icon).Size(size/2, size/2).TextColor(textPrimary)
-	})
-	if b.Clicked() {
-		m.send(command)
-	}
 }
 
 // send forwards a transport command to the playing app. Play/pause flips
@@ -508,23 +366,8 @@ func (m *nowPlayingModule) send(command mac.NowPlayingCommand) {
 		m.last.Rate = 0
 	}
 	m.optUntil, m.optPlaying = now.Add(npOptimisticWindow), m.last.Playing
+
 	next := npSnapOf(m.last, true, m.host.visible, now)
 	next.art = m.artState()
 	m.invalidate(next)
-}
-
-// toggleSymbol is the play/pause glyph matching the current state.
-func toggleSymbol(playing bool) *ui.SVG {
-	if playing {
-		return pauseSymbol2
-	}
-	return playSymbol
-}
-
-// playPauseLabel names the action the button will take.
-func playPauseLabel(playing bool) string {
-	if playing {
-		return "暂停"
-	}
-	return "播放"
 }

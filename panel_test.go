@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,11 +88,16 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 	if !view.HasText("清空") {
 		t.Fatal("clear-all button missing with items present")
 	}
+	// 移除入口在右键菜单里（设计去掉了行内按钮）。
 	for _, it := range s.Items {
-		label := "移除 " + itemTitle(it)
-		if !view.HasText(label) {
-			t.Fatalf("per-item remove button %q missing", label)
+		title := itemTitle(it)
+		if err := view.RightClick(title); err != nil {
+			t.Fatalf("right-click %q: %v", title, err)
 		}
+		if !slices.Contains(view.Menu(), "移除") {
+			t.Fatalf("per-item menu for %q lacks 移除: %v", title, view.Menu())
+		}
+		view.CloseMenu()
 	}
 	// 缩略图在途解码与缓存命中都必须在清空时失效。
 	if len(a.thumbPending) == 0 {
@@ -99,8 +105,11 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 	}
 	a.thumbnails["cached"] = &ui.Bitmap{}
 
-	if err := view.Click("移除 note.txt"); err != nil {
-		t.Fatalf("click per-item remove: %v", err)
+	if err := view.RightClick("note.txt"); err != nil {
+		t.Fatalf("right-click note.txt: %v", err)
+	}
+	if err := view.ChooseMenuItem("移除"); err != nil {
+		t.Fatalf("choose per-item remove: %v (%v)", err, view.Menu())
 	}
 	if len(s.Items) != 2 {
 		t.Fatalf("per-item remove should keep the rest, got %d items", len(s.Items))
@@ -155,7 +164,7 @@ func TestNotchTopInsetPushesHeaderBelowNotch(t *testing.T) {
 	}
 	a := &shelf{store: s, topInset: 32, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	for _, label := range []string{"Shelf", "清空托盘", "收起托盘"} {
+	for _, label := range []string{"托盘", "清空", "收起"} {
 		r, ok := view.Find(label)
 		if !ok {
 			t.Fatalf("header element %q missing with topInset=32", label)
@@ -164,7 +173,7 @@ func TestNotchTopInsetPushesHeaderBelowNotch(t *testing.T) {
 			t.Fatalf("header element %q at y=%v overlaps the 32pt notch", label, r.Y)
 		}
 	}
-	if err := view.Click("清空托盘"); err != nil {
+	if err := view.Click("清空"); err != nil {
 		t.Fatalf("clear-all button not clickable below notch: %v", err)
 	}
 	if len(s.Items) != 0 {
@@ -173,7 +182,7 @@ func TestNotchTopInsetPushesHeaderBelowNotch(t *testing.T) {
 	if !view.HasText("把文件拖到这里") {
 		t.Fatal("empty state not shown after clear-all below notch")
 	}
-	if err := view.Click("收起托盘"); err != nil {
+	if err := view.Click("收起"); err != nil {
 		t.Fatalf("collapse button not clickable below notch: %v", err)
 	}
 }
@@ -188,10 +197,10 @@ func TestNotchPeekClickExpandsShelf(t *testing.T) {
 	defer s.Close()
 	a := &shelf{store: s, peeking: true, peekProgress: 1, notchW: 182, notchH: 32, topInset: 32}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	if !view.HasText("点击展开 Shelf") {
-		t.Fatal("peek pill missing its expand hint")
+	if _, ok := view.Find("展开 Shelf"); !ok {
+		t.Fatal("peek pill missing its expand affordance (chevron)")
 	}
-	if view.HasText("收起托盘") {
+	if view.HasText("收起") {
 		t.Fatal("peek state should not render the expanded header")
 	}
 	if err := view.Click("展开 Shelf"); err != nil {
@@ -202,7 +211,7 @@ func TestNotchPeekClickExpandsShelf(t *testing.T) {
 	}
 	a.progress = 1 // 展开动画在无窗口测试里不推进，直接到位。
 	view.Frame()
-	if !view.HasText("收起托盘") {
+	if _, ok := view.Find("收起"); !ok {
 		t.Fatal("expanded shelf missing the collapse button after peek click")
 	}
 }

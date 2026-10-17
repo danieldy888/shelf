@@ -60,7 +60,9 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.visible || a.progress > 0.01 {
 		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 	}
-	w := max(max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth), npPeekWidth)
+	// 常驻窄条必须容下最大的探头胶囊（有音乐时的 +120pt），曲目来去
+	// 不引起原生窗口缩放。
+	w := max(max(180, a.notchW)+npPeekExtraW, notchTriggerWidth)
 	h := max(max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
@@ -96,19 +98,18 @@ func (a *shelf) windowGeometryChanged() {
 	a.syncWindowFrame()
 }
 
-// peekSize is the peek pill's resting size. While a track is loaded it
-// widens to fit the compact player (cover, title, playing mark, play/pause);
-// otherwise it is the small "click to expand" capsule. The idle strip is
-// always wide enough for both, so a track coming or going never resizes
-// the resident window.
+// peekSize is the peek pill's resting size (DESIGN.md「刘海悬停」): with a
+// track loaded the capsule is the notch +120 wide and +6 tall, holding the
+// cover and equalizer bars; without one it bulges 12pt down and carries a
+// chevron. The idle strip is always wide enough for both, so a track
+// coming or going never resizes the resident window.
 func (a *shelf) peekSize() (w, h float32) {
 	baseW := float32(max(180, a.notchW))
 	baseH := float32(max(32, a.notchH))
-	w = baseW + 56
 	if a.np != nil && a.np.hasTrack() {
-		w = max(w, npPeekWidth)
+		return baseW + npPeekExtraW, baseH + npPeekExtraH
 	}
-	return w, baseH + 18
+	return baseW + 40, baseH + 12
 }
 
 // shellSize is the one interpolation the shell Path and the content layout
@@ -125,9 +126,9 @@ func (a *shelf) shellSize(openK float32) (w, h float32) {
 }
 
 // peekPillRect is the on-screen box of the hovered notch capsule, matching
-// the shell drawn in view(): a compact now-playing player while a track is
-// loaded, otherwise the "点击展开 Shelf" hint. Clicks on the hint land at
-// the bottom of this rect, below the hardware notch.
+// the shell drawn in view(): the now-playing pill while a track is
+// loaded, otherwise the chevron bulge. A press anywhere on it expands the
+// shelf — the design has no in-pill controls.
 func (a *shelf) peekPillRect() mygo.Rectangle {
 	w, h := a.peekSize()
 	return mygo.Rectangle{X: a.stripCenter() - int(w/2), Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
@@ -151,17 +152,6 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// overlay paints a "click to expand" pill that never receives the click.
 	// A press on the visible pill expands either way.
 	if a.peeking && !a.visible && (inside || a.overPeekPill(p)) {
-		// A press on the compact player's play/pause button is the
-		// button's. When WindowServer hands the press to the menu bar
-		// instead of our window, the button's Clicked never runs, so the
-		// observer sends the command itself; an inside press must not
-		// send twice (the UI frame reports it).
-		if a.np != nil && a.np.overPeekButton(p) {
-			if !inside {
-				a.np.send(mac.NPPlayPause)
-			}
-			return
-		}
 		a.show(false)
 		return
 	}
@@ -229,13 +219,15 @@ func (a *shelf) setPeek(peek bool) {
 	}
 }
 
-// panelH returns the height place() computed, falling back to panelHeight
-// before the first placement (e.g. in view tests with no real window).
+// panelH returns the expanded panel's height: the content's own measure
+// (panelTargetH) clamped to the cap place() computed from the display's
+// work area; before the first placement the cap is panelHeight.
 func (a *shelf) panelH() int {
-	if a.h > 0 {
-		return a.h
+	cap := a.h
+	if cap <= 0 {
+		cap = panelHeight
 	}
-	return panelHeight
+	return min(cap, a.panelTargetH())
 }
 
 func (a *shelf) show(edge bool) {
@@ -374,7 +366,7 @@ func (a *shelf) animate(now time.Time) {
 		}
 	}
 	if !a.peekAnimStart.IsZero() {
-		k := min(float32(now.Sub(a.peekAnimStart))/float32(140*time.Millisecond), 1)
+		k := min(float32(now.Sub(a.peekAnimStart))/float32(160*time.Millisecond), 1)
 		target := float32(0)
 		if a.peeking || a.visible {
 			target = 1

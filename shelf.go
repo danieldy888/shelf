@@ -25,7 +25,8 @@ type shelf struct {
 	stop                                       chan struct{}
 	quitting, visible, edgeOpened, received    bool
 	status                                     string
-	statusUntil                                time.Time
+	statusUntil, statusShown                   time.Time // statusShown: 首次渲染时刻（toast 生命周期起点）
+	statusErr                                  bool      // report() 写入的错误状态（toast 带红点）
 	x, y                                       int
 	dispBounds                                 mygo.Rectangle
 	frame                                      mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
@@ -34,15 +35,16 @@ type shelf struct {
 	animationFrom, progress                    float32
 	settings                                   settings.Settings
 	modules                                    []module
-	np                                         *nowPlayingModule // the peek player reads its state
-	clip                                       *clipboardModule  // nil while clipboard history is off
-	tab                                        int               // panelTab: which list the expanded panel shows
-	search                                     string            // clipboard tab's search text
-	reveal                                     string            // row to keep in view after a keyboard move
-	focusMode                                  bool              // the window took the keyboard for clipboard search
-	prevAppPID                                 int               // app to hand the keyboard back to when focusMode ends
-	appNames                                   map[string]string // bundle id → display name, cached for menu labels
-	write                                      clipWriter        // where copies go; nil = the system clipboard
+	np                                         *nowPlayingModule     // the peek player reads its state
+	clip                                       *clipboardModule      // nil while clipboard history is off
+	tab                                        int                   // panelTab: which list the expanded panel shows
+	search                                     string                // clipboard tab's search text
+	reveal                                     string                // row to keep in view after a keyboard move
+	focusMode                                  bool                  // the window took the keyboard for clipboard search
+	prevAppPID                                 int                   // app to hand the keyboard back to when focusMode ends
+	appNames                                   map[string]string     // bundle id → display name, cached for menu labels
+	appIcons                                   map[string]*ui.Bitmap // bundle id → icon, cached for clipboard rows
+	write                                      clipWriter            // where copies go; nil = the system clipboard
 	dragSerial                                 int64
 	dragging, suppressed, pointerDrag, ownDrag bool
 	dataDir                                    string         // where state.json and settings.json live
@@ -105,7 +107,16 @@ func (a *shelf) startMonitoring() {
 					a.monitorDrag(now)
 					a.tickUpdates(now)
 					if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
-						a.status, a.statusUntil = "", time.Time{}
+						a.status, a.statusUntil, a.statusShown, a.statusErr = "", time.Time{}, time.Time{}, false
+						if a.win != nil {
+							a.win.Invalidate()
+						}
+					}
+					// statusToast 给无期限状态（报错、启动提示）计时：
+					// 从首次渲染起 toastLife 后清掉。
+					if a.status != "" && a.statusUntil.IsZero() && !a.statusShown.IsZero() &&
+						now.After(a.statusShown.Add(toastLife)) {
+						a.status, a.statusShown, a.statusErr = "", time.Time{}, false
 						if a.win != nil {
 							a.win.Invalidate()
 						}
@@ -114,6 +125,17 @@ func (a *shelf) startMonitoring() {
 			}
 		}
 	}()
+}
+
+// toastStatus posts a transient status pill at the panel's bottom centre:
+// msg until the deadline (or toastLife from its first paint when until is
+// zero); isErr gives it the small red dot of error toasts.
+func (a *shelf) toastStatus(msg string, until time.Time, isErr bool) {
+	a.status = msg
+	a.statusUntil, a.statusShown, a.statusErr = until, time.Time{}, isErr
+	if a.win != nil {
+		a.win.Invalidate()
+	}
 }
 
 func (a *shelf) receive(data transfer.Data) error {
@@ -134,8 +156,7 @@ func (a *shelf) receive(data transfer.Data) error {
 	}
 	if err == nil {
 		a.received = true
-		a.status = "已放入 · 拖出后仍会保留"
-		a.statusUntil = time.Now().Add(3 * time.Second)
+		a.toastStatus("已放入 · 拖出后仍会保留", time.Now().Add(3*time.Second), false)
 	}
 	a.changed(err)
 	return err
@@ -154,22 +175,23 @@ func (a *shelf) changed(err error) {
 	}
 }
 func (a *shelf) report(err error) {
-	a.status = "操作失败：" + err.Error()
-	a.statusUntil = time.Time{}
+	a.toastStatus("操作失败："+err.Error(), time.Time{}, true)
 	log.Print(a.status)
 	if a.win != nil {
 		a.win.Invalidate()
 	}
 }
 
-// notice adds a startup message to the panel footer without hiding an
+// notice adds a startup message to the status toast without hiding an
 // earlier one (settings, shortcut and migration problems can all occur).
+// Notices are problems, so they show the error dot and live a little
+// longer than a confirmation.
 func (a *shelf) notice(msg string) {
 	log.Print(msg)
 	if a.status != "" {
 		a.status += "\n"
 	}
-	a.status += msg
+	a.toastStatus(a.status+msg, time.Now().Add(8*time.Second), true)
 }
 func (a *shelf) completed(r transfer.Result) {
 	a.ownDrag = false

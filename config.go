@@ -23,8 +23,8 @@ const (
 	peekStripPadH   = 40 // 探头/拖拽顶边条相对刘海的垂直外扩，单位 pt。
 	edgeLeaveDelay  = 350 * time.Millisecond
 	pointerInterval = 30 * time.Millisecond
-	panelAnimation  = 180 * time.Millisecond
-	panelWidth      = 440
+	panelAnimation  = 260 * time.Millisecond // 展开/收起 260ms 缓出（DESIGN.md「动效」）
+	panelWidth      = 520
 	panelHeight     = 400
 	// 设置窗口：普通有标题窗口的尺寸（设置内容超出时内部滚动）。
 	settingsWidth  = 460

@@ -45,7 +45,7 @@ func (a *shelf) removeExpired(now time.Time) {
 		a.dropStaleThumbnails()
 		a.selection.keepExisting(a.visibleItems())
 		if err == nil {
-			a.status, a.statusUntil = fmt.Sprintf("已自动清理 %d 项超过 %d 天的内容", n, days), now.Add(5*time.Second)
+			a.toastStatus(fmt.Sprintf("已自动清理 %d 项超过 %d 天的内容", n, days), now.Add(5*time.Second), false)
 		}
 		if a.win != nil {
 			a.win.Invalidate()

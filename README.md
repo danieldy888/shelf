@@ -125,12 +125,12 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Clear all items | Click Clear (清空) in the header — removes everything except pinned items (their saved images stay); file references never delete the original file |
 | Collapse the shelf | Press `⌃⌥Space`, `Esc`, the collapse button, or click anywhere outside it |
 | Turn on notch drop protection (optional) | Settings → General → Notch drop protection → Turn on… (or right-click the menu-bar icon and choose the notch drop protection item), then allow Shelf in System Settings; turn it on again after each update |
-| Check for updates | Right-click the menu-bar icon → 「检查更新…」; when a new version exists the menu shows 「安装更新（vX）…」 and the shelf footer says so — installing happens only when you choose it; the daily background check is toggled in Settings → General → 「自动检查更新」 |
+| Check for updates | Right-click the menu-bar icon → 「检查更新…」; when a new version exists the menu shows 「安装更新（vX）…」 and a toast pill in the shelf says so — installing happens only when you choose it; the daily background check is toggled in Settings → General → 「自动检查更新」 |
 | Quit Shelf | Right-click the menu-bar icon → Quit |
 
 ## Privacy
 
-Everything stays on your Mac: no telemetry, no cloud sync. The single exception is update checks: while enabled (default), Shelf queries this repository's latest GitHub release once shortly after launch and then once a day; the only data it sends is the app version in the standard User-Agent header (e.g. `MyGo/0.5.5 Shelf/1.0.8`) — no personal data, no identifiers. Turn it off in Settings → General → 「自动检查更新」 or with `"autoCheckUpdates": false` in `settings.json`; right-clicking the menu-bar icon → 「检查更新…」 always works on demand. When a new version is found, a notice appears in the shelf footer and an 「安装更新（vX）…」 item in the menu-bar menu — nothing downloads until you choose it. Text history is stored in plaintext at `~/Library/Application Support/Shelf/`, so avoid copying secrets you don't want recorded there.
+Everything stays on your Mac: no telemetry, no cloud sync. The single exception is update checks: while enabled (default), Shelf queries this repository's latest GitHub release once shortly after launch and then once a day; the only data it sends is the app version in the standard User-Agent header (e.g. `MyGo/0.5.5 Shelf/1.0.8`) — no personal data, no identifiers. Turn it off in Settings → General → 「自动检查更新」 or with `"autoCheckUpdates": false` in `settings.json`; right-clicking the menu-bar icon → 「检查更新…」 always works on demand. When a new version is found, a toast appears in the shelf and an 「安装更新（vX）…」 item in the menu-bar menu — nothing downloads until you choose it. Text history is stored in plaintext at `~/Library/Application Support/Shelf/`, so avoid copying secrets you don't want recorded there.
 
 ## Build from source
 
@@ -193,7 +193,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 
 - 刘海附近常驻透明接收区，悬停只改变胶囊画面，不再反复移动或缩放窗口
 - 悬停刘海即探头，单击探头展开成与硬件刘海融为一体的纯黑面板
-- 播放音乐时刘海保持干净：悬停探头是一枚紧凑播放器（封面、标题、播放/暂停），展开面板顶部是带上一首/下一首、进度与剩余时间的完整卡片
+- 播放音乐时刘海保持干净：悬停探头是封面加四条音频柱的小胶囊（取封面色的呼吸律动，单击展开）；展开面板顶部是带上一首/下一首、进度与剩余时间的完整卡片
 - 拖着内容靠近刘海时托盘会探头并展开；也可以直接拖到探头胶囊上松开
 - 拖拽中左右快速摇晃指针，光标旁会唤出一个悬浮篮子——拖到上面松开即暂存
 - 全局快捷键 ⌃⌥Space 随时显示或收起；点击托盘外任意处自动缩回刘海
@@ -219,14 +219,14 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | --- | --- |
 | 显示或收起托盘 | 按 `⌃⌥Space`、单击菜单栏图标，或悬停刘海后单击探头胶囊 |
 | 探头预览 | 空手把指针移到刘海上——它会向下鼓出；单击探头胶囊即展开 |
-| 控制正在播放 | 悬停刘海，探头胶囊是一枚紧凑播放器（封面、标题、播放/暂停）；展开面板顶部的卡片还有上一首/下一首、进度与剩余时间 |
+| 控制正在播放 | 展开面板顶部的卡片有播放/暂停、上一首/下一首、进度与剩余时间；悬停探头只显示封面与音频柱，单击展开 |
 | 正在播放开关 | 设置… → 托盘 → 「刘海显示正在播放」，或右键菜单栏图标 → 「正在播放」：启停探头播放器与面板卡片，立即生效 |
 | 暂存正在拖的内容 | 拖着任何东西靠近刘海触发区，托盘瞬间展开；也可以直接拖到探头刘海上松开 |
 | 唤出暂存篮 | 拖拽中左右快速摇晃指针，光标旁出现篮子卡片；拖到上面松开即可 |
 | 从 Finder 或服务菜单收进托盘 | 在 Finder 右键选中的文件或文件夹 → 服务/快速操作 → “添加到 Shelf”；或在任意应用选中文字 → 应用菜单 → 服务 → “添加到 Shelf” |
 | 拖出项目 | 从托盘中拖住该项，到目标应用中松开 |
 | 把文字复制回来 | 单击该文字项，然后在任意应用中粘贴（`⌘V`） |
-| 移除项目 | 点击该项右侧的 ×；文件引用不会删除原文件 |
+| 移除项目 | 右键该项目 → 「移除」（可多选一次移除）；文件引用不会删除原文件 |
 | 选中多个项目 | 按住 `⌘` 单击逐个选，按住 `⇧` 单击选一段 |
 | 一次拖出多个 | 选中后拖住其中任意一个 |
 | 更多操作 | 右键项目：打开、在 Finder 中显示、快速查看、隔空投送、复制、置顶、移除 |

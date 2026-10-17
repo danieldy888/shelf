@@ -93,15 +93,19 @@ func TestClipCaptureHonoursExclusions(t *testing.T) {
 	}
 }
 
-// 剪贴板标签只显示 Source 为 clipboard 的条目；托盘标签显示全部。
+// 剪贴板标签只显示 Source 为 clipboard 的条目；托盘标签排除未置顶的
+// 剪贴板文字（它只属于剪贴板标签），但保留文件、图片与置顶文字。
 func TestClipboardTabFiltersToCaptures(t *testing.T) {
 	a, view, _ := clipShelf(t, "从剪贴板来的")
 	if err := a.store.AddText("拖进来的文字"); err != nil {
 		t.Fatal(err)
 	}
 	view.Frame()
-	if !view.HasText("拖进来的文字") || !view.HasText("从剪贴板来的") {
-		t.Fatal("tray tab should show everything")
+	if !view.HasText("拖进来的文字") {
+		t.Fatal("tray tab should show dropped text")
+	}
+	if view.HasText("从剪贴板来的") {
+		t.Fatal("tray tab showed an unpinned clipboard capture")
 	}
 	a.setTab(tabClipboard)
 	view.Frame()
@@ -193,19 +197,31 @@ func TestClipboardPinnedFirstAndPinMenu(t *testing.T) {
 // 托盘页同样把置顶项排最前（同组内保持原顺序），⇧ 范围选择跟着显示顺序走；
 // 取消置顶后回到原来的位置。
 func TestTrayPinnedFirst(t *testing.T) {
-	a, view, _ := clipShelf(t, "alpha top", "beta mid", "gamma bottom")
+	// 托盘标签排除未置顶的剪贴板文字，所以钉住那条剪贴板文字后它出现
+	// 在托盘最前；拖入的两条文字保持其后。
+	a, view, _ := clipShelf(t)
+	for _, txt := range []string{"alpha top", "beta mid"} {
+		if err := a.store.AddText(txt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.store.AddClipText("gamma bottom", "com.example.Source"); err != nil {
+		t.Fatal(err)
+	}
 	view.Frame()
 	if a.tab != tabTray {
 		t.Fatal("expected the tray tab")
 	}
-	if err := view.RightClick("gamma bottom"); err != nil {
+	// Items are newest-first: beta mid, alpha top; the unpinned capture
+	// stays off the tray.
+	if got := clipTexts(a); !slices.Equal(got, []string{"beta mid", "alpha top"}) {
+		t.Fatalf("unpinned clipboard text must stay off the tray: %v", got)
+	}
+	if err := a.store.SetPinned(a.store.Items[0].ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := view.ChooseMenuItem("置顶"); err != nil {
-		t.Fatalf("pin item: %v (%v)", err, view.Menu())
-	}
 	view.Frame()
-	if got := clipTexts(a); !slices.Equal(got, []string{"gamma bottom", "alpha top", "beta mid"}) {
+	if got := clipTexts(a); !slices.Equal(got, []string{"gamma bottom", "beta mid", "alpha top"}) {
 		t.Fatalf("pinned item did not come first on the tray tab: %v", got)
 	}
 
@@ -213,7 +229,7 @@ func TestTrayPinnedFirst(t *testing.T) {
 	if err := view.Click("gamma bottom"); err != nil {
 		t.Fatal(err)
 	}
-	if err := view.ClickWith(ui.Shift, "beta mid"); err != nil {
+	if err := view.ClickWith(ui.Shift, "alpha top"); err != nil {
 		t.Fatal(err)
 	}
 	if n := a.selection.count(); n != 3 {
@@ -228,8 +244,9 @@ func TestTrayPinnedFirst(t *testing.T) {
 		t.Fatalf("unpin item: %v (%v)", err, view.Menu())
 	}
 	view.Frame()
-	if got := clipTexts(a); !slices.Equal(got, []string{"alpha top", "beta mid", "gamma bottom"}) {
-		t.Fatalf("unpinned item did not go back: %v", got)
+	// 取消置顶后剪贴板文字回到剪贴板标签，托盘又只剩拖入的两条。
+	if got := clipTexts(a); !slices.Equal(got, []string{"beta mid", "alpha top"}) {
+		t.Fatalf("unpinned capture did not leave the tray tab: %v", got)
 	}
 }
 
@@ -329,8 +346,9 @@ func TestEscapeClearsSearchBeforeHiding(t *testing.T) {
 	if a.visible {
 		t.Fatal("a second Esc did not collapse the shelf")
 	}
-	if !slices.Equal(clipTexts(a), []string{"find me"}) {
-		t.Fatal("clearing the search dropped the capture from the list")
+	// 收起会重置回托盘标签；捕获本身仍在存储里。
+	if a.store == nil || len(a.store.Items) != 1 || a.store.Items[0].Text != "find me" {
+		t.Fatal("clearing the search dropped the capture from the store")
 	}
 }
 
