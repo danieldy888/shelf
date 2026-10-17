@@ -4,8 +4,12 @@ package main
 
 import (
 	"bytes"
+	"image"
+	_ "image/jpeg" // artwork formats players publish
 	"image/png"
 	"time"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/egoist/mygo/ui"
 
@@ -48,13 +52,14 @@ type nowPlayingModule struct {
 
 	// snap is the last state the UI was invalidated for; comparing new
 	// states against it keeps the redraw rate tied to visible changes.
-	snap      npSnap
-	art       *ui.Bitmap // artwork or app icon of the current track
-	artIsIcon bool       // art is the app icon fallback, not the cover
-	artColor  ui.Color   // the artwork's average colour: EQ bars and glow
-	glow      *ui.Bitmap // precomputed radial glow in that colour
-	artDone   string     // artID decoded once (success or undecodable blob)
-	iconFor   string     // artID whose app-icon fallback was looked up
+	snap       npSnap
+	art        *ui.Bitmap // artwork or app icon of the current track
+	artIsIcon  bool       // art is the app icon fallback, not the cover
+	ctlPressed bool       // a transport button took this frame's press
+	artColor   ui.Color   // the artwork's average colour: EQ bars and glow
+	glow       *ui.Bitmap // precomputed radial glow in that colour
+	artDone    string     // artID decoded once (success or undecodable blob)
+	iconFor    string     // artID whose app-icon fallback was looked up
 
 	// iconPNGs caches app icons by bundle id: the fallback is looked up
 	// once per app, not once per track.
@@ -240,24 +245,37 @@ func (m *nowPlayingModule) artState() int {
 // decodeArt decodes the artwork of a newly seen track once, on the main
 // thread (the view's thread), and drops the previous track's bitmap. A
 // late line that finally carries the cover replaces an earlier app-icon
-// fallback for the same track. rememberArt computes the average colour
-// and glow bitmap once per artwork.
+// fallback for the same track. Players publish their own encoding (NetEase
+// sends WebP), so any registered image format is accepted; artwork that
+// cannot be decoded falls back to the app icon instead of a blank glyph.
+// rememberArt computes the average colour and glow bitmap once per artwork.
 func (m *nowPlayingModule) decodeArt(st mac.NowPlayingState) {
 	if st.ArtID == "" || st.ArtID == m.artDone {
 		return
 	}
-	if len(st.Art) > 0 {
-		m.artDone = st.ArtID
+	if m.art != nil && !(m.artIsIcon && m.iconFor == st.ArtID) {
+		// A new track: never show the previous track's picture.
 		m.forgetArt()
-		if img, err := png.Decode(bytes.NewReader(st.Art)); err == nil {
+	}
+	if len(st.Art) > 0 {
+		if img, _, err := image.Decode(bytes.NewReader(st.Art)); err == nil {
+			m.artDone = st.ArtID
+			m.forgetArt()
 			m.rememberArt(img, false)
+			return
 		}
+		if st.App == "" {
+			// Retry once a line names the app whose icon can stand in.
+			return
+		}
+		m.artDone = st.ArtID
+	} else if !st.ArtMissing {
+		// The helper has not given up on the artwork yet.
 		return
 	}
-	if !st.ArtMissing || st.App == "" || m.iconFor == st.ArtID {
-		// The helper has not given up on the artwork yet, this line cannot
-		// name an app to draw, or the fallback is already in place. A later
-		// line naming the bundle must still get its chance.
+	if st.App == "" || m.iconFor == st.ArtID {
+		// This line cannot name an app to draw, or the fallback is already
+		// in place. A later line naming the bundle must still get its chance.
 		return
 	}
 	m.iconFor = st.ArtID

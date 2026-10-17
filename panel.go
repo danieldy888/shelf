@@ -545,8 +545,16 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 // is loaded, 「松开放入」 while a drag is over it, otherwise the small
 // downward chevron.
 func (a *shelf) peekView(c *ui.Context, shellW, shellH float32, over bool) {
-	if !over && !a.dragging && a.np != nil && a.np.peekPlayer(c, shellW, shellH) {
-		return
+	if !over && a.np != nil && a.np.showsPlayer() {
+		// The player is laid out at its final size and revealed by the
+		// growing shell, so it never squeezes during the animation.
+		pw, ph := a.playerSize()
+		clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+		drew := false
+		clip.Children(func() { drew = a.np.peekPlayer(c, pw, ph, a.peekProgress) })
+		if drew {
+			return
+		}
 	}
 	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).
 		Justify(ui.End).AlignItems(ui.Center).Label("展开 Shelf")

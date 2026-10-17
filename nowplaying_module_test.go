@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"image"
 	"image/color"
@@ -181,24 +182,34 @@ func TestNowPlayingCardDrawsTrackAndControls(t *testing.T) {
 	}
 }
 
-func TestPeekSizeWidensForATrack(t *testing.T) {
+func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}, notchW: 180, notchH: 32}
 	if w, h := a.peekSize(); w != 220 || h != 44 {
-		t.Fatalf("idle peek pill = %.0fx%.0f, want 220x44 (notch +40/+12)", w, h)
+		t.Fatalf("idle peek = %.0fx%.0f, want 220x44 (notch +40/+12)", w, h)
 	}
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T"}}
-	if w, h := a.peekSize(); w != 300 || h != 38 {
-		t.Fatalf("the music peek pill must be notch +120/+6 = 300x38, got %.0fx%.0f", w, h)
+	if w, h := a.peekSize(); w != npPlayerW || h != 32+npPlayerBody {
+		t.Fatalf("with a track the notch must grow into the %dx%d player, got %.0fx%.0f", npPlayerW, 32+npPlayerBody, w, h)
 	}
-	// Switching the feature off collapses the pill again even before the
-	// next tick stops the helper.
+	// The resident strip already holds the player, so hovering never
+	// resizes the native window.
+	if f := a.desiredFrame(); f.Width < npPlayerW || f.Height < 32+npPlayerBody {
+		t.Fatalf("idle strip %dx%d cannot hold the player", f.Width, f.Height)
+	}
+	// A file drag needs the plain drop target, and switching the feature
+	// off collapses the player even before the next tick stops the helper.
+	a.dragging = true
+	if w, _ := a.peekSize(); w != 220 {
+		t.Fatalf("a drag must show the plain drop pill, got %.0f", w)
+	}
+	a.dragging = false
 	a.settings.IslandNowPlaying = false
 	if w, _ := a.peekSize(); w != 220 {
-		t.Fatalf("the pill must shrink when now playing is off, got %.0f", w)
+		t.Fatalf("the player must close when now playing is off, got %.0f", w)
 	}
 }
 
-func TestNowPlayingPeekPlayerIsClickToExpand(t *testing.T) {
+func TestHoverPlayerControlsWorkInPlace(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{
@@ -213,16 +224,23 @@ func TestNowPlayingPeekPlayerIsClickToExpand(t *testing.T) {
 	a.np = s.mod
 	a.modules = []module{s.mod}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	// The design's pill carries no text and no controls: artwork plus EQ
-	// bars, and a press anywhere on it expands the shelf.
-	if _, ok := view.Find("暂停"); ok {
-		t.Fatal("the peek pill must not carry a play/pause button")
+	if !view.HasText("夜曲") {
+		t.Fatal("the hover player must show the track title")
 	}
-	if err := view.Click("展开 Shelf"); err != nil {
-		t.Fatalf("the peek pill must be one expand affordance: %v", err)
+	// The transport works without opening the shelf.
+	if err := view.Click("暂停"); err != nil {
+		t.Fatalf("the hover player must offer play/pause: %v", err)
+	}
+	s.expectCommand(t, "toggle")
+	if a.visible {
+		t.Fatal("a transport press must not open the shelf")
+	}
+	// A press elsewhere on the player opens the shelf.
+	if err := view.Click("夜曲"); err != nil {
+		t.Fatal(err)
 	}
 	if !a.visible {
-		t.Fatal("a press on the peek pill must expand the panel")
+		t.Fatal("a press on the player outside its buttons must expand the panel")
 	}
 }
 
@@ -246,8 +264,7 @@ func TestPeekPressExpandsAndSendsNoCommand(t *testing.T) {
 	unregisterKey = func(string) {}
 	defer func() { registerKey, unregisterKey = origReg, origUnreg }()
 	// WindowServer delivered the press to the menu bar (inside=false): the
-	// observer expands the pill it sits on and must not send anything to
-	// the helper — the pill has no transport buttons.
+	// player never saw it, so the observer expands and sends nothing.
 	pill := a.peekPillRect()
 	a.mouseDown(false, mygo.Point{X: pill.X + pill.Width - 12, Y: pill.Y + pill.Height/2})
 	if !a.visible {
@@ -312,6 +329,20 @@ func TestNowPlayingCardHiddenWithoutTrack(t *testing.T) {
 	}
 }
 
+// NetEase publishes its covers as WebP; they must show as the cover, not
+// fall through to a glyph.
+func TestNowPlayingDecodesWebPArtwork(t *testing.T) {
+	webp, err := base64.StdEncoding.DecodeString("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &nowPlayingModule{}
+	m.decodeArt(mac.NowPlayingState{ArtID: "w", Art: webp, App: "com.netease.163music"})
+	if m.art == nil || m.artIsIcon || m.artDone != "w" {
+		t.Fatalf("WebP artwork: art=%v icon=%v done=%q, want the decoded cover", m.art, m.artIsIcon, m.artDone)
+	}
+}
+
 func TestNowPlayingDecodeArtOncePerTrack(t *testing.T) {
 	m := &nowPlayingModule{}
 	pngBytes := testPNG(t)
@@ -328,11 +359,11 @@ func TestNowPlayingDecodeArtOncePerTrack(t *testing.T) {
 	if m.art != bitmap {
 		t.Fatal("the same track must reuse the decoded bitmap")
 	}
-	// A new track with a broken blob drops the old artwork and is not
-	// retried.
-	m.decodeArt(mac.NowPlayingState{ArtID: "b", Art: []byte("not a png")})
-	if m.art != nil || m.artDone != "b" {
-		t.Fatalf("a broken blob must clear the art and be remembered: art=%v tried=%q", m.art, m.artDone)
+	// A new track whose blob cannot be decoded drops the old artwork. Until
+	// a line names the app it is retried rather than latched.
+	m.decodeArt(mac.NowPlayingState{ArtID: "b", Art: []byte("not an image")})
+	if m.art != nil || m.artDone == "b" {
+		t.Fatalf("an undecodable blob without an app must clear the art and stay retryable: art=%v tried=%q", m.art, m.artDone)
 	}
 	// The helper declares the artwork missing (after its grace window) but
 	// no line has named an app yet: nothing to draw and nothing is latched,

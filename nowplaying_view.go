@@ -14,28 +14,31 @@ import (
 )
 
 // The now-playing module's drawing lives here; nowplaying_module.go owns
-// the helper's state. Two surfaces: the peek pill under the notch (cover +
-// equalizer bars in the cover's colour, no controls — a click expands the
-// shelf) and the tray tab's card (56pt cover, title/「artist · app」,
-// ⏮ ⏯ ⏭, elapsed/remaining and a white-on-fill3 progress track), with the
+// the helper's state. Two surfaces: the hover player that grows out of the
+// notch (cover, title, artist, equalizer, progress and transport — the
+// notch itself becomes the player, as Droppy does) and the tray tab's card
+// (56pt cover, title/「artist · app」, ⏮ ⏯ ⏭, elapsed/remaining), with the
 // cover's average colour glowing behind it.
 
-// Peek geometry (DESIGN.md「刘海悬停」): the pill is the notch +120pt wide
-// and +6pt tall; content is a 22pt cover at the left and four EQ bars at
-// the right, 12pt padding on both sides.
+// Hover player geometry: at least 400pt wide (the notch +220), and
+// npPlayerBody tall below the notch.
 const (
-	npPeekExtraW = 120
-	npPeekExtraH = 6
-	npPeekPad    = 12
-	npPeekArt    = 22
-	npPeekArtR   = 6
-	eqBars       = 4
-	eqBarW       = 3
-	eqBarGap     = 2
-	eqBarR       = 1.5
-	eqMaxH       = 14
-	eqPausedH    = 4 // 暂停时静止为低矮等高
-	eqStillH     = 8 // 减少动态效果时的静止高度
+	npPlayerW      = 400
+	npPlayerMinX   = 220 // extra width beyond the notch
+	npPlayerBody   = 140
+	npPlayerPad    = 16
+	npPlayerArt    = 52
+	npPlayerArtR   = 11
+	npPlayerCtl    = 32
+	npPlayerPlay   = 40
+	npPlayerCtlGap = 18
+	eqBars         = 4
+	eqBarW         = 3
+	eqBarGap       = 2
+	eqBarR         = 1.5
+	eqMaxH         = 14
+	eqPausedH      = 4 // 暂停时静止为低矮等高
+	eqStillH       = 8 // 减少动态效果时的静止高度
 )
 
 // Card geometry (DESIGN.md「展开面板」正在播放行)。
@@ -71,27 +74,48 @@ var (
 	nextFill    = fillSymbol(`<path d="M13 6v12l8-6zM4 6v12l8-6z"/>`)
 )
 
-// peekPlayer draws the peeking pill's now-playing content: the small cover
-// at the left and the equalizer bars at the right in the cover's average
-// colour. There are no buttons — a press anywhere expands the shelf. It
-// reports whether it drew anything.
-func (m *nowPlayingModule) peekPlayer(c *ui.Context, w, h float32) bool {
+// showsPlayer reports whether hovering the notch shows the player rather
+// than the plain bulge: a track is loaded, the setting is on and no file
+// drag is asking for the notch's drop target.
+func (m *nowPlayingModule) showsPlayer() bool {
+	_, ok := m.track()
+	return ok && m.host.settings.IslandNowPlaying && !m.host.dragging
+}
+
+// peekPlayer draws the hover player at its final size w×h; the caller
+// clips it to the growing shell and passes the peek progress as k, so the
+// layout never squeezes while the notch opens. The transport buttons work
+// in place; a press anywhere else opens the shelf. It reports whether it
+// drew anything.
+func (m *nowPlayingModule) peekPlayer(c *ui.Context, w, h, k float32) bool {
 	st, ok := m.track()
-	if !ok || !m.host.settings.IslandNowPlaying || m.host.dragging {
+	if !ok || !m.showsPlayer() {
 		return false
 	}
-	pill := ui.Row(c.Key("np-peek")).Width(w).Height(h).
-		Padding(0, npPeekPad, 0, npPeekPad).AlignItems(ui.Center).Label("展开 Shelf")
-	pill.Children(func() {
-		if m.art != nil {
-			ui.Image(c.Key("np-peek-art"), m.art).Size(npPeekArt, npPeekArt).Radius(npPeekArtR).Fit(ui.Cover)
-		} else {
-			ui.Icon(c.Key("np-peek-glyph"), musicSymbol).Size(npPeekArt, npPeekArt).TextColor(ink3)
-		}
-		ui.Box(c).Grow(1)
-		m.eqBars(c, st.Playing)
+	m.ctlPressed = false
+	player := ui.Column(c.Key("np-peek")).Width(w).Height(h).
+		Padding(0, npPlayerPad, 12, npPlayerPad).Gap(10).Opacity(min(max(k*k, 0), 1)).Label("展开 Shelf")
+	player.Children(func() {
+		// The camera housing sits in the top band; content starts below it.
+		ui.Box(c.Key("np-peek-notch")).Height(float32(max(0, m.host.topInset-2)))
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			m.coverArt(c, "np-peek-art", npPlayerArt, npPlayerArtR)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
+				ui.Text(c.Key("np-peek-title"), st.Title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
+				if meta := m.cardMeta(st); meta != "" {
+					ui.Text(c.Key("np-peek-artist"), meta).SingleLine().FontSize(11).TextColor(ink2)
+				}
+			})
+			m.eqBars(c, st.Playing)
+		})
+		m.progressRow(c, st, time.Now())
+		ui.Row(c.Key("np-peek-ctl")).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(npPlayerCtlGap).Children(func() {
+			m.controlButton(c, "np-peek-prev", prevFill, "上一首", mac.NPPrevious, npPlayerCtl, 18)
+			m.controlButton(c, "np-peek-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, npPlayerPlay, 24)
+			m.controlButton(c, "np-peek-next", nextFill, "下一首", mac.NPNext, npPlayerCtl, 18)
+		})
 	})
-	if pill.Clicked() {
+	if player.Clicked() && !m.ctlPressed {
 		m.host.show(false)
 	}
 	return true
@@ -153,19 +177,24 @@ func (m *nowPlayingModule) card(c *ui.Context) bool {
 	return true
 }
 
-// cardArt is the card's 56pt cover: artwork rounded and shadowed, the app
-// icon as-is when no cover exists, or a music glyph.
+// cardArt is the card's 56pt cover.
 func (m *nowPlayingModule) cardArt(c *ui.Context) {
+	m.coverArt(c, "np-art", npCardArt, npCardArtR)
+}
+
+// coverArt draws the artwork rounded and shadowed, the app icon as-is when
+// no cover exists, or a music glyph.
+func (m *nowPlayingModule) coverArt(c *ui.Context, key string, size, radius float32) {
 	switch {
 	case m.art != nil && !m.artIsIcon:
-		ui.Image(c.Key("np-art"), m.art).Size(npCardArt, npCardArt).Radius(npCardArtR).Fit(ui.Cover).
+		ui.Image(c.Key(key), m.art).Size(size, size).Radius(radius).Fit(ui.Cover).
 			Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.5))
 	case m.art != nil:
 		// The app icon already carries its own rounded shape.
-		ui.Image(c.Key("np-art"), m.art).Size(npCardArt, npCardArt)
+		ui.Image(c.Key(key), m.art).Size(size, size)
 	default:
-		ui.Row(c.Key("np-art-icon")).Size(npCardArt, npCardArt).Radius(npCardArtR).Center().Background(fill1).Children(func() {
-			ui.Icon(c, musicSymbol).Size(24, 24).TextColor(ink3)
+		ui.Row(c.Key(key+"-icon")).Size(size, size).Radius(radius).Center().Background(fill1).Children(func() {
+			ui.Icon(c, musicSymbol).Size(size*0.43, size*0.43).TextColor(ink3)
 		})
 	}
 }
@@ -219,6 +248,7 @@ func (m *nowPlayingModule) controlButton(c *ui.Context, key string, icon *ui.SVG
 		ui.Icon(c, icon).Size(glyph, glyph).TextColor(ink)
 	})
 	if b.Clicked() {
+		m.ctlPressed = true
 		m.send(command)
 	}
 }

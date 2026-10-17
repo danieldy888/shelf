@@ -22,7 +22,12 @@ func (a *shelf) place(p mygo.Point) {
 	a.notchX, a.notchY, a.notchW, a.notchH, a.hasNotch = nx, ny, nw, nh, hasNotch
 	a.topInset = nh
 	a.h = min(panelHeight, max(240, d.WorkArea.Height-24))
+	// The panel, the peek pill and the strip share one axis: the notch's
+	// centre. A different centre made the expansion jump sideways.
 	a.x = d.Bounds.X + (d.Bounds.Width-panelWidth)/2
+	if a.notchW > 0 {
+		a.x = a.notchX + a.notchW/2 - panelWidth/2
+	}
 	a.y = d.Bounds.Y
 	if a.win != nil {
 		a.syncWindowFrame()
@@ -60,10 +65,15 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.visible || a.progress > 0.01 {
 		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 	}
-	// 常驻窄条必须容下最大的探头胶囊（有音乐时的 +120pt），曲目来去
-	// 不引起原生窗口缩放。
-	w := max(max(180, a.notchW)+npPeekExtraW, notchTriggerWidth)
-	h := max(max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
+	// The resident strip holds the largest peek shape for the current
+	// state, so hovering only redraws; it resizes when a track comes or
+	// goes, while nothing is drawn.
+	pw, ph := a.peekSize()
+	if a.np != nil && a.np.hasTrack() && a.settings.IslandNowPlaying {
+		pw, ph = a.playerSize()
+	}
+	w := max(int(pw+0.5), notchTriggerWidth)
+	h := max(int(ph+0.5), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
 
@@ -98,18 +108,21 @@ func (a *shelf) windowGeometryChanged() {
 	a.syncWindowFrame()
 }
 
-// peekSize is the peek pill's resting size (DESIGN.md「刘海悬停」): with a
-// track loaded the capsule is the notch +120 wide and +6 tall, holding the
-// cover and equalizer bars; without one it bulges 12pt down and carries a
-// chevron. The idle strip is always wide enough for both, so a track
-// coming or going never resizes the resident window.
+// peekSize is the hover shape: the now-playing player while a track is
+// loaded (the notch grows into it, Droppy style), otherwise a 12pt bulge
+// carrying a chevron.
 func (a *shelf) peekSize() (w, h float32) {
-	baseW := float32(max(180, a.notchW))
-	baseH := float32(max(32, a.notchH))
-	if a.np != nil && a.np.hasTrack() {
-		return baseW + npPeekExtraW, baseH + npPeekExtraH
+	if a.np != nil && a.np.showsPlayer() {
+		return a.playerSize()
 	}
-	return baseW + 40, baseH + 12
+	return float32(max(180, a.notchW)) + 40, float32(max(32, a.notchH)) + 12
+}
+
+// playerSize is the hover player's size: npPlayerW wide (wider on a wide
+// notch) and npPlayerBody tall below the notch.
+func (a *shelf) playerSize() (w, h float32) {
+	baseW := float32(max(180, a.notchW))
+	return max(baseW+npPlayerMinX, npPlayerW), float32(max(32, a.notchH)) + npPlayerBody
 }
 
 // shellSize is the one interpolation the shell Path and the content layout
@@ -150,8 +163,13 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// The capsule is drawn over the menu bar's empty centre. WindowServer
 	// often gives that press to the menu bar or the app underneath, so the
 	// overlay paints a "click to expand" pill that never receives the click.
-	// A press on the visible pill expands either way.
+	// A press on the visible pill expands either way — except a press the
+	// hover player received itself: its transport buttons handle that, and
+	// the player opens the shelf for presses elsewhere on it.
 	if a.peeking && !a.visible && (inside || a.overPeekPill(p)) {
+		if inside && a.np != nil && a.np.showsPlayer() {
+			return
+		}
 		a.show(false)
 		return
 	}
