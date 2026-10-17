@@ -333,15 +333,18 @@ func (a *shelf) panelBody(c *ui.Context, over bool) {
 				break
 			}
 		}
-		a.stagger(c, ui.Row(c.Key("sec")).Height(panelSecLineH).AlignItems(ui.Center).FillWidth().
-			Margin(panelSecTop, 2, panelSecBottom, 2), 2).Children(func() {
-			ui.Text(c, fmt.Sprintf("%d 项", len(list))).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Grow(1)
-			hint := "⌘ / ⇧ 多选 · 空格预览"
-			if n := a.selection.count(); n > 1 {
-				hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
-			}
-			ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3)
-		})
+		// 区块标题行只在有内容时出现。
+		if len(list) > 0 {
+			a.stagger(c, ui.Row(c.Key("sec")).Height(panelSecLineH).AlignItems(ui.Center).FillWidth().
+				Margin(panelSecTop, 2, panelSecBottom, 2), 2).Children(func() {
+				ui.Text(c, fmt.Sprintf("%d 项", len(list))).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Grow(1)
+				hint := "⌘ / ⇧ 多选 · 空格预览"
+				if n := a.selection.count(); n > 1 {
+					hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
+				}
+				ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3)
+			})
+		}
 	}
 	if a.tab == tabClipboard {
 		a.clipboardBody(c, list)
