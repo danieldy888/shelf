@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,7 +145,7 @@ func TestTrayMenuOffersSettings(t *testing.T) {
 	for _, it := range a.trayMenu().Items() {
 		labels = append(labels, it.Label)
 	}
-	for _, want := range []string{"显示 / 收起 Shelf", "自动清理", "剪贴板记录", "刘海岛", "设置…", "退出 Shelf"} {
+	for _, want := range []string{"显示 / 收起 Shelf", "自动清理", "剪贴板记录", "正在播放", "设置…", "退出 Shelf"} {
 		if !slices.Contains(labels, want) {
 			t.Fatalf("tray menu lacks %q; labels=%v", want, labels)
 		}
@@ -166,7 +167,7 @@ func TestChoiceSegments(t *testing.T) {
 func TestSettingsViewShowsSections(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	_, view := newSettingsShelf(t)
-	for _, s := range []string{"通用", "剪贴板", "存放", "刘海岛", "快捷键", "开机时自动启动", "记录剪贴板", "保留条数", "自动清理", "正在播放", "电量与充电", "音量", "显示 / 收起", "剪贴板搜索", "打开数据文件夹"} {
+	for _, s := range []string{"通用", "剪贴板", "存放", "正在播放", "快捷键", "开机时自动启动", "记录剪贴板", "保留条数", "自动清理", "探头播放器与面板卡片", "显示 / 收起", "剪贴板搜索", "打开数据文件夹"} {
 		if !view.HasText(s) {
 			t.Fatalf("settings view missing %q; texts=%v", s, view.Texts())
 		}
@@ -192,15 +193,15 @@ func TestSettingsViewToggleAppliesAndSaves(t *testing.T) {
 	}
 }
 
-func TestSettingsViewIslandToggleSaves(t *testing.T) {
+func TestSettingsViewNowPlayingToggleSaves(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, view := newSettingsShelf(t)
-	clickVisible(t, view, "音量")
-	if a.settings.IslandVolume {
-		t.Fatal("island volume toggle did not apply")
+	clickVisible(t, view, "探头播放器与面板卡片")
+	if a.settings.IslandNowPlaying {
+		t.Fatal("now-playing toggle did not apply")
 	}
 	saved, _ := settings.Load(a.dataDir)
-	if saved.IslandVolume || !saved.IslandNowPlaying || !saved.IslandBattery {
+	if saved.IslandNowPlaying {
 		t.Fatalf("saved flags wrong: %+v", saved)
 	}
 }
@@ -441,6 +442,56 @@ func TestAppVersionFallback(t *testing.T) {
 	appVersionProbe = func() string { return "" }
 	if v := appVersion(); v == "" {
 		t.Fatal("empty version")
+	}
+}
+
+// The 正在播放 tray item saves its setting and is disabled while
+// settings.json could not be read (so a broken file is never overwritten).
+func TestNowPlayingMenuSavesToggle(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir, settings: settings.Default()}
+	var item *mygo.MenuItem
+	for _, it := range a.trayMenu().Items() {
+		if it.Label == "正在播放" {
+			item = it
+		}
+	}
+	if item == nil || !item.Checked {
+		t.Fatal("the tray menu must offer a checked 正在播放 item")
+	}
+	item.Click(nil, nil)
+	saved, err := settings.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.IslandNowPlaying || a.settings.IslandNowPlaying {
+		t.Fatal("unchecking 正在播放 must save islandNowPlaying=false and follow it")
+	}
+	// A rebuilt menu shows the saved state.
+	var again *mygo.MenuItem
+	for _, it := range a.trayMenu().Items() {
+		if it.Label == "正在播放" {
+			again = it
+		}
+	}
+	if again == nil || again.Checked {
+		t.Fatal("a rebuilt menu must show the saved off state")
+	}
+	// A broken settings file is never overwritten: the item is disabled
+	// and its click must not write anything.
+	broken := &shelf{dataDir: t.TempDir(), settingsBroken: true, settings: settings.Default()}
+	for _, it := range broken.trayMenu().Items() {
+		if it.Label != "正在播放" {
+			continue
+		}
+		if !it.Disabled {
+			t.Fatal("the 正在播放 item must be disabled while settings are broken")
+		}
+		it.Click(nil, nil)
+	}
+	if _, err := os.Stat(filepath.Join(broken.dataDir, settings.FileName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("broken settings were written: %v", err)
 	}
 }
 

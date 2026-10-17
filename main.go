@@ -143,12 +143,6 @@ func (a *shelf) ready(show bool) {
 	}
 	a.applyClipboardHistory()
 	a.modules = append(a.modules, &retentionModule{host: a})
-	// 刘海岛状态源：有电池的机器才注册电池模块（台式机永远没有）；
-	// 音量跟随默认输出设备，没有可控制设备时保持沉默。
-	if mac.ReadPower().HasBattery {
-		a.modules = append(a.modules, newBatteryModule(a))
-	}
-	a.modules = append(a.modules, newVolumeModule(a))
 	a.np = &nowPlayingModule{host: a}
 	a.modules = append(a.modules, a.np)
 	_, a.dragSerial = mac.DragState()
@@ -209,7 +203,10 @@ func (a *shelf) trayMenu() *mygo.Menu {
 		guard,
 		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
 		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
-		{Label: "刘海岛", Type: mygo.MenuItemSubmenu, Submenu: a.islandMenu()},
+		{Label: "正在播放", Type: mygo.MenuItemCheckbox, Checked: a.settings.IslandNowPlaying, Disabled: a.settingsBroken,
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = !s.IslandNowPlaying })
+			}},
 		mygo.Separator(),
 		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		a.updateMenu(),
@@ -274,27 +271,11 @@ func (a *shelf) clipboardMenu() []*mygo.MenuItem {
 	return items
 }
 
-// islandMenu offers the three island sources as live check items. A
-// provider reads its setting on every tick, so a toggle applies at once;
-// the menu is disabled while settings.json could not be read, so a broken
-// file is never overwritten.
-func (a *shelf) islandMenu() []*mygo.MenuItem {
-	check := func(label string, checked bool, flip func(*settings.Settings)) *mygo.MenuItem {
-		return &mygo.MenuItem{
-			Label: label, Type: mygo.MenuItemCheckbox, Checked: checked, Disabled: a.settingsBroken,
-			Click: func(*mygo.MenuItem, *mygo.Window) { a.setIsland(flip) },
-		}
-	}
-	return []*mygo.MenuItem{
-		check("正在播放", a.settings.IslandNowPlaying, func(s *settings.Settings) { s.IslandNowPlaying = !s.IslandNowPlaying }),
-		check("电量与充电", a.settings.IslandBattery, func(s *settings.Settings) { s.IslandBattery = !s.IslandBattery }),
-		check("音量", a.settings.IslandVolume, func(s *settings.Settings) { s.IslandVolume = !s.IslandVolume }),
-	}
-}
-
-// setIsland applies one island toggle: the change is saved first and only
-// then applied, so a failed write leaves the running setting unchanged.
-func (a *shelf) setIsland(mutate func(*settings.Settings)) {
+// setNowPlaying saves the now-playing preference; the module reads its
+// setting on every tick, so a change applies at once without a restart.
+// Disabled while settings.json could not be read, so a broken file is
+// never overwritten.
+func (a *shelf) setNowPlaying(mutate func(*settings.Settings)) {
 	next := a.settings
 	mutate(&next)
 	a.applySettings(next)

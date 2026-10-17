@@ -3,6 +3,7 @@
 package main
 
 import (
+	"image"
 	"os"
 	"testing"
 	"time"
@@ -251,4 +252,34 @@ func TestBasketPendingCloseRendersAway(t *testing.T) {
 	if a.basket.shown {
 		t.Fatal("the pending close never took effect")
 	}
+}
+
+// opaqueBounds is the bounding box of the non-transparent pixels; the gated
+// smoke tests use it to size up real-window screenshots.
+func opaqueBounds(img image.Image) image.Rectangle {
+	b := img.Bounds()
+	box := image.Rectangle{}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if _, _, _, alpha := img.At(x, y).RGBA(); alpha > 0 {
+				if box.Empty() {
+					box = image.Rect(x, y, x+1, y+1)
+					continue
+				}
+				if x < box.Min.X {
+					box.Min.X = x
+				}
+				if y < box.Min.Y {
+					box.Min.Y = y
+				}
+				if x+1 > box.Max.X {
+					box.Max.X = x + 1
+				}
+				if y+1 > box.Max.Y {
+					box.Max.Y = y + 1
+				}
+			}
+		}
+	}
+	return box
 }

@@ -311,7 +311,7 @@ func (m *nowPlayingModule) appIcon(bundle string) *ui.Bitmap {
 }
 
 // stop ends the helper and forgets its state; called when the setting is
-// off, so a disabled island costs no process at all.
+// off, so a disabled feature costs no process at all.
 func (m *nowPlayingModule) stop() {
 	if m.np != nil {
 		m.np.Stop()

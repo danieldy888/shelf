@@ -119,26 +119,17 @@ func TestNPSnapOf(t *testing.T) {
 	}
 }
 
-func TestNowPlayingDoesNotGrowTheIsland(t *testing.T) {
+func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	if _, live := currentActivity([]module{s.mod}, time.Now()); live {
-		t.Fatal("no state yet: the island must stay empty")
-	}
 	s.feed(t, `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`)
-	// Music no longer owns the collapsed notch: Droppy's demo shows the
-	// hardware notch bare while a track plays, so no module contributes
-	// an island activity for it. (Battery and volume still do.)
-	if _, live := currentActivity([]module{s.mod}, time.Now()); live {
-		t.Fatal("playing music must not grow wings around the notch")
-	}
+	// Music never owns the collapsed notch: it feeds only the peek player
+	// and the panel card, so playing must report a track while paused does
+	// too — the controls are most useful while paused.
 	if !s.mod.hasTrack() {
 		t.Fatal("playing music must still feed the peek player and card")
 	}
 	// Paused: the peek player and card stay for resuming.
 	s.feed(t, `{"ok":true,"playing":false,"title":"T","artist":"A","duration":100,"elapsed":5}`)
-	if _, live := currentActivity([]module{s.mod}, time.Now()); live {
-		t.Fatal("paused playback must not hold the island either")
-	}
 	if !s.mod.hasTrack() {
 		t.Fatal("paused playback must still have a card")
 	}

@@ -181,7 +181,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 			a.settingsGeneralSection(c)
 			a.settingsClipboardSection(c)
 			a.settingsStorageSection(c)
-			a.settingsIslandSection(c)
+			a.settingsNowPlayingSection(c)
 			a.settingsShortcutsSection(c)
 			ui.Divider(c).Background(hairline)
 			a.settingsFooter(c)
@@ -347,18 +347,14 @@ func (a *shelf) settingsStorageSection(c *ui.Context) {
 	})
 }
 
-// settingsIslandSection: the three notch-island sources.
-func (a *shelf) settingsIslandSection(c *ui.Context) {
-	settingsSection(c, "刘海岛", a.settingsBroken, func() {
-		settingsToggle(c, "np", "正在播放", a.settings.IslandNowPlaying, func(on bool) {
-			a.setIsland(func(s *settings.Settings) { s.IslandNowPlaying = on })
+// settingsNowPlayingSection: 正在播放 — the peek player and panel card.
+func (a *shelf) settingsNowPlayingSection(c *ui.Context) {
+	settingsSection(c, "正在播放", a.settingsBroken, func() {
+		settingsToggle(c, "np", "探头播放器与面板卡片", a.settings.IslandNowPlaying, func(on bool) {
+			a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = on })
 		})
-		settingsToggle(c, "bat", "电量与充电", a.settings.IslandBattery, func(on bool) {
-			a.setIsland(func(s *settings.Settings) { s.IslandBattery = on })
-		})
-		settingsToggle(c, "vol", "音量", a.settings.IslandVolume, func(on bool) {
-			a.setIsland(func(s *settings.Settings) { s.IslandVolume = on })
-		})
+		ui.Text(c, "悬停刘海时在探头胶囊里显示封面与播放/暂停，展开面板顶部是同一张完整卡片。").
+			FontSize(11).TextColor(textMuted)
 	})
 }
 

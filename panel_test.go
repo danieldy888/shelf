@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
@@ -398,4 +399,49 @@ func TestPeekLeavesNoPaintWhenPointerLeaves(t *testing.T) {
 			t.Fatal("hover must never expand the shelf")
 		}
 	}
+}
+
+// The first module whose panelCard reports "drawn" gets the tray tab's
+// slot above the list; later cards and the clipboard tab are untouched.
+func TestPanelCardCallsFirstDrawnModule(t *testing.T) {
+	first := &fakeCard{label: "第一个卡片", drawn: false}
+	second := &fakeCard{label: "第二个卡片", drawn: true}
+	third := &fakeCard{label: "第三个卡片", drawn: true}
+	a := &shelf{tab: tabTray}
+	a.modules = []module{first, second, third}
+
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	if view.HasText("第一个卡片") || view.HasText("第三个卡片") {
+		t.Fatal("a card that reports not-drawn must not show, and later ones must not be asked")
+	}
+	if !view.HasText("第二个卡片") {
+		t.Fatal("the first card that draws must show above the list")
+	}
+	if !first.asked || !second.asked || third.asked {
+		t.Fatalf("cards must be asked in order until one draws: %v %v %v", first.asked, second.asked, third.asked)
+	}
+	// The clipboard tab keeps its list without any card.
+	second.asked = false
+	a.tab = tabClipboard
+	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	if second.asked || view.HasText("第二个卡片") {
+		t.Fatal("the clipboard tab must not draw panel cards")
+	}
+}
+
+type fakeCard struct {
+	label string
+	drawn bool
+	asked bool
+}
+
+func (c *fakeCard) tick(time.Time) {}
+
+func (c *fakeCard) card(view *ui.Context) bool {
+	c.asked = true
+	if !c.drawn {
+		return false
+	}
+	ui.Text(view, c.label).FontSize(12).TextColor(textPrimary)
+	return true
 }

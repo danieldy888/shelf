@@ -71,12 +71,11 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。
 	idle := a.win != nil && !a.visible && a.progress <= 0.01 && !a.peeking && a.peekProgress <= 0.01
-	island := idle && a.islandShown()
 	// Keep one native drop target across all states. The transparent root does
 	// not paint the theme background; clipping contains every animation frame.
 	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center).Clip()
 	_, over := ui.DataDragOver(zone, opts)
-	if idle && !island {
+	if idle {
 		// 空闲态收到内容只入库不展开：那时窗口本就不显示，也无从接受拖放。
 		if drop, ok := ui.DropData(zone, opts); ok {
 			a.receive(drop.Data)
@@ -84,9 +83,9 @@ func (a *shelf) view(c *ui.Context) {
 		return
 	}
 	peeked := a.peeking || a.peekProgress > 0.01
-	expanded := a.win == nil && !a.peeking && !island || a.visible || openK >= 0.15
-	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板；
-	// 岛翼在探头/展开时收回壳内（shellSize 是几何的唯一来源）。
+	expanded := a.win == nil && !a.peeking || a.visible || openK >= 0.15
+	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板
+	// （shellSize 是几何的唯一来源）。
 	shellW, shellH := a.shellSize(openK)
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
@@ -112,11 +111,6 @@ func (a *shelf) view(c *ui.Context) {
 	zone.Children(func() {
 		if !expanded {
 			if !peeked {
-				if island {
-					// 刘海岛：黑色壳向左/右展开成翼，内容是 leading 图标、
-					// 右侧文字与/或电平条；点击展开（见 mouseDown）。
-					a.islandView(c, shellW)
-				}
 				// 收起动画尾段：壳继续缩回硬件刘海，不显示内容。
 				return
 			}

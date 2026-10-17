@@ -28,12 +28,8 @@ type Settings struct {
 	// ExcludedApps lists bundle identifiers whose copies are never
 	// recorded into the shelf.
 	ExcludedApps []string `json:"excludedApps"`
-	// IslandNowPlaying shows live now-playing status in the notch island.
+	// IslandNowPlaying shows the now-playing peek player and panel card.
 	IslandNowPlaying bool `json:"islandNowPlaying"`
-	// IslandBattery shows battery level and charging in the notch island.
-	IslandBattery bool `json:"islandBattery"`
-	// IslandVolume shows a transient island when the volume changes.
-	IslandVolume bool `json:"islandVolume"`
 	// AutoCheckUpdates checks the GitHub release feed for a newer version
 	// in the background; it is the app's only network access.
 	AutoCheckUpdates bool `json:"autoCheckUpdates"`
@@ -45,7 +41,7 @@ const defaultClipboardLimit = 30
 
 // Default is what a fresh install uses.
 func Default() Settings {
-	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, IslandBattery: true, IslandVolume: true, AutoCheckUpdates: true}
+	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, AutoCheckUpdates: true}
 }
 
 // Save replaces dir/settings.json with s, atomically.

@@ -42,27 +42,29 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 	if len(s.ExcludedApps) != 0 {
 		t.Fatalf("missing excludedApps = %v, want empty", s.ExcludedApps)
 	}
-	if !s.IslandNowPlaying || !s.IslandBattery || !s.IslandVolume {
-		t.Fatalf("missing island keys must stay on: %+v", s)
+	if !s.IslandNowPlaying {
+		t.Fatalf("missing islandNowPlaying must stay on: %+v", s)
 	}
 }
 
-// The island toggles load from the file individually: turning one source
-// off must not affect the others, which keep their defaults.
-func TestIslandTogglesLoad(t *testing.T) {
+// The now-playing toggle still loads from the file, and the removed
+// battery/volume island keys in a legacy settings.json are ignored
+// (unknown keys never fail a load) while the rest keep their defaults.
+func TestNowPlayingToggleAndLegacyIslandKeysLoad(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"islandBattery": false}`), 0o600); err != nil {
+	legacy := `{"islandNowPlaying": false, "islandBattery": false, "islandVolume": false}`
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.IslandBattery {
-		t.Fatal("islandBattery: false was ignored")
+	if s.IslandNowPlaying {
+		t.Fatal("islandNowPlaying: false was ignored")
 	}
-	if !s.IslandNowPlaying || !s.IslandVolume {
-		t.Fatalf("one island key off changed the others: %+v", s)
+	if !s.ClipboardHistory || !s.AutoCheckUpdates {
+		t.Fatalf("unrelated keys must keep their defaults: %+v", s)
 	}
 }
 
