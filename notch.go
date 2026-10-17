@@ -201,7 +201,7 @@ func (a *shelf) syncMousePassThrough() {
 		return
 	}
 	h := a.win.NativeHandle()
-	mac.SetOverlayHitTest(h, acceptAll, max(8, a.notchH))
+	mac.SetOverlayHitTest(h, acceptAll, max(180, a.notchW), max(8, a.notchH))
 	mac.SetWindowLevel(h, a.windowLevel())
 }
 

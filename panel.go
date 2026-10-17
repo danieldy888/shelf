@@ -589,7 +589,11 @@ func (a *shelf) panelContentH() int {
 		}
 		return h
 	default:
-		h := top + panelSecTop + panelSecLineH + panelSecBottom
+		h := top
+		if len(list) > 0 {
+			// 区块标题行只在有内容时存在（与 panelBody 一致）。
+			h += panelSecTop + panelSecLineH + panelSecBottom
+		}
 		if a.np != nil && a.np.hasTrack() {
 			h += panelCardTop + panelCardH
 		}

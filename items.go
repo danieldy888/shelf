@@ -58,15 +58,16 @@ func (a *shelf) itemTile(c *ui.Context, item store.Item) {
 		a.tileThumb(c, item)
 		ui.Text(c, name).MaxLines(2).TextAlign(ui.Center).FontSize(11).
 			TextColor(ink.Alpha(0.86)).Margin(7, 4, 0, 4).MaxWidth(88)
+		if item.Pinned {
+			// 右上 16pt 黑底图钉角标：作为 tile 的子元素定位，不能放到
+			// 网格层（否则所有角标叠在网格右上角并抢走点击）。
+			ui.Row(c.Key("pin")).Absolute().Top(6).Right(10).Size(16, 16).Radius(8).Center().
+				Background(ui.Hex("#000000")).Label("已置顶").
+				Children(func() {
+					ui.Icon(c, pinFill).Size(9, 9).TextColor(ink)
+				})
+		}
 	})
-	if item.Pinned {
-		// 右上 16pt 黑底图钉角标。
-		ui.Row(c.Key("pin")).Absolute().Top(6).Right(10).Size(16, 16).Radius(8).Center().
-			Background(ui.Hex("#000000")).Label("已置顶").
-			Children(func() {
-				ui.Icon(c, pinFill).Size(9, 9).TextColor(ink)
-			})
-	}
 	if item.Missing {
 		tile.Opacity(0.38)
 	}
@@ -208,13 +209,19 @@ func (a *shelf) clipRowMeta(item store.Item) string {
 }
 
 // clipAppIcon caches mac.AppIcon bitmaps per bundle id so a long list
-// never asks the workspace twice for the same app.
+// never asks the workspace twice for the same app. The cache is bounded:
+// past appIconCacheLimit entries it is rebuilt on demand — clipboard rows
+// re-resolve their icons on the next paint, apps gone from the list are
+// simply never asked for again.
 func (a *shelf) clipAppIcon(bundle string) *ui.Bitmap {
 	if a.appIcons == nil {
 		a.appIcons = make(map[string]*ui.Bitmap)
 	}
 	if b, ok := a.appIcons[bundle]; ok {
 		return b
+	}
+	if len(a.appIcons) >= appIconCacheLimit {
+		a.appIcons = make(map[string]*ui.Bitmap)
 	}
 	var b *ui.Bitmap
 	if png := mac.AppIcon(bundle, 32); len(png) > 0 {
@@ -225,6 +232,11 @@ func (a *shelf) clipAppIcon(bundle string) *ui.Bitmap {
 	a.appIcons[bundle] = b
 	return b
 }
+
+// appIconCacheLimit caps the source-app icon cache; rows re-resolve on
+// the next paint after a flush, so a cap costs at most one repaint's
+// worth of lookups.
+const appIconCacheLimit = 64
 
 // relativeTime renders the clipboard row's 「· 相对时间」: 刚刚 / N 分钟前 /
 // 今天 15:04 / 昨天 / N 天前 / M月D日.

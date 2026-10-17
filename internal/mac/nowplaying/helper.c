@@ -659,7 +659,8 @@ void shelf_np_run(void) {
   dispatch_resume(timer);
 
   pthread_t rd;
-  if (pthread_create(&rd, NULL, stdinReader, NULL) != 0) wantQuit = 1;
+  int haveReader = pthread_create(&rd, NULL, stdinReader, NULL) == 0;
+  if (!haveReader) wantQuit = 1;
   // The main thread services its run loop until stdin ends: this is
   // what lets MediaRemote finish registering this client and delivers
   // now-playing notifications to the timer above.
@@ -668,6 +669,6 @@ void shelf_np_run(void) {
   }
   wantQuit = 1;
   CFRunLoopStop(CFRunLoopGetMain());
-  if (rd) pthread_join(rd, NULL);
+  if (haveReader) pthread_join(rd, NULL);
   dispatch_source_cancel(timer);
 }

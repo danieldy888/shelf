@@ -230,6 +230,13 @@ func TestRedesignTrayMusic(t *testing.T) {
 		_ = a.store.AddText("周五发布 Shelf v1.0 · 记得更新截图")
 		_ = a.store.AddImage(pngb)
 		_ = a.store.AddFiles([]string{doc})
+		// 置顶图片项：展示右上角图钉角标。
+		for _, it := range a.store.Items {
+			if it.Kind == store.KindImage {
+				_ = a.store.SetPinned(it.ID, true)
+				break
+			}
+		}
 		// 预热缩略图：测试里 a.win 存在但异步解码名额不可控，直接注入。
 		for _, it := range a.store.Items {
 			switch it.Kind {

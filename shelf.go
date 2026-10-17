@@ -105,6 +105,9 @@ func (a *shelf) startMonitoring() {
 					}
 					a.animate(now)
 					a.monitorDrag(now)
+					// 内容高度随项目数/正在播放卡片/搜索状态变化：
+					// desiredFrame 未变时是恒等比较，不触发原生缩放。
+					a.syncWindowFrame()
 					a.tickUpdates(now)
 					if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
 						a.status, a.statusUntil, a.statusShown, a.statusErr = "", time.Time{}, time.Time{}, false

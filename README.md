@@ -75,7 +75,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 
 - A transparent notch surface stays anchored at the top; hovering reveals a small black pill without moving the window
 - Hover the notch and the shelf peeks; click the peeked notch and it unfolds into a pure-black panel fused with the hardware notch
-- Music leaves the notch bare, but hover shows a compact player (cover, title, play/pause) and the open panel carries a full card with previous/next, progress and time remaining
+- Music leaves the notch bare; hover shows a pill with the cover and four equalizer bars animated in the artwork's colour (click to unfold), and the open panel carries a full card with previous/next, progress and time remaining
 - Drag files near the notch and the shelf unfolds; drop onto the peeked pill to stash instantly
 - While dragging, shake the pointer left and right to summon a floating basket beside the cursor — drop into it to stash
 - Global hotkey ⌃⌥Space to show or hide the shelf; clicking outside collapses it back into the notch
@@ -100,17 +100,17 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | --- | --- |
 | Show or hide the shelf | Press `⌃⌥Space`, click the menu-bar icon, or hover the notch and click the peeked pill |
 | Peek at the shelf | Move the pointer onto the notch (no drag needed) — it bulges out; click it to unfold |
-| Control what is playing | Hover the notch: the peeked pill is a compact player (cover, title, play/pause). The card at the top of the open panel adds previous/next, progress and time remaining |
-| Turn now playing on or off | Settings → 托盘 → 刘海显示正在播放, or right-click the menu-bar icon → 正在播放: it switches the compact peek player and the panel card, and applies at once |
+| Control what is playing | The card at the top of the open panel has play/pause, previous/next, progress and time remaining; the peek pill only shows the cover and equalizer bars, and unfolds on click |
+| Turn now playing on or off | Settings → Tray → Show now playing, or right-click the menu-bar icon → Now playing: it switches the peek pill and the panel card, and applies at once |
 | Stash what you're dragging | While dragging anything, move near the notch — the shelf expands instantly; you can also drop right onto the peeked notch |
 | Summon the drop basket | While dragging, shake the pointer left and right — a basket card appears beside the cursor; drop onto it |
 | Send files or text to the shelf | Right-click selected items in Finder → Services/Quick Actions → "添加到 Shelf" (Add to Shelf); or select text in any app → app menu → Services → "添加到 Shelf" |
 | Drag an item out | Drag it from the shelf into the target app |
 | Copy a text item back | Click it once, then paste (`⌘V`) anywhere |
-| Remove an item | Click the × on its right; file references never delete the original file |
+| Remove an item | Right-click it → Remove (several selected items can be removed together); file references never delete the original file |
 | Select several items | ⌘-click to add or remove one, ⇧-click to select a range |
 | Drag several items out | Select them, then drag any one of them |
-| Switch between all items and clipboard captures | Click "Shelf" (托盘) or "Clipboard" (剪贴板) in the panel header |
+| Switch between all items and clipboard captures | Click "托盘" (Tray) or "剪贴板" (Clipboard) in the panel header — unpinned clipboard text lives in the Clipboard tab; the tray keeps files, images and pinned or dragged-in text |
 | Search clipboard captures | Press `⌃⌥V` (or the Clipboard tab): type to filter — ↑/↓ selects, ⏎ copies and collapses back to your app, `Esc` clears the search then collapses |
 | Pin an item | Right-click it → Pin (置顶); pinned rows show a pin mark and are never evicted by limits, cleanup or Clear |
 | Stop recording an app | Right-click a clipboard item → Stop recording this app (不再记录来自「app」的内容); it lands in `settings.json`'s `excludedApps` |

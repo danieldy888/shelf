@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
+	"shelf/internal/mac"
 	"shelf/internal/store"
 )
 
@@ -453,4 +455,68 @@ func (c *fakeCard) card(view *ui.Context) bool {
 	}
 	ui.Text(view, c.label).FontSize(12).TextColor(textPrimary)
 	return true
+}
+
+// 置顶角标必须落在各自格子的右上角，而不是叠在网格层（回归：角标曾是
+// 网格的 Absolute 子元素，全部挤在网格右上角）。
+func TestPinBadgesStayInsideTheirTiles(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.AddText("pinned one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("pinned two"); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range s.Items {
+		if err := s.SetPinned(it.ID, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	tile, ok := view.Find("pinned two") // 最新置顶项排第一格
+	if !ok {
+		t.Fatal("pinned tile missing")
+	}
+	badge, ok := view.Find("已置顶")
+	if !ok {
+		t.Fatal("pin badge missing")
+	}
+	if badge.X < tile.X || badge.X+badge.W > tile.X+tile.W ||
+		badge.Y < tile.Y || badge.Y+badge.H > tile.Y+tile.H {
+		t.Fatalf("pin badge %+v outside its tile %+v", badge, tile)
+	}
+}
+
+// 展开时内容增多，面板目标高度（desiredFrame）必须跟着变；原生窗口由
+// 每 tick 的 syncWindowFrame 对齐。
+func TestPanelHeightFollowsVisibleItems(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	// place() 需要真实显示器（AppKit）；无窗口测试直接给定几何。
+	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
+	a.x, a.y, a.h = 475, 0, 400
+	empty := a.desiredFrame().Height
+	for i := 0; i < 3; i++ {
+		if err := s.AddText(fmt.Sprintf("row %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := a.desiredFrame().Height; got <= empty {
+		t.Fatalf("panel did not grow with items: %d -> %d", empty, got)
+	}
+	// 正在播放卡片出现时也要让位。
+	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T", Artist: "A"}}
+	withCard := a.desiredFrame().Height
+	if withCard <= a.panelTargetH()-panelCardTop-panelCardH {
+		t.Fatalf("card space not reflected: %d", withCard)
+	}
 }
