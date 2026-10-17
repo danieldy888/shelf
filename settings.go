@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
+	"strconv"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -32,8 +33,65 @@ var (
 
 // settingsTheme is the one dark theme the window repaints with: Shelf's UI
 // lives on the pure black notch shell, so Settings is always dark no matter
-// the system appearance. The palette reuses panel.go's colors.
-var settingsTheme = ui.DarkTheme()
+// the system appearance. It carries the DESIGN.md palette: system-blue
+// accent, white-alpha surfaces and the compact metrics of the mock's
+// grouped lists (32pt switches, white-8% segment tracks).
+var settingsTheme = func() *ui.Theme {
+	t := ui.DarkTheme()
+	t.Background = ui.Hex("#1E1E1F")
+	t.Accent = ui.Hex("#0A84FF")
+	t.AccentHover = t.Accent.Mix(ui.RGB(255, 255, 255), 0.18)
+	t.AccentPressed = t.Accent.Mix(ui.RGB(0, 0, 0), 0.16)
+	t.Surface = ui.RGBA(255, 255, 255, 0.08)
+	t.SurfaceHover = ui.RGBA(255, 255, 255, 0.16)
+	t.SurfacePressed = ui.RGBA(255, 255, 255, 0.20)
+	t.Border = ui.RGBA(255, 255, 255, 0.07)
+	t.Text = setInk
+	t.TextMuted = setInk2
+	t.Danger = ui.Hex("#FF453A")
+	t.Success = ui.Hex("#30D158")
+	t.Focus = ui.RGBA(10, 132, 255, 0.55)
+	t.Scrollbar = ui.RGBA(255, 255, 255, 0.28)
+	t.ScrollbarWidth = 4
+	t.Radius = 7
+	// The switch sizes off Spacing: 3.5 gives the mock's ~32x19. FontSize 12
+	// is what the mock's segments and small buttons draw; every Text in the
+	// window sets its own size.
+	t.Spacing = 3.5
+	t.FontSize = 12
+	return t
+}()
+
+// The settings window's text and surface colors, straight from DESIGN.md's
+// token table (white-alpha inks on the #1E1E1F window).
+var (
+	setInk      = ui.Hex("#F5F5F7")
+	setInk2     = ui.RGBA(255, 255, 255, 0.56)
+	setInk3     = ui.RGBA(255, 255, 255, 0.34)
+	setCard     = ui.RGBA(255, 255, 255, 0.05)
+	setCardEdge = ui.RGBA(255, 255, 255, 0.07)
+	setRowSep   = ui.RGBA(255, 255, 255, 0.08)
+)
+
+// appGlyph fills an excluded-app row when the app has no icon on disk.
+var appGlyph = symbol(`<rect x="5" y="5" width="14" height="14" rx="3.5"/>`)
+
+// settingsIcons caches decoded app icons for the 排除的应用 rows; nil values
+// are cached too, so a bundle id that resolves to nothing is asked once.
+var settingsIcons = map[string]*ui.Bitmap{}
+
+// settingsAppIcon returns the bundle's icon as a bitmap, or nil.
+func settingsAppIcon(bundleID string) *ui.Bitmap {
+	if icon, ok := settingsIcons[bundleID]; ok {
+		return icon
+	}
+	var icon *ui.Bitmap
+	if png := mac.AppIcon(bundleID, 48); len(png) > 0 {
+		icon, _ = ui.DecodeBitmap(png)
+	}
+	settingsIcons[bundleID] = icon
+	return icon
+}
 
 // openSettings shows the Settings window, creating it the first time, or
 // re-focuses the one already open (single instance). The window is a normal
@@ -60,10 +118,19 @@ func (a *shelf) openSettings() {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title: appName + " 设置", Width: settingsWidth, Height: settingsHeight,
 		X: frame.X, Y: frame.Y,
-		Hidden: true, BackgroundColor: "#000000",
-		DisableResize: true, DisableMaximize: true, DisableFullScreen: true,
+		Hidden: true, BackgroundColor: "#1E1E1F",
+		// The mock's title bar centers the title, which AppKit's stock bar
+		// never does: hide it and let settingsView draw its own under the
+		// traffic lights, which TrafficLightPosition puts at the mock's
+		// insets. The title still names the window to the system.
+		TitleBarStyle:        mygo.TitleBarHidden,
+		TrafficLightPosition: &mygo.Point{X: 9, Y: 12},
+		DisableResize:        true, DisableMaximize: true, DisableFullScreen: true,
 		Content: ui.View(a.settingsView),
 	})
+	// The title bar follows the window's own dark chrome whatever the system
+	// appearance is, matching the mock's dark "Shelf 设置" window.
+	mac.SetWindowAppearance(w.NativeHandle(), true)
 	w.SetBounds(frame)
 	w.OnClosed(a.settingsClosed)
 	a.settingsWin = w
@@ -156,59 +223,88 @@ func settingsFrame(work mygo.Rectangle) mygo.Rectangle {
 	return mygo.Rectangle{X: x, Y: y, Width: settingsWidth, Height: settingsHeight}
 }
 
-// settingsView draws the whole Settings window each frame: sections of
-// labeled rows on the black shell, then a footer with the version and the
-// data-folder button. While settings.json is broken a banner explains it
-// and every preference control is disabled so the file is never rewritten.
+// settingsView draws the whole Settings window each frame: DESIGN.md's
+// grouped-inset-list look — a small muted heading over a card of 40pt rows
+// split by hairlines — then a footer with the version and the data-folder
+// button. While settings.json is broken a banner explains it and every
+// preference control is disabled so the file is never rewritten.
 func (a *shelf) settingsView(c *ui.Context) {
 	c.SetTheme(settingsTheme)
-	c.Root().Background(ui.Hex("#000000"))
+	c.Root().Background(ui.Hex("#1E1E1F"))
 	if a.settingsWin != nil {
 		w := a.settingsWin
 		c.OnShortcut(0, ui.KeyEscape, w.Close)
 		c.OnShortcut(ui.Cmd, ui.KeyW, w.Close)
 	}
-	ui.Scroll(c.Key("settings")).Fill().TrackScroll(&a.settingsScroll).Children(func() {
-		ui.Column(c.Key("sections")).Padding(16, 18, 12, 18).Gap(16).FillWidth().Children(func() {
-			if a.settingsBroken {
-				ui.Column(c.Key("broken")).Padding(10, 12).Gap(4).Radius(8).
-					Background(ui.RGBA(255, 69, 58, 0.14)).Children(func() {
-					ui.Text(c, "settings.json 无法读取").FontSize(12).FontWeight(600).TextColor(settingsTheme.Danger)
-					ui.Text(c, "以下设置已按默认值运行，且被锁定以免覆盖原文件。请备份并修复数据文件夹中的 settings.json 后重新打开 Shelf。").
-						FontSize(11).TextColor(textMuted)
-				})
-			}
-			a.settingsGeneralSection(c)
-			a.settingsClipboardSection(c)
-			a.settingsStorageSection(c)
-			a.settingsNowPlayingSection(c)
-			a.settingsShortcutsSection(c)
-			ui.Divider(c).Background(hairline)
-			a.settingsFooter(c)
+	ui.Column(c.Key("win")).Fill().Children(func() {
+		// The drawn title bar: traffic lights sit over it (TrafficLight-
+		// Position, or wherever c.TitleBar reports them), the title centers
+		// like the mock's, and the bar drags the window.
+		bar := c.TitleBar()
+		ui.Row(c.Key("titlebar")).Height(float32(max(bar.Height, 38))).FillWidth().
+			AlignItems(ui.Center).Justify(ui.Center).Padding(0, bar.Right, 0, bar.Left).
+			DragWindow().Children(func() {
+			ui.Text(c, appName+" 设置").SingleLine().FontSize(13).FontWeight(600).TextColor(setInk2)
+		})
+		ui.Scroll(c.Key("settings")).Fill().TrackScroll(&a.settingsScroll).Children(func() {
+			ui.Column(c.Key("sections")).Padding(2, 20, 16, 20).Gap(16).FillWidth().Children(func() {
+				if a.settingsBroken {
+					ui.Column(c.Key("broken")).Padding(10, 12).Gap(4).Radius(10).
+						Background(ui.RGBA(255, 69, 58, 0.12)).
+						Border(0.5, ui.RGBA(255, 69, 58, 0.35)).Children(func() {
+						ui.Text(c, "settings.json 无法读取").FontSize(12).FontWeight(600).TextColor(settingsTheme.Danger)
+						ui.Text(c, "以下设置已按默认值运行，且被锁定以免覆盖原文件。请备份并修复数据文件夹中的 settings.json 后重新打开 Shelf。").
+							FontSize(11).TextColor(setInk3)
+					})
+				}
+				a.settingsGeneralSection(c)
+				a.settingsClipboardSection(c)
+				a.settingsTraySection(c)
+				a.settingsShortcutsSection(c)
+				a.settingsFooter(c)
+			})
 		})
 	})
 }
 
-// settingsSection renders one section: a muted Chinese heading over a dark
-// card holding the section's rows. disabled greys and locks the whole card.
+// settingsSection renders one group: an 11pt semibold heading over a
+// rounded card (white 5% fill, 0.5pt edge) holding the group's rows.
+// disabled greys and locks the whole card.
 func settingsSection(c *ui.Context, title string, disabled bool, fn func()) {
-	ui.Column(c.Key("sec-" + title)).Gap(6).FillWidth().Children(func() {
-		ui.Text(c, title).SingleLine().FontSize(12).FontWeight(600).TextColor(textMuted).Padding(0, 0, 0, 2)
-		ui.Column(c.Key("card")).Gap(9).Padding(11, 13).Radius(10).
-			Disabled(disabled).Background(cardSurface).FillWidth().Children(fn)
+	ui.Column(c.Key("sec-" + title)).FillWidth().Children(func() {
+		ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3).Padding(0, 0, 6, 4)
+		ui.Column(c.Key("card")).Radius(10).Background(setCard).Border(0.5, setCardEdge).
+			Disabled(disabled).FillWidth().Children(fn)
 	})
 }
 
-// settingsToggle is one switch row: the label on the left, a macOS-style
-// switch on the right. The row itself is the toggle — a click anywhere on
-// it flips the switch — and the inner switch mirrors the same value, so the
-// two bindings can never fight (a click has exactly one target). apply
-// receives the new state only when the user actually changed it.
+// settingsSep is the 0.5pt hairline between two rows of one card.
+func settingsSep(c *ui.Context, key string) {
+	ui.Box(c.Key("sep-" + key)).Height(0.5).FillWidth().Background(setRowSep)
+}
+
+// settingsToggle is one switch row: the label (and optional caption) on the
+// left, a macOS-style switch on the right. The row itself is the toggle — a
+// click anywhere on it flips the switch — and the inner switch mirrors the
+// same value, so the two bindings can never fight (a click has exactly one
+// target). apply receives the new state only when the user actually changed
+// it.
 func settingsToggle(c *ui.Context, key, label string, on bool, apply func(bool)) {
-	row := ui.ToggleBase(c.Key("toggle-"+key), &on).FillWidth().AlignItems(ui.Center).Gap(10).Padding(1, 0).Label(label)
+	settingsToggleCap(c, key, label, "", setInk3, on, apply)
+}
+
+// settingsToggleCap is settingsToggle with a caption under the label;
+// captionColor lets a row show an error (the login item's) in danger red.
+func settingsToggleCap(c *ui.Context, key, label, caption string, captionColor ui.Color, on bool, apply func(bool)) {
+	row := ui.ToggleBase(c.Key("toggle-"+key), &on).FillWidth().AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).Label(label)
 	var sw ui.Element
 	row.Children(func() {
-		ui.Text(c, label).SingleLine().FontSize(13).TextColor(textPrimary).Grow(1)
+		ui.Column(c.Key("k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
+			ui.Text(c, label).SingleLine().FontSize(13).TextColor(setInk)
+			if caption != "" {
+				ui.Text(c, caption).FontSize(11).TextColor(captionColor)
+			}
+		})
 		sw = ui.Switch(c, &on).Label(label)
 	})
 	if row.Changed() || sw.Changed() {
@@ -216,10 +312,21 @@ func settingsToggle(c *ui.Context, key, label string, on bool, apply func(bool))
 	}
 }
 
-// settingsRow is a plain label/value line inside a section.
+// settingsRow is a plain label/value line inside a section, at least 40pt
+// tall with the mock's 12pt side padding.
 func settingsRow(c *ui.Context, key, label string, fn func()) {
-	ui.Row(c.Key("row-" + key)).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
-		ui.Text(c, label).SingleLine().FontSize(13).TextColor(textPrimary).Grow(1)
+	settingsRowCap(c, key, label, "", fn)
+}
+
+// settingsRowCap is settingsRow with an 11pt muted caption under the label.
+func settingsRowCap(c *ui.Context, key, label, caption string, fn func()) {
+	ui.Row(c.Key("row-"+key)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).FillWidth().Children(func() {
+		ui.Column(c.Key("k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
+			ui.Text(c, label).SingleLine().FontSize(13).TextColor(setInk)
+			if caption != "" {
+				ui.Text(c, caption).FontSize(11).TextColor(setInk3)
+			}
+		})
 		fn()
 	})
 }
@@ -241,34 +348,34 @@ func choiceSegments(current int, choices []int, format func(int) string) (labels
 	return labels, values, selected
 }
 
-// settingsGeneralSection: 开机时自动启动 and 刘海拖放保护. Neither lives in
-// settings.json, so the section stays editable while the file is broken.
+// settingsGeneralSection: 开机时自动启动, 自动检查更新 and 刘海拖放保护.
+// Only 自动检查更新 lives in settings.json; the login item and the drag
+// guard stay editable while the file is broken.
 func (a *shelf) settingsGeneralSection(c *ui.Context) {
 	settingsSection(c, "通用", false, func() {
-		settingsToggle(c, "login", "开机时自动启动", a.loginOn, a.applyOpenAtLogin)
+		loginCap, capColor := "", setInk3
 		if a.loginErr != "" {
-			ui.Text(c, a.loginErr).FontSize(11).TextColor(settingsTheme.Danger).Padding(0, 0, 0, 1)
+			loginCap, capColor = a.loginErr, settingsTheme.Danger
 		}
-		settingsRow(c, "guard", "刘海拖放保护", func() {
+		settingsToggleCap(c, "login", "开机时自动启动", loginCap, capColor, a.loginOn, a.applyOpenAtLogin)
+		settingsSep(c, "login")
+		// 自动检查更新存 settings.json，文件损坏时随其余偏好一起锁定；
+		// 登录项与拖放保护不依赖该文件，保持可用。
+		ui.Column(c.Key("autocheck")).Disabled(a.settingsBroken).FillWidth().Children(func() {
+			settingsToggleCap(c, "autocheck", "自动检查更新", "只连接 GitHub，安装前会先问你", setInk3,
+				a.settings.AutoCheckUpdates, a.setAutoCheckUpdates)
+		})
+		settingsSep(c, "autocheck")
+		settingsRowCap(c, "guard", "刘海拖放保护", "需要辅助功能权限，每次更新后重新开启", func() {
 			if mac.AccessibilityTrusted() {
-				ui.Text(c, "已开启").SingleLine().FontSize(12).TextColor(textMuted)
+				ui.Text(c, "已开启").SingleLine().FontSize(12).TextColor(settingsTheme.Success)
 				return
 			}
-			if ui.Button(c, "开启…").Label("开启刘海拖放保护").Clicked() {
+			if ui.Button(c, "开启…").FontSize(12).Label("开启刘海拖放保护").Clicked() {
 				accessibilityRequest()
 				a.repaintSettings()
 			}
 		})
-		ui.Text(c, "拖拽靠近刘海时把指针挡在托盘接收区内；需要辅助功能授权，每次更新后要重新开启。").
-			FontSize(11).TextColor(textMuted)
-		// 自动检查更新存 settings.json，文件损坏时随其余偏好一起锁定；
-		// 登录项与拖放保护不依赖该文件，保持可用。
-		ui.Column(c.Key("autocheck")).Disabled(a.settingsBroken).FillWidth().Children(func() {
-			settingsToggle(c, "autocheck", "自动检查更新", a.settings.AutoCheckUpdates, a.setAutoCheckUpdates)
-		})
-		ui.Text(c, "开启后每天向 GitHub Releases 查询一次新版本（不发送任何个人数据）；关闭后仍可用菜单里的「检查更新…」。").
-			FontSize(11).TextColor(textMuted)
-
 	})
 }
 
@@ -290,36 +397,42 @@ func (a *shelf) applyOpenAtLogin(on bool) {
 	a.repaintSettings()
 }
 
-// settingsClipboardSection: 记录剪贴板, the 保留条数 segments and the
+// settingsClipboardSection: 记录复制的内容, the 保留条数 segments and the
 // 排除的应用 list, all through the same setters the tray menu uses.
 func (a *shelf) settingsClipboardSection(c *ui.Context) {
 	settingsSection(c, "剪贴板", a.settingsBroken, func() {
-		settingsToggle(c, "clip", "记录剪贴板", a.settings.ClipboardHistory, a.setClipboardHistory)
+		settingsToggle(c, "clip", "记录复制的内容", a.settings.ClipboardHistory, a.setClipboardHistory)
+		settingsSep(c, "clip")
 		limit := a.settings.ClipboardLimit
 		if limit < 1 {
 			limit = settings.Default().ClipboardLimit
 		}
-		labels, values, selected := choiceSegments(limit, clipboardLimitChoices, func(n int) string {
-			return fmt.Sprintf("%d 条", n)
-		})
+		labels, values, selected := choiceSegments(limit, clipboardLimitChoices, strconv.Itoa)
 		settingsRow(c, "limit", "保留条数", func() {
 			if sg := ui.Segmented(c, &selected, labels...).Label("保留条数"); sg.Changed() {
 				a.setClipboardLimit(values[selected])
 			}
 		})
-		ui.Text(c, "排除的应用").SingleLine().FontSize(11).TextColor(textMuted)
-		if len(a.settings.ExcludedApps) == 0 {
-			ui.Text(c, "无 · 右键剪贴板条目可将来源应用加入此列表").FontSize(11).TextColor(textMuted)
-			return
-		}
+		settingsSep(c, "limit")
+		settingsRowCap(c, "excl", "排除的应用", "在剪贴板条目上右键可添加", func() {
+			if len(a.settings.ExcludedApps) == 0 {
+				ui.Text(c, "无").SingleLine().FontSize(12).TextColor(setInk3)
+			}
+		})
 		for _, id := range a.settings.ExcludedApps {
 			bundleID := id
-			ui.Row(c.Key("excl-" + bundleID)).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
+			settingsSep(c, "excl-"+bundleID)
+			ui.Row(c.Key("app-"+bundleID)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).FillWidth().Children(func() {
+				if icon := settingsAppIcon(bundleID); icon != nil {
+					ui.Image(c.Key("ic"), icon).Size(20, 20).Radius(4.5)
+				} else {
+					ui.Icon(c.Key("ic"), appGlyph).Size(20, 20).TextColor(setInk3)
+				}
 				ui.Column(c.Key("id")).Gap(1).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, a.appName(bundleID)).SingleLine().FontSize(13).TextColor(textPrimary)
-					ui.Text(c, bundleID).SingleLine().FontSize(11).TextColor(textMuted)
+					ui.Text(c, a.appName(bundleID)).SingleLine().FontSize(13).TextColor(setInk)
+					ui.Text(c, bundleID).SingleLine().FontSize(11).TextColor(setInk3)
 				})
-				if ui.Button(c, "移除").Label("移除 " + bundleID).Clicked() {
+				if ui.Button(c, "移除").FontSize(12).Label("移除 " + bundleID).Clicked() {
 					a.removeExcludedApp(bundleID)
 				}
 			})
@@ -327,34 +440,26 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 	})
 }
 
-// settingsStorageSection: 自动清理 periods, same setter as the tray's
-// 自动清理 submenu.
-func (a *shelf) settingsStorageSection(c *ui.Context) {
-	settingsSection(c, "存放", a.settingsBroken, func() {
+// settingsTraySection: 自动清理旧内容 and 刘海显示正在播放 — the same
+// setters as the tray's 自动清理 submenu and 正在播放 item.
+func (a *shelf) settingsTraySection(c *ui.Context) {
+	settingsSection(c, "托盘", a.settingsBroken, func() {
 		days := max(0, a.settings.RetentionDays)
 		labels, values, selected := choiceSegments(days, retentionChoices, func(n int) string {
 			if n <= 0 {
-				return "不清理"
+				return "从不"
 			}
 			return fmt.Sprintf("%d 天", n)
 		})
-		settingsRow(c, "retention", "自动清理", func() {
-			if sg := ui.Segmented(c, &selected, labels...).Label("自动清理"); sg.Changed() {
+		settingsRow(c, "retention", "自动清理旧内容", func() {
+			if sg := ui.Segmented(c, &selected, labels...).Label("自动清理旧内容"); sg.Changed() {
 				a.setRetention(values[selected])
 			}
 		})
-		ui.Text(c, "超过期限的内容每小时检查一次；选择后立即执行一次。").FontSize(11).TextColor(textMuted)
-	})
-}
-
-// settingsNowPlayingSection: 正在播放 — the peek player and panel card.
-func (a *shelf) settingsNowPlayingSection(c *ui.Context) {
-	settingsSection(c, "正在播放", a.settingsBroken, func() {
-		settingsToggle(c, "np", "探头播放器与面板卡片", a.settings.IslandNowPlaying, func(on bool) {
+		settingsSep(c, "retention")
+		settingsToggle(c, "np", "刘海显示正在播放", a.settings.IslandNowPlaying, func(on bool) {
 			a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = on })
 		})
-		ui.Text(c, "悬停刘海时在探头胶囊里显示封面与播放/暂停，展开面板顶部是同一张完整卡片。").
-			FontSize(11).TextColor(textMuted)
 	})
 }
 
@@ -363,10 +468,11 @@ func (a *shelf) settingsNowPlayingSection(c *ui.Context) {
 func (a *shelf) settingsShortcutsSection(c *ui.Context) {
 	settingsSection(c, "快捷键", false, func() {
 		settingsRow(c, "sc-tray", "显示 / 收起", func() {
-			ui.Text(c, shortcutHint).SingleLine().FontSize(13).TextColor(textMuted)
+			ui.Text(c, shortcutHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})
+		settingsSep(c, "sc")
 		settingsRow(c, "sc-clip", "剪贴板搜索", func() {
-			ui.Text(c, clipboardHint).SingleLine().FontSize(13).TextColor(textMuted)
+			ui.Text(c, clipboardHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})
 	})
 }
@@ -374,9 +480,9 @@ func (a *shelf) settingsShortcutsSection(c *ui.Context) {
 // settingsFooter: the app version (from the bundle's Info.plist when
 // packaged) and the button that opens the data folder in Finder.
 func (a *shelf) settingsFooter(c *ui.Context) {
-	ui.Row(c.Key("footer")).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
-		ui.Text(c, appName+" "+appVersion()).SingleLine().FontSize(11).TextColor(textMuted).Grow(1)
-		if ui.Button(c, "打开数据文件夹").Clicked() {
+	ui.Row(c.Key("footer")).AlignItems(ui.Center).Gap(10).Padding(0, 4).FillWidth().Children(func() {
+		ui.Text(c, appName+" "+appVersion()).SingleLine().FontSize(11).TextColor(setInk3).Grow(1)
+		if ui.Button(c, "打开数据文件夹").FontSize(12).Clicked() {
 			if err := openPath(a.dataDir); err != nil {
 				a.report(err)
 			}

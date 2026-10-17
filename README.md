@@ -101,7 +101,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Show or hide the shelf | Press `⌃⌥Space`, click the menu-bar icon, or hover the notch and click the peeked pill |
 | Peek at the shelf | Move the pointer onto the notch (no drag needed) — it bulges out; click it to unfold |
 | Control what is playing | Hover the notch: the peeked pill is a compact player (cover, title, play/pause). The card at the top of the open panel adds previous/next, progress and time remaining |
-| Turn now playing on or off | Settings → Now playing (正在播放), or right-click the menu-bar icon → 正在播放: it switches the compact peek player and the panel card, and applies at once |
+| Turn now playing on or off | Settings → 托盘 → 刘海显示正在播放, or right-click the menu-bar icon → 正在播放: it switches the compact peek player and the panel card, and applies at once |
 | Stash what you're dragging | While dragging anything, move near the notch — the shelf expands instantly; you can also drop right onto the peeked notch |
 | Summon the drop basket | While dragging, shake the pointer left and right — a basket card appears beside the cursor; drop onto it |
 | Send files or text to the shelf | Right-click selected items in Finder → Services/Quick Actions → "添加到 Shelf" (Add to Shelf); or select text in any app → app menu → Services → "添加到 Shelf" |
@@ -220,7 +220,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 显示或收起托盘 | 按 `⌃⌥Space`、单击菜单栏图标，或悬停刘海后单击探头胶囊 |
 | 探头预览 | 空手把指针移到刘海上——它会向下鼓出；单击探头胶囊即展开 |
 | 控制正在播放 | 悬停刘海，探头胶囊是一枚紧凑播放器（封面、标题、播放/暂停）；展开面板顶部的卡片还有上一首/下一首、进度与剩余时间 |
-| 正在播放开关 | 设置… → 「正在播放」，或右键菜单栏图标 → 「正在播放」：启停探头播放器与面板卡片，立即生效 |
+| 正在播放开关 | 设置… → 托盘 → 「刘海显示正在播放」，或右键菜单栏图标 → 「正在播放」：启停探头播放器与面板卡片，立即生效 |
 | 暂存正在拖的内容 | 拖着任何东西靠近刘海触发区，托盘瞬间展开；也可以直接拖到探头刘海上松开 |
 | 唤出暂存篮 | 拖拽中左右快速摇晃指针，光标旁出现篮子卡片；拖到上面松开即可 |
 | 从 Finder 或服务菜单收进托盘 | 在 Finder 右键选中的文件或文件夹 → 服务/快速操作 → “添加到 Shelf”；或在任意应用选中文字 → 应用菜单 → 服务 → “添加到 Shelf” |

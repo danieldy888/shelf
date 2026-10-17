@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo"
 
 	"shelf/internal/mac"
+	"shelf/internal/settings"
 )
 
 // TestSettingsWindowAnswersClicksAndScroll is the regression test for the
@@ -29,6 +30,10 @@ func TestSettingsWindowAnswersClicksAndScroll(t *testing.T) {
 		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native window smoke test")
 	}
 	a := smokeShelf
+	// A writable data dir with the real defaults, so the window shows what a
+	// user sees (the zero value would render every switch off).
+	a.dataDir = t.TempDir()
+	a.settings, _ = settings.Load(a.dataDir)
 	onMain(func() {
 		a.newNotchWindow()
 		a.place(mygo.Screen.CursorScreenPoint())

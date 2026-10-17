@@ -108,6 +108,27 @@ func DeactivateSelf() {
 	})
 }
 
+// SetWindowAppearance pins a window to the dark or light appearance
+// (NSWindow.appearance = NSAppearanceNameDarkAqua / Aqua), so its title bar
+// and chrome draw accordingly regardless of the system setting. Shelf's UI
+// is always dark; the Settings window calls this with dark=true. Main
+// thread only.
+func SetWindowAppearance(window uintptr, dark bool) {
+	if window == 0 || Init() != nil {
+		return
+	}
+	withPool(func() {
+		name := "NSAppearanceNameAqua"
+		if dark {
+			name = "NSAppearanceNameDarkAqua"
+		}
+		appearance := send(class("NSAppearance"), "appearanceNamed:", uintptr(nsString(name)))
+		if appearance != 0 {
+			send(id(window), "setAppearance:", uintptr(appearance))
+		}
+	})
+}
+
 // AppNameForBundleID resolves a display name for a bundle identifier: the
 // name of the running application with that identifier, else the bundle's
 // localized name from disk, else "". Read-only, no permission needed.

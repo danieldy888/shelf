@@ -167,7 +167,7 @@ func TestChoiceSegments(t *testing.T) {
 func TestSettingsViewShowsSections(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	_, view := newSettingsShelf(t)
-	for _, s := range []string{"通用", "剪贴板", "存放", "正在播放", "快捷键", "开机时自动启动", "记录剪贴板", "保留条数", "自动清理", "探头播放器与面板卡片", "显示 / 收起", "剪贴板搜索", "打开数据文件夹"} {
+	for _, s := range []string{"通用", "剪贴板", "托盘", "快捷键", "开机时自动启动", "自动检查更新", "刘海拖放保护", "记录复制的内容", "保留条数", "排除的应用", "自动清理旧内容", "刘海显示正在播放", "显示 / 收起", "剪贴板搜索", "打开数据文件夹"} {
 		if !view.HasText(s) {
 			t.Fatalf("settings view missing %q; texts=%v", s, view.Texts())
 		}
@@ -177,7 +177,7 @@ func TestSettingsViewShowsSections(t *testing.T) {
 func TestSettingsViewToggleAppliesAndSaves(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, view := newSettingsShelf(t)
-	clickVisible(t, view, "记录剪贴板")
+	clickVisible(t, view, "记录复制的内容")
 	if a.settings.ClipboardHistory {
 		t.Fatal("toggle did not flip the running setting")
 	}
@@ -196,7 +196,7 @@ func TestSettingsViewToggleAppliesAndSaves(t *testing.T) {
 func TestSettingsViewNowPlayingToggleSaves(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, view := newSettingsShelf(t)
-	clickVisible(t, view, "探头播放器与面板卡片")
+	clickVisible(t, view, "刘海显示正在播放")
 	if a.settings.IslandNowPlaying {
 		t.Fatal("now-playing toggle did not apply")
 	}
@@ -235,7 +235,7 @@ func TestSettingsViewAutoCheckToggle(t *testing.T) {
 func TestSettingsViewSegmentedApplies(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, view := newSettingsShelf(t)
-	clickVisible(t, view, "100 条")
+	clickVisible(t, view, "100")
 	if a.settings.ClipboardLimit != 100 {
 		t.Fatalf("limit not applied: %d", a.settings.ClipboardLimit)
 	}
@@ -264,8 +264,8 @@ func TestSettingsViewBrokenDisablesEditing(t *testing.T) {
 		t.Fatalf("broken banner missing; texts=%v", view.Texts())
 	}
 	// Clicks on disabled controls must change nothing and write nothing.
-	clickVisible(t, view, "记录剪贴板")
-	clickVisible(t, view, "100 条")
+	clickVisible(t, view, "记录复制的内容")
+	clickVisible(t, view, "100")
 	clickVisible(t, view, "移除 com.example.One")
 	if !a.settings.ClipboardHistory || a.settings.ClipboardLimit != 30 || len(a.settings.ExcludedApps) != 1 {
 		t.Fatalf("broken settings were mutated: %+v", a.settings)
@@ -412,10 +412,10 @@ func TestSettingsViewControlLabels(t *testing.T) {
 		}
 		return n
 	}
-	if n := find("记录剪贴板"); n < 2 {
+	if n := find("记录复制的内容"); n < 2 {
 		t.Fatalf("row label and switch must both carry the name, got %d", n)
 	}
-	for _, name := range []string{"保留条数", "自动清理"} {
+	for _, name := range []string{"保留条数", "自动清理旧内容"} {
 		if n := find(name); n < 2 {
 			t.Fatalf("%q must name its segmented control too, got %d", name, n)
 		}
@@ -511,6 +511,8 @@ func TestSettingsWindowSmoke(t *testing.T) {
 	dir := t.TempDir()
 	a.dataDir = dir
 	prefs, _ := settings.Load(dir)
+	// A fixture row for 排除的应用 so the shot shows an app icon + 移除.
+	prefs.ExcludedApps = []string{"com.apple.Safari"}
 	a.settings = prefs
 	var first *mygo.Window
 	onMain(func() {
