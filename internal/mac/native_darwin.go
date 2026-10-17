@@ -767,11 +767,11 @@ func notchRectFor(frame NSRect, insets NSEdgeInsets, leftAux, rightAux NSRect, p
 }
 
 // FileIcon returns the PNG bytes of the Finder icon for path rendered at
-// size×size points (NSImage honors the display's backing scale). Pipeline:
-// NSWorkspace.iconForFile: → NSImage.TIFFRepresentation → NSBitmapImageRep
-// representationUsingType:NSPNGFileType. nil is returned when the icon or
-// conversion fails (a nonexistent path still yields the generic document
-// icon). Read-only: never writes the file or the clipboard, no network.
+// size×size points, at the screen's backing scale. Pipeline:
+// NSWorkspace.iconForFile: → NSImage.CGImageForProposedRect → PNG. nil is
+// returned when the icon or conversion fails (a nonexistent path still
+// yields the generic document icon). Read-only: never writes the file or
+// the clipboard, no network.
 // Main thread only; cache per path — the parent does.
 func FileIcon(path string, size int) []byte {
 	return iconPNG(size, func(ws id) id {
@@ -802,6 +802,8 @@ func AppIcon(bundle string, size int) []byte {
 }
 
 // iconPNG rasterises iconOf's NSImage to PNG bytes at size×size points.
+// Only the one size is drawn: TIFFRepresentation would encode every
+// representation up to 1024px, ~160ms per icon on the main thread.
 func iconPNG(size int, iconOf func(ws id) id) []byte {
 	var out []byte
 	withPool(func() {
@@ -810,14 +812,14 @@ func iconPNG(size int, iconOf func(ws id) id) []byte {
 		if icon == 0 {
 			return
 		}
-		if size > 0 {
-			msgSetSize(icon, sel("setSize:"), NSSize{Width: float64(size), Height: float64(size)})
-		}
-		tiff := send(icon, "TIFFRepresentation")
-		if tiff == 0 {
+		// The proposed rect is in points; with no context AppKit renders
+		// it at the main screen's backing scale (2× pixels on Retina).
+		rect := NSRect{Size: NSSize{Width: float64(size), Height: float64(size)}}
+		cg := send(icon, "CGImageForProposedRect:context:hints:", uintptr(unsafe.Pointer(&rect)), 0, 0)
+		if cg == 0 {
 			return
 		}
-		rep := send(send(class("NSBitmapImageRep"), "alloc"), "initWithData:", uintptr(tiff))
+		rep := send(send(class("NSBitmapImageRep"), "alloc"), "initWithCGImage:", uintptr(cg))
 		if rep == 0 {
 			return
 		}

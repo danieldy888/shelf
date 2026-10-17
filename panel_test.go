@@ -520,3 +520,20 @@ func TestPanelHeightFollowsVisibleItems(t *testing.T) {
 		t.Fatalf("card space not reflected: %d", withCard)
 	}
 }
+
+// While the shell eases down to a shorter panel (a tab switch), the window
+// must keep the drawn height, or the shell's bottom is cut off; once the
+// drawn height arrives, the frame follows the content again.
+func TestPanelFrameHoldsWhileShrinking(t *testing.T) {
+	a := &shelf{visible: true}
+	a.x, a.y, a.h = 475, 0, 560
+	target := a.panelH()
+	a.shownH = float32(target + 120)
+	if got := a.desiredFrame().Height; got != target+120 {
+		t.Fatalf("frame %d cuts the shell drawn at %d", got, target+120)
+	}
+	a.shownH = float32(target)
+	if got := a.desiredFrame().Height; got != target {
+		t.Fatalf("frame %d did not settle to the content height %d", got, target)
+	}
+}

@@ -56,8 +56,7 @@ type nowPlayingModule struct {
 	art        *ui.Bitmap // artwork or app icon of the current track
 	artIsIcon  bool       // art is the app icon fallback, not the cover
 	ctlPressed bool       // a transport button took this frame's press
-	artColor   ui.Color   // the artwork's average colour: EQ bars and glow
-	glow       *ui.Bitmap // precomputed radial glow in that colour
+	artColor   ui.Color   // the artwork's average colour: EQ bars
 	artDone    string     // artID decoded once (success or undecodable blob)
 	iconFor    string     // artID whose app-icon fallback was looked up
 
@@ -248,7 +247,7 @@ func (m *nowPlayingModule) artState() int {
 // fallback for the same track. Players publish their own encoding (NetEase
 // sends WebP), so any registered image format is accepted; artwork that
 // cannot be decoded falls back to the app icon instead of a blank glyph.
-// rememberArt computes the average colour and glow bitmap once per artwork.
+// rememberArt computes the average colour once per artwork.
 func (m *nowPlayingModule) decodeArt(st mac.NowPlayingState) {
 	if st.ArtID == "" || st.ArtID == m.artDone {
 		return
@@ -280,7 +279,7 @@ func (m *nowPlayingModule) decodeArt(st mac.NowPlayingState) {
 	}
 	m.iconFor = st.ArtID
 	if icon := m.icon(st.App); icon != nil {
-		// 测试缝提供了现成位图：没有可平均的 PNG，光晕保持关闭。
+		// 测试缝提供了现成位图：没有可平均的 PNG，均衡条用默认色。
 		m.art, m.artIsIcon = icon, true
 		return
 	}

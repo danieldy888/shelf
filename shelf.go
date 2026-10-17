@@ -33,11 +33,14 @@ type shelf struct {
 	settingFrame                               bool
 	animationStart                             time.Time
 	animationFrom, progress                    float32
+	openGen                                    int     // counts openings; keys the panel's height animation
+	shownH                                     float32 // panel height the shell is drawn at (eases toward panelH)
 	settings                                   settings.Settings
 	modules                                    []module
 	np                                         *nowPlayingModule     // the peek player reads its state
 	clip                                       *clipboardModule      // nil while clipboard history is off
 	tab                                        int                   // panelTab: which list the expanded panel shows
+	tabAt                                      time.Time             // when the tab last switched; drives the body's fade-in
 	search                                     string                // clipboard tab's search text
 	reveal                                     string                // row to keep in view after a keyboard move
 	focusMode                                  bool                  // the window took the keyboard for clipboard search

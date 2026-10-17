@@ -184,8 +184,8 @@ func TestNowPlayingCardDrawsTrackAndControls(t *testing.T) {
 
 func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}, notchW: 180, notchH: 32}
-	if w, h := a.peekSize(); w != 220 || h != 44 {
-		t.Fatalf("idle peek = %.0fx%.0f, want 220x44 (notch +40/+12)", w, h)
+	if w, h := a.peekSize(); w != 220 || h != 32+peekBody {
+		t.Fatalf("idle peek = %.0fx%.0f, want 220x%d (notch +40/+%d)", w, h, 32+peekBody, peekBody)
 	}
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T"}}
 	if w, h := a.peekSize(); w != npPlayerW || h != 32+npPlayerBody {
@@ -196,16 +196,35 @@ func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
 	if f := a.desiredFrame(); f.Width < npPlayerW || f.Height < 32+npPlayerBody {
 		t.Fatalf("idle strip %dx%d cannot hold the player", f.Width, f.Height)
 	}
-	// A file drag needs the plain drop target, and switching the feature
-	// off collapses the player even before the next tick stops the helper.
+	// A file drag needs the drop pill — its 「松开放入」 line wholly below
+	// the hardware notch — and switching the feature off collapses the
+	// player even before the next tick stops the helper.
 	a.dragging = true
-	if w, _ := a.peekSize(); w != 220 {
-		t.Fatalf("a drag must show the plain drop pill, got %.0f", w)
+	if w, h := a.peekSize(); w != 180+dropPillExtraW || h != 32+dropPillBody {
+		t.Fatalf("a drag must show the drop pill, got %.0fx%.0f", w, h)
 	}
 	a.dragging = false
 	a.settings.IslandNowPlaying = false
 	if w, _ := a.peekSize(); w != 220 {
 		t.Fatalf("the player must close when now playing is off, got %.0f", w)
+	}
+}
+
+// The drop pill and the chevron bulge must fit the resident strip without
+// a native resize: resizing mid-drag would move the drop target under the
+// pointer.
+func TestPeekShapesFitTheIdleStrip(t *testing.T) {
+	a := &shelf{notchW: 185, notchH: 38}
+	strip := a.desiredFrame()
+	for _, drag := range []bool{false, true} {
+		a.dragging = drag
+		w, h := a.peekSize()
+		if int(w+0.5) > strip.Width || int(h+0.5) > strip.Height {
+			t.Fatalf("drag=%v: peek %.0fx%.0f exceeds the strip %dx%d", drag, w, h, strip.Width, strip.Height)
+		}
+		if a.desiredFrame() != strip {
+			t.Fatalf("drag=%v remapped the strip", drag)
+		}
 	}
 }
 

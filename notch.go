@@ -63,7 +63,10 @@ func (a *shelf) nearTrigger(p mygo.Point) bool {
 // coming or going changes the drawing without a native resize.
 func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.visible || a.progress > 0.01 {
-		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
+		// A shrinking panel keeps its frame until the drawn shell has
+		// eased down to the new height, so the bottom is never cut off.
+		h := max(a.panelH(), int(a.shownH+0.5))
+		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: h}
 	}
 	// The resident strip holds the largest peek shape for the current
 	// state, so hovering only redraws; it resizes when a track comes or
@@ -109,13 +112,18 @@ func (a *shelf) windowGeometryChanged() {
 }
 
 // peekSize is the hover shape: the now-playing player while a track is
-// loaded (the notch grows into it, Droppy style), otherwise a 12pt bulge
-// carrying a chevron.
+// loaded (the notch grows into it, Droppy style), the drop pill while a
+// drag is on, otherwise a bulge carrying a chevron. The glyphs sit wholly
+// below the hardware notch: nothing drawn inside it is visible.
 func (a *shelf) peekSize() (w, h float32) {
 	if a.np != nil && a.np.showsPlayer() {
 		return a.playerSize()
 	}
-	return float32(max(180, a.notchW)) + 40, float32(max(32, a.notchH)) + 12
+	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
+	if a.dragging {
+		return baseW + dropPillExtraW, baseH + dropPillBody
+	}
+	return baseW + 40, baseH + peekBody
 }
 
 // playerSize is the hover player's size: npPlayerW wide (wider on a wide
@@ -126,15 +134,16 @@ func (a *shelf) playerSize() (w, h float32) {
 }
 
 // shellSize is the one interpolation the shell Path and the content layout
-// share: hardware notch → peek pill → expanded panel. openK is the expand
-// progress the caller uses (view() substitutes 1 for headless tests).
-func (a *shelf) shellSize(openK float32) (w, h float32) {
+// share: hardware notch → peek shape peekW×peekH (peekK) → expanded panel
+// of height panelH (openK). The caller passes the drawn values: view()
+// animates them per display frame and substitutes final ones in headless
+// tests.
+func (a *shelf) shellSize(openK, peekK, peekW, peekH, panelH float32) (w, h float32) {
 	baseW := float32(max(180, a.notchW))
 	baseH := float32(max(32, a.notchH))
-	peekW, peekH := a.peekSize()
-	expW, expH := float32(panelWidth-16), float32(a.panelH()-8)
-	w0 := baseW + (peekW-baseW)*a.peekProgress
-	h0 := baseH + (peekH-baseH)*a.peekProgress
+	expW, expH := float32(panelWidth-16), panelH-8
+	w0 := baseW + (peekW-baseW)*peekK
+	h0 := baseH + (peekH-baseH)*peekK
 	return w0 + (expW-w0)*openK, h0 + (expH-h0)*openK
 }
 
@@ -259,6 +268,10 @@ func (a *shelf) show(edge bool) {
 		a.store.Refresh()
 	}
 	a.visible, a.edgeOpened, a.received = true, edge, false
+	// Each opening starts its height animation afresh at the panel's
+	// current height (see view): no easing from a previous session's size.
+	a.openGen++
+	a.shownH = 0
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.syncMousePassThrough()
 	if a.win != nil {
@@ -384,7 +397,7 @@ func (a *shelf) animate(now time.Time) {
 		}
 	}
 	if !a.peekAnimStart.IsZero() {
-		k := min(float32(now.Sub(a.peekAnimStart))/float32(160*time.Millisecond), 1)
+		k := min(float32(now.Sub(a.peekAnimStart))/float32(peekAnimation), 1)
 		target := float32(0)
 		if a.peeking || a.visible {
 			target = 1

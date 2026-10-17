@@ -4,7 +4,6 @@ package main
 
 import (
 	"image"
-	"image/color"
 	"math"
 	"time"
 
@@ -17,8 +16,7 @@ import (
 // the helper's state. Two surfaces: the hover player that grows out of the
 // notch (cover, title, artist, equalizer, progress and transport — the
 // notch itself becomes the player, as Droppy does) and the tray tab's card
-// (56pt cover, title/「artist · app」, ⏮ ⏯ ⏭, elapsed/remaining), with the
-// cover's average colour glowing behind it.
+// (56pt cover, title/「artist · app」, ⏮ ⏯ ⏭, elapsed/remaining).
 
 // Hover player geometry: at least 400pt wide (the notch +220), and
 // npPlayerBody tall below the notch.
@@ -49,15 +47,6 @@ const (
 	npPlaySize = 38 // 播放/暂停
 	npTrackH   = 4
 	npProgRowH = 14
-)
-
-// Glow (DESIGN.md): 420×220 径向渐变, ~34% alpha of the artwork average.
-const (
-	glowW     = 420
-	glowH     = 220
-	glowScale = 2 // bitmap is rendered at 2× so it stays soft on Retina
-	glowAlpha = 0.34
-	glowReach = 0.70 // transparent past 70% of the ellipse, as the mock
 )
 
 // eqPeriods are the equalizer bars' loop periods, inside the design's
@@ -157,7 +146,7 @@ func (m *nowPlayingModule) card(c *ui.Context) bool {
 		return false
 	}
 	now := time.Now()
-	m.host.stagger(c, ui.Column(c.Key("nowplaying")).Gap(10).Margin(panelCardTop, 0, 0, 0), 1).Children(func() {
+	ui.Column(c.Key("nowplaying")).Gap(10).Margin(panelCardTop, 0, 0, 0).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			m.cardArt(c)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
@@ -270,27 +259,20 @@ func playPauseLabel(playing bool) string {
 }
 
 // rememberArt stores a freshly decoded cover (or app icon) along with its
-// average colour and glow bitmap — each computed once per artwork, never
-// per frame. img is the decoded source; isIcon says the picture is the
-// app's icon rather than album art (no glow then: the mock glows only on
-// real artwork, and app icons often average near-white).
+// average colour (the equalizer bars' tint), computed once per artwork,
+// never per frame. img is the decoded source; isIcon says the picture is
+// the app's icon rather than album art.
 func (m *nowPlayingModule) rememberArt(img image.Image, isIcon bool) {
 	m.art = ui.NewBitmap(img)
 	m.artIsIcon = isIcon
 	m.artColor = averageColor(img)
-	if isIcon || m.artColor.A == 0 {
-		m.glow = nil
-		return
-	}
-	m.glow = ui.NewBitmap(glowImage(m.artColor))
 }
 
-// forgetArt drops the current track's picture, colour and glow; a new
-// ArtID starts art-less until its cover decodes.
+// forgetArt drops the current track's picture and colour; a new ArtID
+// starts art-less until its cover decodes.
 func (m *nowPlayingModule) forgetArt() {
 	m.art, m.artIsIcon = nil, false
 	m.artColor = ui.Color{}
-	m.glow = nil
 }
 
 // averageColor is the mean of the image's opaque pixels, premultiplied;
@@ -321,33 +303,4 @@ func averageColor(img image.Image) ui.Color {
 		B: uint8(bl / n >> 8),
 		A: 255,
 	}
-}
-
-// glowImage renders the 420×220pt radial glow of DESIGN.md as an 840×440
-// bitmap: col at 34% alpha at the centre, fading to transparent at 70% of
-// the ellipse. The pixels are premultiplied (image.RGBA), as the scene
-// expects.
-func glowImage(col ui.Color) *image.RGBA {
-	w, h := glowW*glowScale, glowH*glowScale
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	a := float64(col.A) / 255 * glowAlpha
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			dx := float64(x)/float64(w)*2 - 1
-			dy := float64(y)/float64(h)*2 - 1
-			d := math.Sqrt(dx*dx + dy*dy)
-			if d >= 1 {
-				continue
-			}
-			alpha := a * max(0, 1-d/glowReach)
-			a8 := uint8(alpha * 255)
-			img.SetRGBA(x, y, color.RGBA{
-				R: uint8(uint16(col.R) * uint16(a8) / 255),
-				G: uint8(uint16(col.G) * uint16(a8) / 255),
-				B: uint8(uint16(col.B) * uint16(a8) / 255),
-				A: a8,
-			})
-		}
-	}
-	return img
 }

@@ -57,8 +57,8 @@ func shotNotch(t *testing.T, a *shelf, name string) string {
 	return shotWindow(t, a.win, name)
 }
 
-// testCover returns a colourful 4-quadrant artwork so the card, pill and
-// glow all have a recognisable colour.
+// testCover returns a colourful 4-quadrant artwork so the card and pill
+// have a recognisable cover.
 func testCover() *image.RGBA {
 	art := image.NewRGBA(image.Rect(0, 0, 64, 64))
 	for y := range 64 {
@@ -184,6 +184,17 @@ func TestRedesignPeekPlain(t *testing.T) {
 	peekRestore(t, a)
 }
 
+// TestRedesignPeekDrop shoots the drop pill a file drag raises: the
+// 「松开放入」 line must sit wholly below the hardware notch.
+func TestRedesignPeekDrop(t *testing.T) {
+	a := redesignShelf(t)
+	onMain(func() { a.dragging = true })
+	peekShelf(a)
+	shotNotch(t, a, "peek-drop")
+	onMain(func() { a.dragging = false })
+	peekRestore(t, a)
+}
+
 // peekRestore returns the window to its resting collapsed state.
 func peekRestore(t *testing.T, a *shelf) {
 	onMain(func() {
@@ -197,7 +208,7 @@ func peekRestore(t *testing.T, a *shelf) {
 }
 
 // TestRedesignTrayMusic shoots the expanded tray tab with the now-playing
-// card (cover glow behind it), the section line and the item grid.
+// card, the section line and the item grid.
 func TestRedesignTrayMusic(t *testing.T) {
 	a := redesignShelf(t)
 	// Fixtures: a text item (note-card tile), an image with a warmed

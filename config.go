@@ -24,8 +24,15 @@ const (
 	edgeLeaveDelay  = 350 * time.Millisecond
 	pointerInterval = 30 * time.Millisecond
 	panelAnimation  = 260 * time.Millisecond // 展开/收起 260ms 缓出（DESIGN.md「动效」）
-	panelWidth      = 520
-	panelHeight     = 400
+	peekAnimation   = 160 * time.Millisecond // 悬停探头长出/缩回
+	resizeAnimation = 240 * time.Millisecond // 切换标签、内容增减时面板高度的过渡
+	tabAnimation    = 200 * time.Millisecond // 标签切换：胶囊滑动、新内容淡入
+	// 探头里的图形必须整体落在硬件刘海下方：刘海区域没有像素。
+	peekBody       = 18 // 空手悬停：刘海下方露出的高度（放下拉箭头）
+	dropPillBody   = 32 // 拖拽中：刘海下方「松开放入」那一行的高度
+	dropPillExtraW = 60 // 拖拽中：比刘海宽出的部分
+	panelWidth     = 520
+	panelHeight    = 400
 	// 设置窗口：普通有标题窗口的尺寸（设置内容超出时内部滚动）。
 	settingsWidth  = 460
 	settingsHeight = 520

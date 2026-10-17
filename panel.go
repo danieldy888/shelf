@@ -122,32 +122,29 @@ const (
 	toastFade      = 220 * time.Millisecond  // 淡出时长
 )
 
-// revealTransition is the staggered content fade-in of DESIGN.md「动效」:
-// after the shell has grown ~60% (156ms of the 260ms expand), each group
-// fades in and rises 6pt, 30ms apart.
-func revealTransition(group int) ui.ElementTransition {
-	return ui.ElementTransition{
-		Animation: &ui.Animation{Duration: 140 * time.Millisecond, Delay: time.Duration(156+30*group) * time.Millisecond},
-		Enter:     &ui.Motion{Opacity: 0, Y: 6},
-		Exit:      &ui.Motion{Opacity: 0},
-	}
+// contentFade is the expanded content's opacity at open progress k: it
+// stays transparent while the shell is still a notch-sized sliver and
+// fades in over the last 60% of the growth, so the content arrives with
+// the shell instead of flashing through it.
+func contentFade(k float32) float32 {
+	return ui.EaseOut(min(max((k-0.4)/0.6, 0), 1))
 }
 
-// reveal attaches the group's enter transition while a real window can
-// animate it (reduce-motion keeps the fade, drops the 6pt rise). Headless
-// tests run without a window and a frozen clock: the element stays
-// transitionless so the content is simply there.
-func (a *shelf) stagger(c *ui.Context, e ui.Element, group int) ui.Element {
-	if a.win == nil {
-		return e
+// tabFade is the incoming tab body's progress, 0→1 over tabAnimation
+// after a switch; 1 when no switch is under way.
+func (a *shelf) tabFade(now time.Time) float32 {
+	if a.tabAt.IsZero() {
+		return 1
 	}
-	tr := revealTransition(group)
-	if c.Preferences().ReduceMotion {
-		tr.Enter.Y = 0
-	}
-	return e.Transition(tr)
+	t := float32(now.Sub(a.tabAt)) / float32(tabAnimation)
+	return ui.EaseOut(min(max(t, 0), 1))
 }
 
+// panelHeightKey keys the panel's height animation to one opening, so a
+// new opening starts at its own height instead of easing from the last.
+type panelHeightKey struct{ gen int }
+
+// view 画三种状态：空闲（完全不可见）、探头（悬停播放器、下拉箭头或拖拽
 // 提示）、展开（纯黑面板从刘海里长出来）。单元测试里 a.win 为 nil，
 // 直接按完整展开态渲染。
 func (a *shelf) view(c *ui.Context) {
@@ -168,15 +165,29 @@ func (a *shelf) view(c *ui.Context) {
 	// 全透明，否则整个窗口会一直盖着一块主题色灰板。
 	c.Root().Background(ui.Transparent)
 	opts := transfer.DropOptions{Formats: []transfer.Format{transfer.FileList, transfer.URIList, transfer.PNG, transfer.Text}, Operations: transfer.Copy}
-	openK := a.progress
-	if a.win == nil && !a.peeking {
-		openK = 1
+	openTarget, peekTarget := float32(0), float32(0)
+	if a.visible {
+		openTarget = 1
+	}
+	if a.peeking || a.visible {
+		peekTarget = 1
 	}
 	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。
 	idle := a.win != nil && !a.visible && a.progress <= 0.01 && !a.peeking && a.peekProgress <= 0.01
 	// Keep one native drop target across all states. The transparent root does
 	// not paint the theme background; clipping contains every animation frame.
 	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center).Clip()
+	// The shell is drawn from values animated per display frame; the 30ms
+	// tick's progress/peekProgress only decide state (window frame, mouse
+	// pass-through). Headless tests draw the final shape directly.
+	openK, peekK := a.progress, a.peekProgress
+	if a.win == nil && !a.peeking {
+		openK = 1
+	}
+	if a.win != nil {
+		openK = zone.AnimateTo("open", openTarget, ui.Animation{Duration: panelAnimation, Ease: ui.EaseOut})
+		peekK = zone.AnimateTo("peek", peekTarget, ui.Animation{Duration: peekAnimation, Ease: ui.EaseOut})
+	}
 	_, over := ui.DataDragOver(zone, opts)
 	if idle {
 		// 空闲态收到内容只入库不展开：那时窗口本就不显示，也无从接受拖放。
@@ -185,15 +196,38 @@ func (a *shelf) view(c *ui.Context) {
 		}
 		return
 	}
-	peeked := a.peeking || a.peekProgress > 0.01
-	expanded := a.win == nil && !a.peeking || a.visible || openK >= 0.15
+	peeked := a.peeking || peekK > 0.01
+	// Content shows only while the panel is open. A closing panel is just
+	// the shell retracting: hide() has already reset the tab and search,
+	// and drawing that reset state on the way out would flip the content.
+	expanded := a.win == nil && !a.peeking || a.visible
+	closing := !expanded && openK > 0.01
+	// The panel's height eases between contents (tab switch, rows coming
+	// and going); the content itself is laid out at the target height.
+	// While closing, the shell keeps the height it was showing.
+	targetH := float32(a.panelH())
+	shownH := targetH
+	if a.win != nil && (a.visible || a.progress > 0.01) {
+		if closing && a.shownH > 0 {
+			targetH = a.shownH
+		}
+		shownH = zone.AnimateTo(panelHeightKey{a.openGen}, targetH, ui.Animation{Duration: resizeAnimation, Ease: ui.EaseInOut})
+	}
+	a.shownH = shownH
+	// The hover shape eases between its forms (chevron, drop pill,
+	// player) when it changes while shown, e.g. a drag starting.
+	peekW, peekH := a.peekSize()
+	if a.win != nil {
+		morph := ui.Animation{Duration: peekAnimation, Ease: ui.EaseOut}
+		peekW = zone.AnimateTo("peek-w", peekW, morph)
+		peekH = zone.AnimateTo("peek-h", peekH, morph)
+	}
 	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板
 	// （shellSize 是几何的唯一来源）。
-	shellW, shellH := a.shellSize(openK)
+	shellW, shellH := a.shellSize(openK, peekK, peekW, peekH, shownH)
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
 	// 刘海里长出来，而不是浮在菜单栏下方。
-	glow := a.npGlow()
 	zone.Draw(func(p *ui.Painter, r ui.Rect) {
 		x0 := (r.W - shellW) / 2
 		x1 := x0 + shellW
@@ -212,31 +246,33 @@ func (a *shelf) view(c *ui.Context) {
 		path.QuadTo(x1, 0, x1+earR, 0)
 		path.Close()
 		p.FillPath(&path, ui.Hex("#000000"))
-		if expanded && glow != nil {
-			// 封面取色的光晕：420×220 的径向渐变，中心在面板 22%/22%
-			// 处、位于左上，不影响文字对比。
-			gx := x0 + 0.22*shellW - glowW/2
-			gy := 0.22*shellH - glowH/2
-			p.Image(glow, ui.Rect{X: gx, Y: gy, W: glowW, H: glowH}, ui.FillBox)
-		}
 	})
 	zone.Children(func() {
 		if !expanded {
-			if !peeked {
-				// 收起动画尾段：壳继续缩回硬件刘海，不显示内容。
+			if closing || !peeked {
+				// 收起途中只有壳缩回刘海，不画内容。
 				return
 			}
-			a.peekView(c, shellW, shellH, over)
+			a.peekView(c, shellW, shellH, peekK, over)
 			return
 		}
-		content := ui.Column(c.Key("panel")).Width(shellW).Height(shellH).Clip().
-			Padding(0, panelPadX, panelPadBottom, panelPadX)
-		content.Children(func() {
-			// 刘海黑壳本身占据顶部；内容顶栏从刘海下沿 +8 开始。
-			ui.Box(c.Key("notch-spacer")).Height(float32(max(0, a.topInset+headerTopGap)))
-			a.panelHeader(c)
-			a.panelBody(c, over)
-			a.toastLayer(c, over)
+		// The content is laid out once at the panel's final size and the
+		// growing shell uncovers it, so nothing inside moves or reflows
+		// while the panel opens, closes or changes height.
+		clip := ui.Column(c.Key("panel-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+		clip.Children(func() {
+			content := ui.Column(c.Key("panel")).Width(panelWidth-16).Height(targetH-8).
+				Padding(0, panelPadX, panelPadBottom, panelPadX)
+			if a.win != nil {
+				content.Opacity(contentFade(openK))
+			}
+			content.Children(func() {
+				// 刘海黑壳本身占据顶部；内容顶栏从刘海下沿 +8 开始。
+				ui.Box(c.Key("notch-spacer")).Height(float32(max(0, a.topInset+headerTopGap)))
+				a.panelHeader(c)
+				a.tabBody(c, over)
+				a.toastLayer(c, over)
+			})
 		})
 	})
 	if drop, ok := ui.DropData(zone, opts); ok {
@@ -247,12 +283,39 @@ func (a *shelf) view(c *ui.Context) {
 	}
 }
 
+// tabBody holds the current tab's content. After a switch it fades in and
+// settles from a few points toward its tab's side of the header. This is
+// driven per frame rather than by an element Transition: a switch that
+// changes the panel's height resizes the window, and mygo does not
+// animate a resized frame's transitions.
+func (a *shelf) tabBody(c *ui.Context, over bool) {
+	body := ui.Column(c.Key("body")).FillWidth().Grow(1).MinHeight(0)
+	if a.win != nil {
+		if k := a.tabFade(c.Now()); k < 1 {
+			dx := float32(-10)
+			if a.tab == tabClipboard {
+				dx = 10
+			}
+			if c.Preferences().ReduceMotion {
+				dx = 0
+			}
+			body.Opacity(k).Translate(dx*(1-k), 0)
+			c.AnimationFrame()
+		}
+	}
+	body.Children(func() { a.panelBody(c, over) })
+}
+
 // panelHeader is the 28pt top bar of the expanded panel: text tabs on the
-// left, icon buttons on the right — clear, settings, collapse.
+// left, icon buttons on the right — clear, settings, collapse. The active
+// tab's capsule is drawn by the bar itself and glides to the other tab on
+// a switch, instead of jumping.
 func (a *shelf) panelHeader(c *ui.Context) {
-	a.stagger(c, ui.Row(c.Key("hdr")).Height(headerH).AlignItems(ui.Center).Gap(6).FillWidth(), 0).Children(func() {
-		a.panelTab(c, "tab-tray", "托盘", tabTray)
-		a.panelTab(c, "tab-clipboard", "剪贴板", tabClipboard)
+	hdr := ui.Row(c.Key("hdr")).Height(headerH).AlignItems(ui.Center).Gap(6).FillWidth()
+	var tabs [2]ui.Element
+	hdr.Children(func() {
+		tabs[tabTray] = a.panelTab(c, "tab-tray", "托盘", tabTray)
+		tabs[tabClipboard] = a.panelTab(c, "tab-clipboard", "剪贴板", tabClipboard)
 		ui.Box(c).Grow(1)
 		hasUnpinned := a.store != nil && slices.ContainsFunc(a.store.Items, func(it store.Item) bool { return !it.Pinned })
 		if hasUnpinned {
@@ -278,17 +341,30 @@ func (a *shelf) panelHeader(c *ui.Context) {
 			a.hide(hideExplicit)
 		}
 	})
+	// The capsule follows the active tab's box from the last frame; the
+	// tab paints its own capsule until that box is known (first frame).
+	r := tabs[a.tab].LayoutBounds()
+	if r.W <= 0 {
+		tabs[a.tab].Background(fill2)
+		return
+	}
+	x, w := r.X, r.W
+	if a.win != nil {
+		glide := ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut}
+		x = hdr.AnimateTo("tab-x", r.X, glide)
+		w = hdr.AnimateTo("tab-w", r.W, glide)
+	}
+	hdr.Draw(func(p *ui.Painter, _ ui.Rect) {
+		p.Fill(ui.Rect{X: x, Y: r.Y, W: w, H: r.H}, fill2, r.H/2)
+	})
 }
 
-// panelTab is one text tab of the header: the active one sits in a fill2
-// capsule in ink, inactive in ink2.
-func (a *shelf) panelTab(c *ui.Context, key, label string, tab int) {
+// panelTab is one text tab of the header: ink when active (its capsule is
+// panelHeader's), ink2 with a fill1 hover otherwise.
+func (a *shelf) panelTab(c *ui.Context, key, label string, tab int) ui.Element {
 	on := a.tab == tab
 	b := ui.ButtonBase(c.Key(key)).Height(26).Padding(0, 11, 0, 11).Radius(13).Label(label)
-	switch {
-	case on:
-		b.Background(fill2)
-	case b.Hovered():
+	if !on && b.Hovered() {
 		b.Background(fill1)
 	}
 	b.Children(func() {
@@ -302,6 +378,7 @@ func (a *shelf) panelTab(c *ui.Context, key, label string, tab int) {
 	if b.Clicked() {
 		a.setTab(tab)
 	}
+	return b
 }
 
 // headerIcon is one 26×26 circular icon button of the header.
@@ -335,8 +412,8 @@ func (a *shelf) panelBody(c *ui.Context, over bool) {
 		}
 		// 区块标题行只在有内容时出现。
 		if len(list) > 0 {
-			a.stagger(c, ui.Row(c.Key("sec")).Height(panelSecLineH).AlignItems(ui.Center).FillWidth().
-				Margin(panelSecTop, 2, panelSecBottom, 2), 2).Children(func() {
+			ui.Row(c.Key("sec")).Height(panelSecLineH).AlignItems(ui.Center).FillWidth().
+				Margin(panelSecTop, 2, panelSecBottom, 2).Children(func() {
 				ui.Text(c, fmt.Sprintf("%d 项", len(list))).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Grow(1)
 				hint := "⌘ / ⇧ 多选 · 空格预览"
 				if n := a.selection.count(); n > 1 {
@@ -354,7 +431,7 @@ func (a *shelf) panelBody(c *ui.Context, over bool) {
 		a.emptyState(c)
 		return
 	}
-	a.stagger(c, ui.Scroll(c.Key("items")).Grow(1).MinHeight(0), 3).Children(func() {
+	ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Children(func() {
 		ui.Grid(c.Key("grid")).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1)).
 			Gap(gridGap).FillWidth().Children(func() {
 			// 快照：右键菜单或拖入回调可改变原切片。
@@ -373,7 +450,7 @@ func (a *shelf) clipboardBody(c *ui.Context, list []store.Item) {
 		a.emptyState(c)
 		return
 	}
-	a.stagger(c, ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0), 3).Children(func() {
+	ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0).Children(func() {
 		ui.Column(c.Key("clip-list")).Gap(clipRowGap).FillWidth().Children(func() {
 			for _, item := range list {
 				a.clipRow(c, item)
@@ -388,9 +465,9 @@ func (a *shelf) clipboardBody(c *ui.Context, list []store.Item) {
 // focus, so ↑/↓ walk the list and ⏎ copies and collapses without reaching
 // for the mouse. Esc clears the search first, then collapses.
 func (a *shelf) searchField(c *ui.Context) {
-	wrap := a.stagger(c, ui.Row(c.Key("clip-search")).Height(clipSearchH).Padding(0, 10, 0, 10).Gap(7).
+	wrap := ui.Row(c.Key("clip-search")).Height(clipSearchH).Padding(0, 10, 0, 10).Gap(7).
 		AlignItems(ui.Center).Radius(10).Background(fill1).
-		Margin(clipSearchTop, 0, 0, 0), 2)
+		Margin(clipSearchTop, 0, 0, 0)
 	wrap.Children(func() {
 		ui.Icon(c, searchSymbol).Size(14, 14).TextColor(ink3)
 		in := ui.TextInputBase(c.Key("clip-query"), &a.search).Grow(1).MinWidth(0).
@@ -440,7 +517,7 @@ func (a *shelf) emptyState(c *ui.Context) {
 	case a.settings.ClipboardHistory:
 		hint += "\n复制的文字与截图也会自动收好"
 	}
-	a.stagger(c, ui.Column(c).Grow(1).Center().Gap(8), 3).Children(func() {
+	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 		ui.Icon(c, icon).Size(28, 28).TextColor(ink3)
 		ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(ink2)
 		ui.Text(c, hint).TextAlign(ui.Center).FontSize(11).TextColor(ink3)
@@ -540,43 +617,43 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 	})
 }
 
-// peekView draws the pill under the hardware notch while hovering: a mini
-// now-playing pill (artwork + equalizer bars, click expands) while a track
-// is loaded, 「松开放入」 while a drag is over it, otherwise the small
-// downward chevron.
-func (a *shelf) peekView(c *ui.Context, shellW, shellH float32, over bool) {
+// peekView draws the pill under the hardware notch while hovering: the
+// now-playing player while a track is loaded, 「松开放入」 while a drag is
+// on, otherwise the small downward chevron. Like the player, the pill's
+// content is laid out at its final size and uncovered by the growing
+// shell; the glyphs sit in the band below the hardware notch, where the
+// screen has pixels.
+func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool) {
 	if !over && a.np != nil && a.np.showsPlayer() {
-		// The player is laid out at its final size and revealed by the
-		// growing shell, so it never squeezes during the animation.
 		pw, ph := a.playerSize()
 		clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
 		drew := false
-		clip.Children(func() { drew = a.np.peekPlayer(c, pw, ph, a.peekProgress) })
+		clip.Children(func() { drew = a.np.peekPlayer(c, pw, ph, peekK) })
 		if drew {
 			return
 		}
 	}
-	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).
-		Justify(ui.End).AlignItems(ui.Center).Label("展开 Shelf")
+	pw, ph := a.peekSize()
+	notchH := float32(max(32, a.notchH))
+	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Clip().
+		AlignItems(ui.Center).Label("展开 Shelf")
 	pill.Children(func() {
-		if over || a.dragging {
-			ui.Text(c, "松开放入").FontSize(11).SingleLine().TextColor(ink2).Padding(0, 0, 6, 0)
-		} else {
-			ui.Icon(c, chevronDownSym).Size(14, 14).TextColor(ink2).Padding(0, 0, 6, 0)
-		}
+		ui.Column(c.Key("peek-body")).Width(pw).Height(ph).Children(func() {
+			ui.Box(c.Key("peek-notch")).Height(notchH)
+			band := ui.Row(c.Key("peek-band")).FillWidth().Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(6)
+			band.Children(func() {
+				if over || a.dragging {
+					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
+					ui.Text(c, "松开放入").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
+				} else {
+					ui.Icon(c, chevronDownSym).Size(12, 12).TextColor(ink2)
+				}
+			})
+		})
 	})
 	if pill.Clicked() {
 		a.show(false)
 	}
-}
-
-// npGlow returns the cached glow bitmap of the current artwork's average
-// colour, nil without a playing track or artwork.
-func (a *shelf) npGlow() *ui.Bitmap {
-	if a.np == nil || !a.np.hasTrack() || a.np.artIsIcon || a.np.glow == nil {
-		return nil
-	}
-	return a.np.glow
 }
 
 // panelContentH is the expanded panel's desired content height (excluding
@@ -671,6 +748,9 @@ func (a *shelf) setTab(tab int) {
 		return
 	}
 	a.tab = tab
+	if a.visible {
+		a.tabAt = time.Now()
+	}
 	a.reveal = ""
 	a.selection.keepExisting(a.visibleItems())
 	a.syncWindowFrame()
