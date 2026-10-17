@@ -71,11 +71,16 @@ var (
 	// still be pinned to the screen's top edge.
 	msgSetPoint func(obj id, sel objc.SEL, p NSPoint)
 
-	// class_replaceMethod overrides constrainFrameRect:toScreen: on the
-	// shelf window's class, and safeAreaInsets reads NSScreen's notch
+	// class_replaceMethod installs a method on a class; class_getName names
+	// a class for test logging. safeAreaInsets reads NSScreen's notch
 	// insets (the struct return needs RegisterFunc, not raw SyscallN).
-	classReplaceMethod func(cls uintptr, sel objc.SEL, imp uintptr, types string) uintptr
-	msgSafeAreaInsets  func(id, objc.SEL) NSEdgeInsets
+	classReplaceMethod           func(cls uintptr, sel objc.SEL, imp uintptr, types string) uintptr
+	classGetMethodImplementation func(cls uintptr, sel objc.SEL) uintptr
+	classGetSuperclass           func(cls uintptr) uintptr
+	classGetName                 func(cls id) unsafe.Pointer
+	setAssocObject               func(obj id, key unsafe.Pointer, value id, policy uintptr)
+	getAssocObject               func(obj id, key unsafe.Pointer) id
+	msgSafeAreaInsets            func(id, objc.SEL) NSEdgeInsets
 
 	// msgRect reads NSRect-returning selectors (frame, auxiliaryTopLeftArea,
 	// auxiliaryTopRightArea); the struct return needs RegisterFunc too.
@@ -86,10 +91,15 @@ var (
 	// candidate panels anchor to.
 	msgFirstRectForRange func(obj id, sel objc.SEL, r NSRange, actual *NSRange) NSRect
 
-	// unconstrainOnce installs the constrainFrameRect:toScreen: override
-	// once for the (one) shelf window class; unconstrainIMP is its callback.
-	unconstrainOnce sync.Once
-	unconstrainIMP  uintptr
+	// unconstrainOnce builds the constrainFrameRect:toScreen: override IMP
+	// once. The method still sits on the shared window class, but it
+	// answers only for windows carrying the assocUnconstrain mark; every
+	// other window forwards to the saved original IMP (classOrigs, found
+	// by walking the instance's own class chain), so the patch is
+	// window-specific in effect and dies with the window.
+	unconstrainOnce   sync.Once
+	unconstrainIMP    uintptr
+	origRectScreenFns = map[uintptr]func(obj id, sel objc.SEL, x, y, w, h float64, screen id) NSRect{}
 
 	// CGEventSourceButtonState reports hardware button state; reading it
 	// requires no Input Monitoring permission (only *posting* events does).
@@ -169,6 +179,11 @@ func load() {
 		purego.RegisterFunc(&msgFirstRectForRange, msgSendAddr)
 		purego.RegisterLibFunc(&cgEventSourceButtonState, libCG, "CGEventSourceButtonState")
 		purego.RegisterLibFunc(&classReplaceMethod, libObjC, "class_replaceMethod")
+		purego.RegisterLibFunc(&classGetMethodImplementation, libObjC, "class_getMethodImplementation")
+		purego.RegisterLibFunc(&classGetName, libObjC, "class_getName")
+		purego.RegisterLibFunc(&classGetSuperclass, libObjC, "class_getSuperclass")
+		purego.RegisterLibFunc(&setAssocObject, libObjC, "objc_setAssociatedObject")
+		purego.RegisterLibFunc(&getAssocObject, libObjC, "objc_getAssociatedObject")
 		purego.RegisterFunc(&msgSafeAreaInsets, msgSendAddr)
 		purego.RegisterFunc(&msgRect, msgSendAddr)
 	})
@@ -537,12 +552,23 @@ func ConfigureNotchWindow(window uintptr) {
 			// stacked struct. Spell the arguments as floats so the
 			// callback matches the C ABI; the ObjC type string still
 			// describes constrainFrameRect:toScreen:.
-			unconstrainIMP = purego.NewCallback(func(_ id, _ objc.SEL, fx, fy, fw, fh float64, _ id) NSRect {
+			unconstrainIMP = purego.NewCallback(func(self id, cmd objc.SEL, fx, fy, fw, fh float64, screen id) NSRect {
+				if !hasAssoc(self, &assocUnconstrain) {
+					// A sibling window of the shared class: forward to
+					// the IMP its class resolved before the patch.
+					return callOrigRectScreen(self, cmd, fx, fy, fw, fh, screen)
+				}
 				return NSRect{Origin: NSPoint{X: fx, Y: fy}, Size: NSSize{Width: fw, Height: fh}}
 			})
-			cls := send(w, "class")
-			classReplaceMethod(uintptr(cls), sel("constrainFrameRect:toScreen:"), unconstrainIMP, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@")
 		})
+		// The override sits on the shared window class but answers only
+		// for windows carrying the mark: every other mygo window (Settings
+		// included) forwards to the saved original IMP and keeps AppKit's
+		// menu-bar constraint. The mark dies with the window, so a
+		// recycled address never inherits it.
+		classPatch(id(send(w, "class")), "constrainFrameRect:toScreen:", unconstrainIMP,
+			"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@")
+		markAssoc(w, &assocUnconstrain)
 		send(w, "setStyleMask:", nsWindowStyleMaskNonactivatingPanel)
 		send(w, "setLevel:", nsStatusWindowLevel)
 		send(w, "setHasShadow:", 0)

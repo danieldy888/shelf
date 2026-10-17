@@ -168,7 +168,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 		c.OnShortcut(0, ui.KeyEscape, w.Close)
 		c.OnShortcut(ui.Cmd, ui.KeyW, w.Close)
 	}
-	ui.Scroll(c.Key("settings")).Fill().Children(func() {
+	ui.Scroll(c.Key("settings")).Fill().TrackScroll(&a.settingsScroll).Children(func() {
 		ui.Column(c.Key("sections")).Padding(16, 18, 12, 18).Gap(16).FillWidth().Children(func() {
 			if a.settingsBroken {
 				ui.Column(c.Key("broken")).Padding(10, 12).Gap(4).Radius(8).

@@ -44,12 +44,13 @@ type shelf struct {
 	write                                      clipWriter        // where copies go; nil = the system clipboard
 	dragSerial                                 int64
 	dragging, suppressed, pointerDrag, ownDrag bool
-	dataDir                                    string       // where state.json and settings.json live
-	settingsBroken                             bool         // settings.json unreadable: never overwrite it
-	settingsWin                                *mygo.Window // the 设置 window; nil while closed
-	settingsPrevPID                            int          // app to hand the keyboard back to when it closes
-	loginOn                                    bool         // 开机时自动启动，read back each time the window opens
-	loginErr                                   string       // last SetOpenAtLogin failure, shown inline
+	dataDir                                    string         // where state.json and settings.json live
+	settingsBroken                             bool           // settings.json unreadable: never overwrite it
+	settingsWin                                *mygo.Window   // the 设置 window; nil while closed
+	settingsPrevPID                            int            // app to hand the keyboard back to when it closes
+	loginOn                                    bool           // 开机时自动启动，read back each time the window opens
+	loginErr                                   string         // last SetOpenAtLogin failure, shown inline
+	settingsScroll                             ui.ScrollState // the Settings window's scroll position
 	guard                                      dragGuard
 	escHeld, spaceHeld                         bool
 	selection                                  selection

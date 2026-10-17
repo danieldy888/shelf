@@ -124,6 +124,65 @@ func TestNotchOverlaySitsAtScreenTop(t *testing.T) {
 	})
 }
 
+// The constrainFrameRect:toScreen: override used to land on the shared
+// class unconditionally, freeing every window of it — Settings included —
+// from the menu-bar constraint. ConfigureNotchWindow must keep the patch
+// window-specific: the class still carries the method (ObjC has no
+// per-instance methods), but its IMP answers only for the configured
+// window's pointer and forwards every other instance to the saved
+// original, recorded in classOrigs.
+func TestNotchGraftStaysPerInstance(t *testing.T) {
+	onMain(t, func() error {
+		if err := Init(); err != nil {
+			return err
+		}
+		var initPanel func(id, objc.SEL, NSRect, uint, uint, bool) id
+		purego.RegisterFunc(&initPanel, msgSendAddr)
+		var panel, stock id
+		withPool(func() {
+			send(class("NSApplication"), "sharedApplication")
+			newPanel := func() id {
+				return initPanel(send(class("NSPanel"), "alloc"), sel("initWithContentRect:styleMask:backing:defer:"),
+					NSRect{Size: NSSize{Width: 120, Height: 60}}, nsWindowStyleMaskNonactivatingPanel, 2, false)
+			}
+			panel, stock = newPanel(), newPanel()
+			if panel != 0 {
+				send(panel, "setReleasedWhenClosed:", 0)
+				ConfigureNotchWindow(uintptr(panel))
+			}
+			if stock != 0 {
+				send(stock, "setReleasedWhenClosed:", 0)
+			}
+		})
+		if panel == 0 || stock == 0 {
+			return fmt.Errorf("NSPanel alloc/init failed")
+		}
+		defer withPool(func() { send(panel, "close"); send(stock, "close") })
+		// The shared class keeps its identity — no subclassing — and the
+		// registry holds the pre-patch IMP so siblings can forward.
+		cls := send(panel, "class")
+		if cls != send(stock, "class") {
+			return fmt.Errorf("configure reclassed the window; siblings would split off the shared class")
+		}
+		orig := classOrigs[cls][sel("constrainFrameRect:toScreen:")]
+		if orig == 0 {
+			return fmt.Errorf("no original IMP recorded for constrainFrameRect:toScreen:")
+		}
+		if orig == unconstrainIMP {
+			return fmt.Errorf("the recorded original is the patch itself — forwarding would recurse")
+		}
+		// The configured window carries the ownership mark; a sibling of
+		// the same class does not, so it forwards to the saved original.
+		if !hasAssoc(panel, &assocUnconstrain) {
+			return fmt.Errorf("configured panel lacks the unconstrain mark")
+		}
+		if hasAssoc(stock, &assocUnconstrain) {
+			return fmt.Errorf("unrelated panel carries the unconstrain mark — the patch leaked")
+		}
+		return nil
+	})
+}
+
 func TestSetWindowFrameNilHandle(t *testing.T) {
 	SetWindowFrame(0, 0, 0, 280, 72)
 }
