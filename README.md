@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/demo.gif" width="880" alt="Shelf slides down from the top of the screen; a copied text lands on top; a PDF is dragged from the shelf into a Finder folder and the shelf hides">
+  <img src="docs/images/demo.gif" width="880" alt="Shelf peeks from the notch with now-playing controls, accepts a file drop, shows the tray and clipboard, then collapses as an item is dragged out">
 </p>
 
 <p align="center">
