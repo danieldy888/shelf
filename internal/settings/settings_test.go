@@ -80,6 +80,27 @@ func TestExplicitValueIsHonoured(t *testing.T) {
 	}
 }
 
+// autoCheckUpdates defaults on so updates reach users; a file without the
+// key (older versions, hand edits) must not silently disable it, and an
+// explicit false is honoured.
+func TestAutoCheckUpdatesLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil || !s.AutoCheckUpdates {
+		t.Fatalf("missing autoCheckUpdates = %v, %v; want true", s.AutoCheckUpdates, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"autoCheckUpdates": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Load(dir)
+	if err != nil || s.AutoCheckUpdates {
+		t.Fatalf("autoCheckUpdates: false ignored: %v, %v", s.AutoCheckUpdates, err)
+	}
+}
+
 func TestSaveRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	want := Settings{ClipboardHistory: false, RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}

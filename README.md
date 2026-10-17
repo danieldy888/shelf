@@ -93,7 +93,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 - Right-click an item to open it, show it in Finder, Quick Look it, AirDrop it or copy its text or path
 - Optional automatic cleanup of items older than 1, 7 or 30 days
 - A Settings window (menu-bar icon → Settings) gathers every preference — start at login, notch drop protection, clipboard history and its size and excluded apps, cleanup, the notch island sources — and applies each one the instant you change it, exactly as the menu-bar submenus do
-- Fully local: zero network requests, no telemetry
+- Local-first: the only network access is an update check against GitHub Releases (on launch, then once a day; nothing about you is sent, and you can turn it off) — no telemetry, no cloud sync
 
 ## Usage
 | Want to | Do this |
@@ -125,11 +125,12 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Clear all items | Click Clear (清空) in the header — removes everything except pinned items (their saved images stay); file references never delete the original file |
 | Collapse the shelf | Press `⌃⌥Space`, `Esc`, the collapse button, or click anywhere outside it |
 | Turn on notch drop protection (optional) | Settings → General → Notch drop protection → Turn on… (or right-click the menu-bar icon and choose the notch drop protection item), then allow Shelf in System Settings; turn it on again after each update |
+| Check for updates | Right-click the menu-bar icon → 「检查更新…」; when a new version exists the menu shows 「安装更新（vX）…」 and the shelf footer says so — installing happens only when you choose it; the daily background check is toggled in Settings → General → 「自动检查更新」 |
 | Quit Shelf | Right-click the menu-bar icon → Quit |
 
 ## Privacy
 
-Everything stays on your Mac: no network requests, no telemetry, no cloud sync. Text history is stored in plaintext at `~/Library/Application Support/Shelf/`, so avoid copying secrets you don't want recorded there.
+Everything stays on your Mac: no telemetry, no cloud sync. The single exception is update checks: while enabled (default), Shelf queries this repository's latest GitHub release once shortly after launch and then once a day; the request carries nothing but the URL it asks for — no personal data, no identifiers. Turn it off in Settings → General → 「自动检查更新」 or with `"autoCheckUpdates": false` in `settings.json`; right-clicking the menu-bar icon → 「检查更新…」 always works on demand. When a new version is found, a notice appears in the shelf footer and an 「安装更新（vX）…」 item in the menu-bar menu — nothing downloads until you choose it. Text history is stored in plaintext at `~/Library/Application Support/Shelf/`, so avoid copying secrets you don't want recorded there.
 
 ## Build from source
 
@@ -210,7 +211,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 - 右键项目可以打开、在 Finder 中显示、快速查看、隔空投送、复制文字或路径
 - 可选自动清理超过 1 天、7 天或 30 天的内容
 - 设置窗口（右键菜单栏图标 → 设置…）集中全部偏好：开机时自动启动、刘海拖放保护、剪贴板记录与条数、排除的应用、自动清理、刘海岛来源；每项改完立即生效，与菜单栏子菜单用的是同一套设置
-- 完全本地运行：零网络请求，无遥测
+- 本地优先：唯一的网络请求是向 GitHub Releases 检查新版本（启动后不久一次，之后每天一次；不发送任何个人信息，可在设置中关闭）——无遥测、无云同步
 
 ## 使用
 
@@ -244,10 +245,11 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 收起托盘 | 按 `⌃⌥Space`、`Esc`、“收起”，或点击托盘外任意处 |
 | 开启刘海拖放保护（可选） | 右键菜单栏图标 → 开启刘海拖放保护…，再在系统设置里打开 Shelf；每次更新后重新开启一次 |
 | 退出 Shelf | 右键菜单栏图标 → 退出 Shelf |
+| 检查更新 | 右键菜单栏图标 → 「检查更新…」；发现新版本时托盘底部提示、菜单出现「安装更新（vX）…」，只有你选择后才会下载安装；每天一次的后台检查可在 设置… → 通用 → 「自动检查更新」关闭 |
 
 ## 隐私
 
-一切都在本机：不联网、无遥测、无云同步。文字历史以明文保存在 `~/Library/Application Support/Shelf/`，不希望被记录的密码、验证码等内容请先退出 Shelf 再复制。
+一切都在本机：无遥测、无云同步。唯一的网络请求是自动更新检查：默认开启时，Shelf 在启动后不久向本仓库 GitHub 的最新 Release 查询一次，之后每天一次；请求只包含要下载的地址，不携带任何个人信息或标识。可以在 设置… → 通用 → 「自动检查更新」关闭，或把 `settings.json` 里的 `"autoCheckUpdates"` 改成 `false`；关闭后仍可用右键菜单的「检查更新…」手动查询。发现新版本时只在托盘底部和菜单里提示，不会自动下载。文字历史以明文保存在 `~/Library/Application Support/Shelf/`，不希望被记录的密码、验证码等内容请先退出 Shelf 再复制。
 
 ## 从源码构建
 

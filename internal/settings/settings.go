@@ -34,6 +34,9 @@ type Settings struct {
 	IslandBattery bool `json:"islandBattery"`
 	// IslandVolume shows a transient island when the volume changes.
 	IslandVolume bool `json:"islandVolume"`
+	// AutoCheckUpdates checks the GitHub release feed for a newer version
+	// in the background; it is the app's only network access.
+	AutoCheckUpdates bool `json:"autoCheckUpdates"`
 }
 
 // defaultClipboardLimit is the clipboard text history cap a fresh
@@ -42,7 +45,7 @@ const defaultClipboardLimit = 30
 
 // Default is what a fresh install uses.
 func Default() Settings {
-	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, IslandBattery: true, IslandVolume: true}
+	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, IslandBattery: true, IslandVolume: true, AutoCheckUpdates: true}
 }
 
 // Save replaces dir/settings.json with s, atomically.

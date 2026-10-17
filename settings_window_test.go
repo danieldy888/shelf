@@ -205,6 +205,32 @@ func TestSettingsViewIslandToggleSaves(t *testing.T) {
 	}
 }
 
+// The 通用 section's 自动检查更新 switch drives setAutoCheckUpdates through
+// the same applySettings path the menus use, so the file holds the choice.
+func TestSettingsViewAutoCheckToggle(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	a, view := newSettingsShelf(t)
+	if !a.settings.AutoCheckUpdates {
+		t.Fatal("autoCheckUpdates must default on")
+	}
+	clickVisible(t, view, "自动检查更新")
+	if a.settings.AutoCheckUpdates {
+		t.Fatal("toggle did not flip the running setting")
+	}
+	saved, err := settings.Load(a.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.AutoCheckUpdates {
+		t.Fatal("settings.json was not updated by the window toggle")
+	}
+	// Turning it back on schedules a check at once.
+	clickVisible(t, view, "自动检查更新")
+	if !a.settings.AutoCheckUpdates || a.updateNext.IsZero() {
+		t.Fatal("re-enabling did not schedule a check")
+	}
+}
+
 func TestSettingsViewSegmentedApplies(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, view := newSettingsShelf(t)

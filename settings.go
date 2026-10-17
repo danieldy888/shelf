@@ -261,6 +261,14 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 		})
 		ui.Text(c, "拖拽靠近刘海时把指针挡在托盘接收区内；需要辅助功能授权，每次更新后要重新开启。").
 			FontSize(11).TextColor(textMuted)
+		// 自动检查更新存 settings.json，文件损坏时随其余偏好一起锁定；
+		// 登录项与拖放保护不依赖该文件，保持可用。
+		ui.Column(c.Key("autocheck")).Disabled(a.settingsBroken).FillWidth().Children(func() {
+			settingsToggle(c, "autocheck", "自动检查更新", a.settings.AutoCheckUpdates, a.setAutoCheckUpdates)
+		})
+		ui.Text(c, "开启后每天向 GitHub Releases 查询一次新版本（不发送任何个人数据）；关闭后仍可用菜单里的「检查更新…」。").
+			FontSize(11).TextColor(textMuted)
+
 	})
 }
 

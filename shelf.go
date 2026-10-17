@@ -51,6 +51,11 @@ type shelf struct {
 	loginOn                                    bool           // 开机时自动启动，read back each time the window opens
 	loginErr                                   string         // last SetOpenAtLogin failure, shown inline
 	settingsScroll                             ui.ScrollState // the Settings window's scroll position
+	update                                     *mygo.Update   // version the feed offers, waiting for the user
+	updateChecking, updateInstalling           bool
+	updateInstalled                            bool    // swapped into place; runs at the next launch
+	updateProgress                             float64 // download progress while installing
+	updateNext                                 time.Time
 	guard                                      dragGuard
 	escHeld, spaceHeld                         bool
 	selection                                  selection
@@ -110,6 +115,7 @@ func (a *shelf) startMonitoring() {
 					a.islandTick(now)
 					a.animate(now)
 					a.monitorDrag(now)
+					a.tickUpdates(now)
 					if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
 						a.status, a.statusUntil = "", time.Time{}
 						if a.win != nil {

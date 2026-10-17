@@ -234,6 +234,22 @@ func (a *shelf) view(c *ui.Context) {
 					ui.Text(c, hint).FontSize(11).TextColor(textMuted)
 				})
 			}
+			if note := a.updateStatus(); note != "" {
+				// 有新版本时的提示行：安装与重新启动都交给用户决定。
+				ui.Row(c.Key("update-note")).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
+					ui.Text(c, note).Grow(1).SingleLine().FontSize(11).TextColor(textMuted)
+					switch {
+					case a.updateInstalled:
+						if ui.Button(c, "重新启动").Label("重新启动 Shelf 完成更新").Clicked() {
+							relaunchApp()
+						}
+					case a.update != nil && !a.updateInstalling:
+						if ui.Button(c, "安装更新").Label("安装更新 " + a.update.Version).Clicked() {
+							a.installUpdate()
+						}
+					}
+				})
+			}
 		})
 	})
 	if drop, ok := ui.DropData(zone, opts); ok {
