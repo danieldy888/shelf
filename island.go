@@ -65,6 +65,21 @@ func (a *shelf) idleBand() (w, h int) {
 	return int(sw + 0.5), max(8, int(max(32, a.notchH)))
 }
 
+// peekSize is the peek pill's resting size. While a track is loaded it
+// widens to fit the compact player (cover, title, playing mark, play/pause);
+// otherwise it is the small "click to expand" capsule. The idle strip is
+// always wide enough for both, so a track coming or going never resizes
+// the resident window.
+func (a *shelf) peekSize() (w, h float32) {
+	baseW := float32(max(180, a.notchW))
+	baseH := float32(max(32, a.notchH))
+	w = baseW + 56
+	if a.np != nil && a.np.hasTrack() {
+		w = max(w, npPeekWidth)
+	}
+	return w, baseH + 18
+}
+
 // shellSize is the one interpolation the shell Path, the idle hit-test
 // band and the island layout all share: hardware notch → (wings) → peek
 // pill → expanded panel. openK is the expand progress the caller uses
@@ -72,7 +87,7 @@ func (a *shelf) idleBand() (w, h int) {
 func (a *shelf) shellSize(openK float32) (w, h float32) {
 	baseW := float32(max(180, a.notchW))
 	baseH := float32(max(32, a.notchH))
-	peekW, peekH := baseW+56, baseH+18
+	peekW, peekH := a.peekSize()
 	expW, expH := float32(panelWidth-16), float32(a.panelH()-8)
 	w0 := baseW + (peekW-baseW)*a.peekProgress
 	h0 := baseH + (peekH-baseH)*a.peekProgress

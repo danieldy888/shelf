@@ -42,12 +42,14 @@ typedef void (*RegFn)(dispatch_queue_t);
 typedef void (*SendCommandFn)(uint32_t, CFDictionaryRef);
 typedef void (*SetInfoFn)(CFDictionaryRef);
 typedef void (*SetCanBeFn)(Boolean);
+typedef void (*GetClientFn)(dispatch_queue_t, void (^)(id));
 
 static void *MR;
 static GetInfoFn MRGetInfo;
 static GetPlayingFn MRGetIsPlaying;
 static RegFn MRRegister;
 static SendCommandFn MRSendCommand;
+static GetClientFn MRGetClient;
 
 // MediaRemote command numbers, as in MPRemoteCommand (kMRMediaRemoteCommand).
 enum {
@@ -100,15 +102,24 @@ typedef struct {
   long artLen;
   int artMissing; // artwork lookup failed for this track
 } Snapshot;
-
 static pthread_mutex_t emitLock = PTHREAD_MUTEX_INITIALIZER;
 static Snapshot cur;     // what the reader last saw
 static Snapshot pending; // latest read from the system
 static char *sentArtID;  // track whose artwork was already emitted
+static char *seenArtID;  // current track, for the artwork grace window
+static double seenArtAt; // when the current track was first sampled
 static double lastEmit;  // unix time of the last emitted line
 static int firstPublish = 1; // the reader always gets one line at startup
 static double lastSample; // unix time of the last MediaRemote read
+static double cmdPollUntil; // until then, a sent command keeps polling hot
 static volatile sig_atomic_t gotNotify;
+
+// artGrace is how long a track may carry no artwork before the reader is
+// told it is missing for good: some sources publish the blob a moment
+// after the metadata. A real absence surfaces as artMissing then.
+static const double artGrace = 2.0;
+
+static int stringsDiffer(const char *a, const char *b);
 
 static double nowUnix(void) {
   struct timeval tv;
@@ -197,6 +208,7 @@ typedef struct {
   dispatch_semaphore_t done;
   CFDictionaryRef info;
   Boolean playing;
+  char *text; // string answers, e.g. the client bundle id
 } NPRequest;
 
 static NPRequest *request(void) {
@@ -217,6 +229,7 @@ static int waitRequest(NPRequest *r) {
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
     dispatch_semaphore_wait(bg->done, DISPATCH_TIME_FOREVER);
     if (bg->info) CFRelease(bg->info);
+    free(bg->text);
     dispatch_release(bg->done);
     free(bg);
   });
@@ -225,8 +238,42 @@ static int waitRequest(NPRequest *r) {
 
 static void freeRequest(NPRequest *r) {
   if (r->info) CFRelease(r->info);
+  free(r->text);
   dispatch_release(r->done);
   free(r);
+}
+
+// readClientBundle returns the bundle identifier of the app that owns the
+// now-playing session, or NULL when MediaRemote has none to name. It is
+// how the reader substitutes the source app's icon for missing artwork.
+// Missing or crashing-getter tolerant: any failure just yields NULL.
+static char *readClientBundle(void) {
+  if (!MRGetClient) return NULL;
+  NPRequest *r = request();
+  if (!r) return NULL;
+  MRGetClient(workQ, ^(id client) {
+    if (!client) {
+      dispatch_semaphore_signal(r->done);
+      return;
+    }
+    SEL sel = sel_registerName("bundleIdentifier");
+    typedef BOOL (*RespFn)(id, SEL, SEL);
+    if (((RespFn)objc_msgSend)(client, sel_registerName("respondsToSelector:"),
+                              sel)) {
+      id bid = ((id (*)(id, SEL))objc_msgSend)(client, sel);
+      if (bid) {
+        const char *s = ((const char *(*)(id, SEL))objc_msgSend)(
+            bid, sel_registerName("UTF8String"));
+        if (s) r->text = strdup(s);
+      }
+    }
+    dispatch_semaphore_signal(r->done);
+  });
+  if (!waitRequest(r)) return NULL; // abandoned; the reaper owns it now
+  char *text = r->text;
+  r->text = NULL;
+  freeRequest(r);
+  return text;
 }
 
 // readInfo fetches the current Now Playing dictionary. Returns NULL when
@@ -281,7 +328,13 @@ static void snapshot(Snapshot *s) {
   freeSnap(s);
   memset(s, 0, sizeof *s);
   s->at = nowUnix();
-  s->playing = readIsPlaying() == 1;
+  int isPlaying = readIsPlaying();
+  s->playing = isPlaying == 1;
+  // The session's owner goes out too: the reader substitutes its app
+  // icon for tracks that never publish artwork.
+  char *bundle = readClientBundle();
+  setStr(&s->app, bundle);
+  free(bundle);
   CFDictionaryRef info = readInfo();
   if (!info) return;
   char *t = cstr(strval(info, KeyTitle));
@@ -295,7 +348,13 @@ static void snapshot(Snapshot *s) {
   free(t);
   num(CFDictionaryGetValue(info, KeyDuration), &s->duration);
   num(CFDictionaryGetValue(info, KeyElapsed), &s->elapsed);
-  if (!num(CFDictionaryGetValue(info, KeyRate), &s->rate)) s->rate = s->playing ? 1 : 0;
+  int haveRate = num(CFDictionaryGetValue(info, KeyRate), &s->rate);
+  if (!haveRate) s->rate = s->playing ? 1 : 0;
+  // Some apps (NetEase among them) keep reporting their session as
+  // playing for a while after a pause. A playback rate of zero is the
+  // honest answer: the reader draws the play glyph and freezes the clock
+  // from it. A missing rate keeps whatever IsPlaying said.
+  if (isPlaying == 1 && haveRate && s->rate <= 0) s->playing = 0;
   CFStringRef item = strval(info, KeyItemID);
   t = cstr(item);
   setStr(&s->artID, t);
@@ -307,24 +366,37 @@ static void snapshot(Snapshot *s) {
     snprintf(buf, sizeof buf, "%s\n%s", s->title ? s->title : "", s->artist ? s->artist : "");
     setStr(&s->artID, buf);
   }
-  // Artwork: encode it only when this is a track the reader has not
-  // already been told about — re-encoding the same blob every poll is
-  // the memory the published-only reads used to leak.
+  // Artwork: encode it whenever this poll carries a blob the reader has
+  // not been sent yet. The sent marker is checked first so the same blob
+  // is never re-encoded on every poll — that was the memory the
+  // published-only reads used to leak — but a blob that arrives after a
+  // title-first sample is still delivered.
   const void *art = CFDictionaryGetValue(info, KeyArtwork);
+  CFDataRef d = NULL;
+  CFIndex artLen = 0;
   if (art && CFGetTypeID(art) == CFDataGetTypeID()) {
-    CFDataRef d = (CFDataRef)art;
-    CFIndex n = CFDataGetLength(d);
-    if (n > 0 && n < 8 * 1024 * 1024) {
-      if (!sentArtID || strcmp(sentArtID, s->artID ? s->artID : "") != 0) {
-        const UInt8 *bytes = CFDataGetBytePtr(d);
-        s->art = base64Copy(bytes, (long)n);
-        s->artLen = s->art ? (long)strlen(s->art) : 0;
-      }
-    } else {
-      s->artMissing = 1; // empty or oversized: tell the reader to stop waiting
+    d = (CFDataRef)art;
+    artLen = CFDataGetLength(d);
+  }
+  if (d && artLen > 0 && artLen < 8 * 1024 * 1024) {
+    if (stringsDiffer(sentArtID, s->artID)) {
+      const UInt8 *bytes = CFDataGetBytePtr(d);
+      s->art = base64Copy(bytes, (long)artLen);
+      s->artLen = s->art ? (long)strlen(s->art) : 0;
     }
+  } else if (d) {
+    s->artMissing = 1; // empty or oversized: tell the reader to stop waiting
   } else {
-    s->artMissing = 1;
+    // Metadata and artwork often arrive in separate notifications (a
+    // title-first sample). Wait out a short grace window before calling
+    // the artwork missing for good; the reader then falls back to the
+    // source app's icon.
+    double now = nowUnix();
+    if (!seenArtID || stringsDiffer(seenArtID, s->artID)) {
+      setStr(&seenArtID, s->artID);
+      seenArtAt = now;
+    }
+    if (now - seenArtAt >= artGrace) s->artMissing = 1;
   }
   CFRelease(info);
 }
@@ -426,7 +498,11 @@ static void handleCommand(const char *line, int *quit) {
   else { emitError("bad command"); return; }
   MRSendCommand(cmd, NULL);
   // The system will tell us the new state; poll soon so it lands fast.
+  // The notification usually follows within a frame, but some apps are
+  // slow or never post one: keep sampling hot for a short while so the
+  // button and the playback state cannot disagree for long.
   gotNotify = 1;
+  cmdPollUntil = nowUnix() + 1.5;
 }
 
 // ---- entry --------------------------------------------------------------
@@ -444,6 +520,8 @@ static void loadMediaRemote(void) {
   MRRegister =
       (RegFn)dlsym(MR, "MRMediaRemoteRegisterForNowPlayingNotifications");
   MRSendCommand = (SendCommandFn)dlsym(MR, "MRMediaRemoteSendCommand");
+  MRGetClient =
+      (GetClientFn)dlsym(MR, "MRMediaRemoteGetNowPlayingClient");
   KeyTitle = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoTitle");
   KeyArtist = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoArtist");
   KeyAlbum = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoAlbum");
@@ -484,7 +562,10 @@ void shelf_np_run(void) {
                             200 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
   dispatch_source_set_event_handler(timer, ^{
     double now = nowUnix();
-    if (gotNotify || now - lastSample >= 1.0) {
+    // A command we just forwarded keeps sampling hot for a moment: the
+    // app's new state must reach the reader promptly even when the app
+    // neglects to post its own change notification.
+    if (gotNotify || now - lastSample >= 1.0 || now < cmdPollUntil) {
       gotNotify = 0;
       poll();
     }

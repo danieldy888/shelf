@@ -774,10 +774,39 @@ func notchRectFor(frame NSRect, insets NSEdgeInsets, leftAux, rightAux NSRect, p
 // icon). Read-only: never writes the file or the clipboard, no network.
 // Main thread only; cache per path — the parent does.
 func FileIcon(path string, size int) []byte {
+	return iconPNG(size, func(ws id) id {
+		return send(ws, "iconForFile:", uintptr(nsString(path)))
+	})
+}
+
+// AppIcon returns the PNG bytes of a bundle id's application icon at
+// size×size points, or nil when the app cannot be located. It is the
+// fallback picture for players that publish metadata without artwork, so
+// the now-playing card shows the app instead of a generic music glyph.
+// Main thread only; cache per bundle id — the parent does.
+func AppIcon(bundle string, size int) []byte {
+	if bundle == "" {
+		return nil
+	}
+	return iconPNG(size, func(ws id) id {
+		url := send(ws, "URLForApplicationWithBundleIdentifier:", uintptr(nsString(bundle)))
+		if url == 0 {
+			return 0
+		}
+		path := send(url, "path")
+		if path == 0 {
+			return 0
+		}
+		return send(ws, "iconForFile:", uintptr(path))
+	})
+}
+
+// iconPNG rasterises iconOf's NSImage to PNG bytes at size×size points.
+func iconPNG(size int, iconOf func(ws id) id) []byte {
 	var out []byte
 	withPool(func() {
 		ws := send(class("NSWorkspace"), "sharedWorkspace")
-		icon := send(ws, "iconForFile:", uintptr(nsString(path)))
+		icon := iconOf(ws)
 		if icon == 0 {
 			return
 		}

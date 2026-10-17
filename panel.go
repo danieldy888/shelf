@@ -120,7 +120,12 @@ func (a *shelf) view(c *ui.Context) {
 				// 收起动画尾段：壳继续缩回硬件刘海，不显示内容。
 				return
 			}
-			// 探头胶囊：显示底部提示，单击展开；拖放上来直接接收。
+			// 探头胶囊：有正在播放的曲目时是一枚紧凑播放器（封面、标题、
+			// 播放/暂停），按按钮控制播放，单击其余部分展开 Shelf（见
+			// mouseDown）。拖拽中或没有曲目时仍是底部提示。
+			if a.np != nil && a.np.peekPlayer(c) {
+				return
+			}
 			pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Padding(0, 8, 0, 8).
 				Justify(ui.End).AlignItems(ui.Center).Label("展开 Shelf")
 			hint := "点击展开 Shelf"

@@ -60,7 +60,7 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.visible || a.progress > 0.01 {
 		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 	}
-	w := max(max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth), a.islandStripW())
+	w := max(max(max(180, a.notchW)+2*peekStripPadX, notchTriggerWidth), max(a.islandStripW(), npPeekWidth))
 	h := max(max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
@@ -97,12 +97,12 @@ func (a *shelf) windowGeometryChanged() {
 }
 
 // peekPillRect is the on-screen box of the hovered notch capsule, matching
-// the shell drawn in view(). Clicks on the "点击展开 Shelf" hint land at
+// the shell drawn in view(): a compact now-playing player while a track is
+// loaded, otherwise the "点击展开 Shelf" hint. Clicks on the hint land at
 // the bottom of this rect, below the hardware notch.
 func (a *shelf) peekPillRect() mygo.Rectangle {
-	w := max(180, a.notchW) + 56
-	h := max(32, a.notchH) + 18
-	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
+	w, h := a.peekSize()
+	return mygo.Rectangle{X: a.stripCenter() - int(w/2), Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
 }
 
 func (a *shelf) overPeekPill(p mygo.Point) bool {
@@ -123,7 +123,12 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// overlay paints a "click to expand" pill that never receives the click.
 	// A press on the visible pill expands either way.
 	if a.peeking && !a.visible && (inside || a.overPeekPill(p)) {
-		a.show(false)
+		// A press on the compact player's play/pause button is the
+		// button's: the click observer runs before the UI frame, so
+		// expanding here would take the button away before it fires.
+		if a.np == nil || !a.np.overPeekButton(p) {
+			a.show(false)
+		}
 		return
 	}
 	// The island's wings sit in the menu bar's centre too, and are only

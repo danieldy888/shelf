@@ -34,6 +34,7 @@ type shelf struct {
 	animationFrom, progress                    float32
 	settings                                   settings.Settings
 	modules                                    []module
+	np                                         *nowPlayingModule // the peek player reads its state
 	clip                                       *clipboardModule  // nil while clipboard history is off
 	tab                                        int               // panelTab: which list the expanded panel shows
 	search                                     string            // clipboard tab's search text

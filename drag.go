@@ -139,9 +139,13 @@ func (a *shelf) monitorDrag(now time.Time) {
 	}
 	overNotch := a.overNotch(p)
 	nearEdge := a.nearTrigger(p)
+	// The peek player extends below the notch (and wider than it): the
+	// pointer must be able to rest on its controls without the pill
+	// folding shut under it.
+	holdPeek := overNotch || (a.peeking && a.overPeekPill(p))
 	// Dragging or hovering reveals the pill; only a click or a real incoming
 	// drag in the trigger zone can open the full panel.
-	if active || overNotch {
+	if active || holdPeek {
 		if !a.suppressed || overNotch {
 			a.setPeek(true)
 		}
@@ -153,7 +157,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 		mac.HapticTick()
 		a.show(true)
 	}
-	if !active && !a.visible && !overNotch {
+	if !active && !a.visible && !holdPeek {
 		a.setPeek(false)
 	}
 	// 自动收起：仅拖拽唤出的托盘在未收到内容、光标离开面板与触发区

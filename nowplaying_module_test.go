@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
@@ -118,41 +119,34 @@ func TestNPSnapOf(t *testing.T) {
 	}
 }
 
-func TestNowPlayingActivityOnlyWhilePlayingAndEnabled(t *testing.T) {
+func TestNowPlayingDoesNotGrowTheIsland(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	if _, live := s.mod.activity(time.Now()); live {
+	if _, live := currentActivity([]module{s.mod}, time.Now()); live {
 		t.Fatal("no state yet: the island must stay empty")
 	}
 	s.feed(t, `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`)
-	act, live := s.mod.activity(time.Now())
-	if !live {
-		t.Fatal("playing state must produce an island activity")
+	// Music no longer owns the collapsed notch: Droppy's demo shows the
+	// hardware notch bare while a track plays, so no module contributes
+	// an island activity for it. (Battery and volume still do.)
+	if _, live := currentActivity([]module{s.mod}, time.Now()); live {
+		t.Fatal("playing music must not grow wings around the notch")
 	}
-	if act.ID != "nowplaying" || act.Priority != nowPlayingPriority || act.Level != -1 || act.Trailing != "" {
-		t.Fatalf("activity shape: %+v", act)
+	if !s.mod.hasTrack() {
+		t.Fatal("playing music must still feed the peek player and card")
 	}
-	if act.Leading != ui.ImageSource(musicSymbol) {
-		t.Fatalf("without artwork the leading glyph is the music icon, got %T", act.Leading)
-	}
-	if act.LeadingTint != textPrimary {
-		t.Fatalf("the icon carries the text colour, got %v", act.LeadingTint)
-	}
-	// Paused: the island folds away, the card stays for resuming.
+	// Paused: the peek player and card stay for resuming.
 	s.feed(t, `{"ok":true,"playing":false,"title":"T","artist":"A","duration":100,"elapsed":5}`)
-	if _, live := s.mod.activity(time.Now()); live {
-		t.Fatal("paused playback must not hold the island")
+	if _, live := currentActivity([]module{s.mod}, time.Now()); live {
+		t.Fatal("paused playback must not hold the island either")
 	}
-	if _, ok := s.mod.track(); !ok {
+	if !s.mod.hasTrack() {
 		t.Fatal("paused playback must still have a card")
 	}
 	// Turning the setting off hides both.
 	s.mod.host.settings.IslandNowPlaying = false
 	s.mod.tick(time.Now())
-	if _, live := s.mod.activity(time.Now()); live {
-		t.Fatal("the setting off must hide the island")
-	}
-	if _, ok := s.mod.track(); ok {
-		t.Fatal("the setting off must hide the card")
+	if s.mod.hasTrack() {
+		t.Fatal("the setting off must hide the card and the peek player")
 	}
 	if s.mod.np != nil || s.mod.started {
 		t.Fatal("the setting off must stop the helper")
@@ -171,12 +165,160 @@ func TestNowPlayingCardDrawsTrackAndControls(t *testing.T) {
 	if !view.HasText("0:05") {
 		t.Fatal("the card must show the elapsed position")
 	}
+	if !view.HasText("-1:35") {
+		t.Fatal("the card must count the remaining time down, as the reference does")
+	}
 	// Clicking the play/pause button must send the toggle command to the
 	// helper; the button is reachable by its accessibility label.
 	if err := view.Click("暂停"); err != nil {
 		t.Fatal(err)
 	}
 	s.expectCommand(t, "toggle")
+	// The button flips on the press itself, before any helper line: a
+	// paused source must never leave the glyph on "pause".
+	if s.mod.last.Playing {
+		t.Fatal("the press must optimistically pause the shown state")
+	}
+	next := ui.NewTester(a.view, panelWidth, panelHeight)
+	if err := next.Click("播放"); err != nil {
+		t.Fatalf("the button must now offer play: %v", err)
+	}
+	s.expectCommand(t, "toggle")
+	// The second press optimistically resumes.
+	if !s.mod.last.Playing {
+		t.Fatal("the second press must optimistically resume the shown state")
+	}
+}
+
+func TestPeekSizeWidensForATrack(t *testing.T) {
+	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}, notchW: 180, notchH: 32}
+	if w, h := a.peekSize(); w != 236 || h != 50 {
+		t.Fatalf("idle peek pill = %.0fx%.0f, want 236x50", w, h)
+	}
+	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T"}}
+	if w, _ := a.peekSize(); w != npPeekWidth {
+		t.Fatalf("the peek player needs %dpt, got %.0f", npPeekWidth, w)
+	}
+	// Switching the feature off collapses the pill again even before the
+	// next tick stops the helper.
+	a.settings.IslandNowPlaying = false
+	if w, _ := a.peekSize(); w != 236 {
+		t.Fatalf("the pill must shrink when now playing is off, got %.0f", w)
+	}
+}
+
+func TestNowPlayingPeekPlayerShowsTrackAndControl(t *testing.T) {
+	s := newStubNowPlaying(t, true)
+	s.feed(t, `{"ok":true,"playing":true,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
+	a := &shelf{
+		settings:     settings.Settings{IslandNowPlaying: true},
+		notchX:       500,
+		notchW:       180,
+		notchH:       32,
+		peeking:      true,
+		peekProgress: 1,
+	}
+	s.mod.host = a
+	a.np = s.mod
+	a.modules = []module{s.mod}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	if !view.HasText("夜曲") || !view.HasText("周杰伦") {
+		t.Fatal("the peek player must show title and artist")
+	}
+	if _, ok := view.Find("暂停"); !ok {
+		t.Fatal("the peek player must expose play/pause")
+	}
+	if s.mod.peekBtn.Width == 0 {
+		t.Fatal("drawing the peek player must record its button for the click observer")
+	}
+	// A press on the toggle sends the command and leaves the panel collapsed.
+	if err := view.Click("暂停"); err != nil {
+		t.Fatal(err)
+	}
+	s.expectCommand(t, "toggle")
+	if a.visible {
+		t.Fatal("the peek control must not expand the panel")
+	}
+	if s.mod.last.Playing {
+		t.Fatal("the peek toggle must flip optimistically, like the card's")
+	}
+}
+
+func TestPeekPlayerPressOnToggleDoesNotExpand(t *testing.T) {
+	s := newStubNowPlaying(t, true)
+	s.feed(t, `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`)
+	a := &shelf{
+		settings:     settings.Settings{IslandNowPlaying: true},
+		notchX:       500,
+		notchW:       180,
+		notchH:       32,
+		peeking:      true,
+		peekProgress: 1,
+	}
+	s.mod.host = a
+	a.np = s.mod
+	a.modules = []module{s.mod}
+	_ = ui.NewTester(a.view, panelWidth, panelHeight) // draws the pill and records its button
+	btn := s.mod.peekBtn
+	if btn.Width == 0 {
+		t.Fatal("no peek button box recorded")
+	}
+	// The native observer sees the press before the UI frame: it must let
+	// the button have it instead of expanding the panel.
+	a.mouseDown(true, mygo.Point{X: btn.X + btn.Width/2, Y: btn.Y + btn.Height/2})
+	if a.visible {
+		t.Fatal("a press on the peek toggle must not expand the panel")
+	}
+	// Any other point on the pill still expands it.
+	origReg, origUnreg := registerKey, unregisterKey
+	registerKey = func(string, func()) error { return nil }
+	unregisterKey = func(string) {}
+	defer func() { registerKey, unregisterKey = origReg, origUnreg }()
+	pill := a.peekPillRect()
+	a.mouseDown(true, mygo.Point{X: pill.X + 20, Y: pill.Y + pill.Height - 10})
+	if !a.visible {
+		t.Fatal("a press on the pill body must expand the panel")
+	}
+}
+
+// push writes one helper line and refreshes once it has been read. Unlike
+// feed it does not require the visible snapshot to change: a contradicted
+// optimistic state is folded in and then overridden, which is exactly the
+// case under test.
+func (s *stubNowPlaying) push(t *testing.T, line string) {
+	t.Helper()
+	if _, err := io.WriteString(s.lines, line+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	s.mod.refresh(time.Now())
+}
+
+func TestPlayPausePressHoldsUntilHelperAgrees(t *testing.T) {
+	s := newStubNowPlaying(t, true)
+	s.feed(t, `{"ok":true,"playing":true,"title":"T","duration":100,"elapsed":5,"rate":1}`)
+	s.mod.send(mac.NPPlayPause)
+	s.expectCommand(t, "toggle")
+	if s.mod.last.Playing {
+		t.Fatal("the press must flip the shown state at once")
+	}
+	// A line the app emitted before processing the command still says
+	// playing: it must not flip the button back to "pause".
+	s.push(t, `{"ok":true,"playing":true,"title":"T","duration":100,"elapsed":6,"rate":1}`)
+	if s.mod.last.Playing {
+		t.Fatal("a stale helper line overwrote the press")
+	}
+	// The helper catches up. Agreement clears the override.
+	s.push(t, `{"ok":true,"playing":false,"title":"T","duration":100,"elapsed":6,"rate":0}`)
+	if s.mod.last.Playing {
+		t.Fatal("the helper's paused state was not adopted")
+	}
+	// With the override settled, the next real state is trusted, so the
+	// user's later play (from the app) is not masked.
+	s.push(t, `{"ok":true,"playing":true,"title":"T","duration":100,"elapsed":6,"rate":1}`)
+	if !s.mod.last.Playing {
+		t.Fatal("a settled override must not mask real playback")
+	}
 }
 
 func TestNowPlayingCardHiddenWithoutTrack(t *testing.T) {
@@ -195,11 +337,11 @@ func TestNowPlayingDecodeArtOncePerTrack(t *testing.T) {
 	m := &nowPlayingModule{}
 	pngBytes := testPNG(t)
 	m.decodeArt(mac.NowPlayingState{ArtID: "a", Art: pngBytes})
-	if m.art == nil {
-		t.Fatal("a valid PNG must decode")
+	if m.art == nil || m.artIsIcon {
+		t.Fatal("a valid PNG must decode as the cover")
 	}
-	if m.artTried != "a" {
-		t.Fatalf("artTried = %q, want a", m.artTried)
+	if m.artDone != "a" || m.artState() != npArtCover {
+		t.Fatalf("artDone = %q state = %d, want a/cover", m.artDone, m.artState())
 	}
 	// The same track never re-decodes.
 	bitmap := m.art
@@ -210,19 +352,35 @@ func TestNowPlayingDecodeArtOncePerTrack(t *testing.T) {
 	// A new track with a broken blob drops the old artwork and is not
 	// retried.
 	m.decodeArt(mac.NowPlayingState{ArtID: "b", Art: []byte("not a png")})
-	if m.art != nil || m.artTried != "b" {
-		t.Fatalf("a broken blob must clear the art and be remembered: art=%v tried=%q", m.art, m.artTried)
+	if m.art != nil || m.artDone != "b" {
+		t.Fatalf("a broken blob must clear the art and be remembered: art=%v tried=%q", m.art, m.artDone)
 	}
-	// A track the helper marked as artwork-less is remembered too.
+	// The helper declares the artwork missing (after its grace window) and
+	// the source names no app: the card shows its music glyph, but the
+	// track is not sealed — a late blob still wins.
 	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true})
-	if m.artTried != "c" {
-		t.Fatalf("artTried = %q, want c", m.artTried)
+	if m.art != nil || m.iconFor != "c" || m.artDone == "c" {
+		t.Fatalf("artwork-less track: art=%v iconFor=%q done=%q", m.art, m.iconFor, m.artDone)
 	}
-	// Artwork that arrives late for a track still decodes (not marked
-	// tried by a plain empty line).
+	// Artwork that arrives late for a track still decodes (the helper's
+	// artMissing deadline is not the reader's last word).
+	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true, Art: pngBytes})
+	if m.art == nil || m.artDone != "c" {
+		t.Fatal("late artwork must still decode and replace the fallback")
+	}
+	if m.artIsIcon || m.artState() != npArtCover {
+		t.Fatal("late artwork must be shown as the cover, not an icon")
+	}
+	// A later missing line for the same track must not clear the cover.
+	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true})
+	if m.art == nil {
+		t.Fatal("a repeated missing line must not drop a decoded cover")
+	}
+	// An empty artwork without artMissing (title-first sample) is not
+	// remembered as tried, so its own late blob decodes.
 	m.decodeArt(mac.NowPlayingState{ArtID: "d"})
-	if m.artTried == "d" {
-		t.Fatal("an empty artwork without artMissing must not be remembered as tried")
+	if m.artDone == "d" {
+		t.Fatal("an empty artwork without artMissing must not be remembered as done")
 	}
 	m.decodeArt(mac.NowPlayingState{ArtID: "d", Art: pngBytes})
 	if m.art == nil {
@@ -289,7 +447,7 @@ func TestNowPlayingStartFailureIsRetriedLater(t *testing.T) {
 	if tries != 1 {
 		t.Fatal("a tick past the delay must retry once")
 	}
-	if _, live := m.activity(now); live {
+	if m.hasTrack() {
 		t.Fatal("a module that never started must stay silent")
 	}
 }
