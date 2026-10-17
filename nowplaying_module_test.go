@@ -263,9 +263,26 @@ func TestPeekPlayerPressOnToggleDoesNotExpand(t *testing.T) {
 	if btn.Width == 0 {
 		t.Fatal("no peek button box recorded")
 	}
-	// The native observer sees the press before the UI frame: it must let
-	// the button have it instead of expanding the panel.
-	a.mouseDown(true, mygo.Point{X: btn.X + btn.Width/2, Y: btn.Y + btn.Height/2})
+	center := mygo.Point{X: btn.X + btn.Width/2, Y: btn.Y + btn.Height/2}
+	// WindowServer delivered the press to the menu bar (inside=false): the
+	// button's Clicked never runs, so the observer must forward the toggle
+	// itself, once, without expanding.
+	a.mouseDown(false, center)
+	s.expectCommand(t, "toggle")
+	if a.visible {
+		t.Fatal("a press on the peek toggle must not expand the panel")
+	}
+	if s.mod.last.Playing {
+		t.Fatal("the menu-bar-delivered press must flip the state optimistically")
+	}
+	// An inside press is the UI frame's: the observer must not send a
+	// second command, and still must not expand the panel.
+	a.mouseDown(true, center)
+	select {
+	case got := <-s.cmds:
+		t.Fatalf("an inside press sent %q from the observer; the button reports it", got)
+	case <-time.After(50 * time.Millisecond):
+	}
 	if a.visible {
 		t.Fatal("a press on the peek toggle must not expand the panel")
 	}
@@ -355,12 +372,29 @@ func TestNowPlayingDecodeArtOncePerTrack(t *testing.T) {
 	if m.art != nil || m.artDone != "b" {
 		t.Fatalf("a broken blob must clear the art and be remembered: art=%v tried=%q", m.art, m.artDone)
 	}
-	// The helper declares the artwork missing (after its grace window) and
-	// the source names no app: the card shows its music glyph, but the
-	// track is not sealed — a late blob still wins.
+	// The helper declares the artwork missing (after its grace window) but
+	// no line has named an app yet: nothing to draw and nothing is latched,
+	// so a later line naming the bundle still gets its chance.
 	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true})
-	if m.art != nil || m.iconFor != "c" || m.artDone == "c" {
-		t.Fatalf("artwork-less track: art=%v iconFor=%q done=%q", m.art, m.iconFor, m.artDone)
+	if m.art != nil || m.iconFor != "" || m.artDone == "c" {
+		t.Fatalf("artwork-less track without an app: art=%v iconFor=%q done=%q", m.art, m.iconFor, m.artDone)
+	}
+	var lookups []string
+	m.newIcon = func(bundle string) *ui.Bitmap {
+		lookups = append(lookups, bundle)
+		return nil
+	}
+	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true})
+	if m.iconFor != "" || len(lookups) != 0 {
+		t.Fatal("an app-less line must not look up or latch an icon")
+	}
+	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true, App: "com.example.player"})
+	if m.iconFor != "c" || len(lookups) != 1 || lookups[0] != "com.example.player" {
+		t.Fatalf("the named app must be looked up once: iconFor=%q lookups=%v", m.iconFor, lookups)
+	}
+	m.decodeArt(mac.NowPlayingState{ArtID: "c", ArtMissing: true, App: "com.example.player"})
+	if len(lookups) != 1 {
+		t.Fatal("the fallback must be looked up once per track")
 	}
 	// Artwork that arrives late for a track still decodes (the helper's
 	// artMissing deadline is not the reader's last word).
@@ -385,6 +419,20 @@ func TestNowPlayingDecodeArtOncePerTrack(t *testing.T) {
 	m.decodeArt(mac.NowPlayingState{ArtID: "d", Art: pngBytes})
 	if m.art == nil {
 		t.Fatal("late artwork must still decode")
+	}
+}
+
+func TestNowPlayingFallsBackToTheAppIcon(t *testing.T) {
+	icon := ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 8)))
+	m := &nowPlayingModule{newIcon: func(bundle string) *ui.Bitmap {
+		if bundle != "com.example.player" {
+			t.Fatalf("looked up %q", bundle)
+		}
+		return icon
+	}}
+	m.decodeArt(mac.NowPlayingState{ArtID: "x", ArtMissing: true, App: "com.example.player"})
+	if m.art != icon || !m.artIsIcon || m.artState() != npArtIcon {
+		t.Fatalf("app icon fallback: art=%p isIcon=%v state=%d", m.art, m.artIsIcon, m.artState())
 	}
 }
 

@@ -347,8 +347,10 @@ func TestHelperSourceContracts(t *testing.T) {
 		"MRMediaRemoteGetNowPlayingClient",
 		// A title-first sample does not seal the artwork as missing.
 		"artGrace",
-		// A command makes the helper sample hot so the new state lands fast.
+		// A command makes the helper sample hot so the new state lands fast,
+		// and the window is atomic across the stdin thread and timer queue.
 		"cmdPollUntil",
+		"static _Atomic double cmdPollUntil",
 	} {
 		if !strings.Contains(string(src), want) {
 			t.Errorf("helper.c lacks %q", want)

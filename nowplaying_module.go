@@ -57,6 +57,10 @@ type nowPlayingModule struct {
 	// per app, not once per track.
 	icons map[string]*ui.Bitmap
 
+	// newIcon resolves a bundle id's icon; nil means mac.AppIcon. A seam
+	// for tests, which must not start AppKit.
+	newIcon func(bundle string) *ui.Bitmap
+
 	// peekBtn is the on-screen box of the peek player's play/pause button,
 	// written while the peek pill is drawn. The native mouse-down observer
 	// reads it so a press there toggles the track instead of expanding the
@@ -264,13 +268,22 @@ func (m *nowPlayingModule) decodeArt(st mac.NowPlayingState) {
 		}
 		return
 	}
-	if !st.ArtMissing || m.iconFor == st.ArtID {
-		// The helper has not given up on the artwork yet, or this track's
-		// fallback is already in place.
+	if !st.ArtMissing || st.App == "" || m.iconFor == st.ArtID {
+		// The helper has not given up on the artwork yet, this line cannot
+		// name an app to draw, or the fallback is already in place. A later
+		// line naming the bundle must still get its chance.
 		return
 	}
 	m.iconFor = st.ArtID
-	m.art, m.artIsIcon = m.appIcon(st.App), true
+	m.art, m.artIsIcon = m.icon(st.App), true
+}
+
+// icon resolves an app icon through the test seam when one is set.
+func (m *nowPlayingModule) icon(bundle string) *ui.Bitmap {
+	if m.newIcon != nil {
+		return m.newIcon(bundle)
+	}
+	return m.appIcon(bundle)
 }
 
 // appIcon returns the playing app's icon as a decoded bitmap, or nil. The

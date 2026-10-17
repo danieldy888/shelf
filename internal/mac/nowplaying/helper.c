@@ -27,6 +27,7 @@
 #include <objc/objc.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,7 +112,9 @@ static double seenArtAt; // when the current track was first sampled
 static double lastEmit;  // unix time of the last emitted line
 static int firstPublish = 1; // the reader always gets one line at startup
 static double lastSample; // unix time of the last MediaRemote read
-static double cmdPollUntil; // until then, a sent command keeps polling hot
+// Written on the stdin thread and read on the timer queue: atomic so the
+// hot-poll window cannot be torn or cached across threads.
+static _Atomic double cmdPollUntil;
 static volatile sig_atomic_t gotNotify;
 
 // artGrace is how long a track may carry no artwork before the reader is
@@ -502,7 +505,7 @@ static void handleCommand(const char *line, int *quit) {
   // slow or never post one: keep sampling hot for a short while so the
   // button and the playback state cannot disagree for long.
   gotNotify = 1;
-  cmdPollUntil = nowUnix() + 1.5;
+  atomic_store(&cmdPollUntil, nowUnix() + 1.5);
 }
 
 // ---- entry --------------------------------------------------------------
@@ -565,7 +568,8 @@ void shelf_np_run(void) {
     // A command we just forwarded keeps sampling hot for a moment: the
     // app's new state must reach the reader promptly even when the app
     // neglects to post its own change notification.
-    if (gotNotify || now - lastSample >= 1.0 || now < cmdPollUntil) {
+    if (gotNotify || now - lastSample >= 1.0 ||
+        now < atomic_load(&cmdPollUntil)) {
       gotNotify = 0;
       poll();
     }

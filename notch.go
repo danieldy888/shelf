@@ -124,11 +124,17 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// A press on the visible pill expands either way.
 	if a.peeking && !a.visible && (inside || a.overPeekPill(p)) {
 		// A press on the compact player's play/pause button is the
-		// button's: the click observer runs before the UI frame, so
-		// expanding here would take the button away before it fires.
-		if a.np == nil || !a.np.overPeekButton(p) {
-			a.show(false)
+		// button's. When WindowServer hands the press to the menu bar
+		// instead of our window, the button's Clicked never runs, so the
+		// observer sends the command itself; an inside press must not
+		// send twice (the UI frame reports it).
+		if a.np != nil && a.np.overPeekButton(p) {
+			if !inside {
+				a.np.send(mac.NPPlayPause)
+			}
+			return
 		}
+		a.show(false)
 		return
 	}
 	// The island's wings sit in the menu bar's centre too, and are only
