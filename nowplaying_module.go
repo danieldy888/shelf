@@ -75,9 +75,10 @@ type nowPlayingModule struct {
 }
 
 // npOptimisticWindow is how long a press outranks contradicting helper
-// lines. It is a ceiling for slow apps, not the normal path: a helper line
-// that agrees clears the override at once.
-const npOptimisticWindow = 1500 * time.Millisecond
+// lines. It is a ceiling for slow apps, not the normal path: a helper
+// line that agrees clears the override at once, and after the window
+// the helper is trusted again.
+const npOptimisticWindow = 2 * time.Second
 
 // npSnap is the part of a Now Playing state the UI cares about.
 type npSnap struct {
@@ -207,6 +208,10 @@ func (m *nowPlayingModule) refresh(now time.Time) {
 			} else {
 				st.Rate = 0
 			}
+			// Keep the clock pinned where the press left it: a line that
+			// still contradicts is stale, and its frozen elapsed or old
+			// info timestamp would jump the position.
+			st.Elapsed, st.Received, st.InfoAt = m.last.Elapsed, m.last.Received, m.last.InfoAt
 		default:
 			m.optUntil = time.Time{}
 		}
@@ -493,7 +498,15 @@ func (m *nowPlayingModule) send(command mac.NowPlayingCommand) {
 	// helper anchor: the button press itself must not move the clock.
 	m.last.Elapsed = m.last.Position(now)
 	m.last.Received = now
+	m.last.InfoAt = time.Time{} // the pin replaces the dict's timestamp
 	m.last.Playing = !m.last.Playing
+	if m.last.Playing {
+		if m.last.Rate <= 0 {
+			m.last.Rate = 1
+		}
+	} else {
+		m.last.Rate = 0
+	}
 	m.optUntil, m.optPlaying = now.Add(npOptimisticWindow), m.last.Playing
 	next := npSnapOf(m.last, true, m.host.visible, now)
 	next.art = m.artState()

@@ -8,13 +8,19 @@
 // shelf_np_run as an xsub and calls it. Everything runs in the host
 // process; the bundle never spawns one.
 //
-// Protocol, one JSON object per line on stdout:
-//   {"ok":true,"playing":<bool>,"title":..,"artist":..,"album":..,
-//    "duration":<sec>,"elapsed":<sec>,"at":<unix time>,
+// Protocol, one JSON object per line on stdout. The line carries the raw
+// MediaRemote signals; the reader reconciles them into the shown state:
+//   {"ok":true,"isPlaying":<bool|null>,"appState":<int>,
+//    "title":..,"artist":..,"album":..,"duration":<sec>,"elapsed":<sec>,
+//    "hasRate":<bool>,"rate":<sec/sec>,"infoAt":<unix time of the info
+//    dict's Timestamp, 0 when absent>,"at":<unix time>,
 //    "app":<bundle id>,"artID":<track id>,"art":<base64 png>,
 //    "artMissing":<bool>}
-// art is sent once per new track (artID change); artMissing marks a track
-// whose artwork could not be read so the reader does not wait for it.
+// isPlaying is null when the MediaRemote call timed out; appState is the
+// MRPlaybackState of the now-playing app (-1 timeout, -2 symbol absent).
+// rate and elapsed are the info dict's clock anchor as of infoAt — raw,
+// never folded into the play verdict, because publishers like NetEase
+// leave rate 0 in a minutes-stale dict while playback continues.
 // Commands, one per line on stdin:
 //   play | pause | toggle | next | prev | stop | quit
 // An unknown command gets {"error":"bad command"} back. EOF on stdin is
@@ -39,15 +45,15 @@
 
 typedef void (*GetInfoFn)(dispatch_queue_t, void (^)(CFDictionaryRef));
 typedef void (*GetPlayingFn)(dispatch_queue_t, void (^)(Boolean));
+typedef void (*GetStateFn)(dispatch_queue_t, void (^)(int));
 typedef void (*RegFn)(dispatch_queue_t);
 typedef void (*SendCommandFn)(uint32_t, CFDictionaryRef);
-typedef void (*SetInfoFn)(CFDictionaryRef);
-typedef void (*SetCanBeFn)(Boolean);
 typedef void (*GetClientFn)(dispatch_queue_t, void (^)(id));
 
 static void *MR;
 static GetInfoFn MRGetInfo;
 static GetPlayingFn MRGetIsPlaying;
+static GetStateFn MRGetAppState;
 static RegFn MRRegister;
 static SendCommandFn MRSendCommand;
 static GetClientFn MRGetClient;
@@ -64,7 +70,7 @@ enum {
 
 // Metadata keys, resolved from the framework (they are exported constants).
 static CFStringRef KeyTitle, KeyArtist, KeyAlbum, KeyDuration, KeyElapsed,
-    KeyRate, KeyArtwork, KeyItemID;
+    KeyRate, KeyArtwork, KeyItemID, KeyTimestamp;
 
 static char *cstr(CFStringRef s) {
   if (!s) return NULL;
@@ -94,12 +100,18 @@ static CFStringRef strval(CFDictionaryRef d, CFStringRef key) {
 // ---- state --------------------------------------------------------------
 
 typedef struct {
-  int playing;
+  // isPlaying/appState are the two truth signals MediaRemote reports.
+  // -1 marks a timed-out read; appState is an MRPlaybackState (1 playing,
+  // 2 paused, 3 stopped, 4 interrupted, 0 unknown, -2 symbol absent).
+  int isPlaying;
+  int appState;
   char *title, *artist, *album, *app, *artID;
-  double duration, elapsed; // elapsed is seconds at time `at`
-  double rate;
-  double at; // unix time the snapshot was written
-  char *art; // base64 PNG of the current sample, NULL when absent
+  double duration, elapsed; // elapsed is seconds at time infoAt
+  int hasRate;
+  double rate;    // raw PlaybackRate from the info dict
+  double infoAt;  // unix time the info dict was written (its Timestamp), 0
+  double at;      // unix time the snapshot was taken
+  char *art;      // base64 PNG of the current sample, NULL when absent
   long artLen;
   int artMissing; // artwork lookup failed for this track
 } Snapshot;
@@ -169,13 +181,17 @@ static const char b64[] =
 static void emitSnapshot(const Snapshot *s, int withArt) {
   pthread_mutex_lock(&emitLock);
   FILE *f = stdout;
-  fputs("{\"ok\":true,\"playing\":", f);
-  fputs(s->playing ? "true" : "false", f);
+  fputs("{\"ok\":true,\"isPlaying\":", f);
+  if (s->isPlaying < 0) fputs("null", f);
+  else fputs(s->isPlaying ? "true" : "false", f);
+  fprintf(f, ",\"appState\":%d", s->appState);
   fputs(",\"title\":", f); putEscaped(f, s->title ? s->title : "");
   fputs(",\"artist\":", f); putEscaped(f, s->artist ? s->artist : "");
   fputs(",\"album\":", f); putEscaped(f, s->album ? s->album : "");
-  fprintf(f, ",\"duration\":%.3f,\"elapsed\":%.3f,\"rate\":%.3f,\"at\":%.3f",
-          s->duration, s->elapsed, s->rate, s->at);
+  fprintf(f, ",\"duration\":%.3f,\"elapsed\":%.3f,\"hasRate\":%s,"
+            "\"rate\":%.3f,\"infoAt\":%.3f,\"at\":%.3f",
+          s->duration, s->elapsed, s->hasRate ? "true" : "false",
+          s->rate, s->infoAt, s->at);
   fputs(",\"app\":", f); putEscaped(f, s->app ? s->app : "");
   fputs(",\"artID\":", f); putEscaped(f, s->artID ? s->artID : "");
   if (s->artMissing) fputs(",\"artMissing\":true", f);
@@ -211,6 +227,7 @@ typedef struct {
   dispatch_semaphore_t done;
   CFDictionaryRef info;
   Boolean playing;
+  int state; // integer answers, e.g. the app playback state
   char *text; // string answers, e.g. the client bundle id
 } NPRequest;
 
@@ -307,6 +324,39 @@ static int readIsPlaying(void) {
   return playing;
 }
 
+// readAppState asks MediaRemote for the now-playing app's playback state
+// (MRPlaybackState). Returns -1 on timeout, -2 when the call is absent.
+static int readAppState(void) {
+  if (!MRGetAppState) return -2;
+  NPRequest *r = request();
+  if (!r) return -1;
+  MRGetAppState(workQ, ^(int s) {
+    r->state = s;
+    dispatch_semaphore_signal(r->done);
+  });
+  int state = waitRequest(r) ? r->state : -1;
+  if (state != -1) freeRequest(r);
+  return state;
+}
+
+// infoTimestamp converts the info dict's Timestamp to unix time. It is a
+// CFDate on this system (absolute time since 2001); a CFNumber is taken
+// as unix seconds when large, absolute-time seconds otherwise. 0 = absent.
+static double infoTimestamp(CFDictionaryRef info) {
+  if (!info || !KeyTimestamp) return 0;
+  const void *v = CFDictionaryGetValue(info, KeyTimestamp);
+  if (!v) return 0;
+  CFTypeID t = CFGetTypeID(v);
+  if (t == CFDateGetTypeID())
+    return CFDateGetAbsoluteTime((CFDateRef)v) + 978307200.0;
+  if (t == CFNumberGetTypeID()) {
+    double n = 0;
+    CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &n);
+    return n >= 1e9 ? n : n + 978307200.0;
+  }
+  return 0;
+}
+
 static char *base64Copy(const unsigned char *data, long n) {
   long out = 4 * ((n + 2) / 3);
   char *s = malloc((size_t)out + 1);
@@ -331,8 +381,11 @@ static void snapshot(Snapshot *s) {
   freeSnap(s);
   memset(s, 0, sizeof *s);
   s->at = nowUnix();
-  int isPlaying = readIsPlaying();
-  s->playing = isPlaying == 1;
+  // The two truth signals go out raw; the reader reconciles them. They
+  // can disagree briefly — IsPlaying lags some apps' pauses — so neither
+  // is folded into a verdict here.
+  s->isPlaying = readIsPlaying();
+  s->appState = readAppState();
   // The session's owner goes out too: the reader substitutes its app
   // icon for tracks that never publish artwork.
   char *bundle = readClientBundle();
@@ -351,13 +404,9 @@ static void snapshot(Snapshot *s) {
   free(t);
   num(CFDictionaryGetValue(info, KeyDuration), &s->duration);
   num(CFDictionaryGetValue(info, KeyElapsed), &s->elapsed);
-  int haveRate = num(CFDictionaryGetValue(info, KeyRate), &s->rate);
-  if (!haveRate) s->rate = s->playing ? 1 : 0;
-  // Some apps (NetEase among them) keep reporting their session as
-  // playing for a while after a pause. A playback rate of zero is the
-  // honest answer: the reader draws the play glyph and freezes the clock
-  // from it. A missing rate keeps whatever IsPlaying said.
-  if (isPlaying == 1 && haveRate && s->rate <= 0) s->playing = 0;
+  s->hasRate = num(CFDictionaryGetValue(info, KeyRate), &s->rate);
+  s->infoAt = infoTimestamp(info);
+
   CFStringRef item = strval(info, KeyItemID);
   t = cstr(item);
   setStr(&s->artID, t);
@@ -422,20 +471,23 @@ static void publish(void) {
   // that carries it arrives.
   int withArt = pending.art && stringsDiffer(sentArtID, pending.artID);
   int materialChange =
-      cur.playing != pending.playing || trackChanged || withArt ||
+      cur.isPlaying != pending.isPlaying ||
+      cur.appState != pending.appState || trackChanged || withArt ||
       cur.artMissing != pending.artMissing ||
       stringsDiffer(cur.title, pending.title) ||
       stringsDiffer(cur.artist, pending.artist) ||
       stringsDiffer(cur.album, pending.album) ||
       stringsDiffer(cur.app, pending.app) ||
       (pending.duration > 0 ? cur.duration != pending.duration : 0) ||
-      cur.rate != pending.rate;
+      cur.hasRate != pending.hasRate || cur.rate != pending.rate ||
+      cur.infoAt != pending.infoAt;
 
   // Emit on change, or once a second while playing so the reader has a
   // fresh anchor to extrapolate the progress from. A paused or idle
   // system stays silent — except for the very first line, which tells
   // the reader whether anything is playing at all.
-  int anchor = pending.playing && now - lastEmit >= 1.0;
+  int anchor = (pending.isPlaying == 1 || pending.appState == 1) &&
+               now - lastEmit >= 1.0;
   if (!materialChange && !anchor && !firstPublish) return;
   firstPublish = 0;
 
@@ -520,6 +572,8 @@ static void loadMediaRemote(void) {
   MRGetInfo = (GetInfoFn)dlsym(MR, "MRMediaRemoteGetNowPlayingInfo");
   MRGetIsPlaying =
       (GetPlayingFn)dlsym(MR, "MRMediaRemoteGetNowPlayingApplicationIsPlaying");
+  MRGetAppState = (GetStateFn)dlsym(
+      MR, "MRMediaRemoteGetNowPlayingApplicationPlaybackState");
   MRRegister =
       (RegFn)dlsym(MR, "MRMediaRemoteRegisterForNowPlayingNotifications");
   MRSendCommand = (SendCommandFn)dlsym(MR, "MRMediaRemoteSendCommand");
@@ -533,6 +587,7 @@ static void loadMediaRemote(void) {
   KeyRate = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoPlaybackRate");
   KeyArtwork = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoArtworkData");
   KeyItemID = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoContentItemIdentifier");
+  KeyTimestamp = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoTimestamp");
   if (!MRGetInfo || !MRGetIsPlaying || !MRSendCommand) {
     fprintf(stderr, "shelf-np: MediaRemote lacks the needed functions\n");
     exit(2);
@@ -542,6 +597,33 @@ static void loadMediaRemote(void) {
 // The reader prints nothing to stdout on its own, so a closed stdout is
 // safe to ignore.
 static void ignoreSigpipe(void) { signal(SIGPIPE, SIG_IGN); }
+
+static volatile sig_atomic_t wantQuit;
+
+// stdinReader owns the command pipe. Commands arrive on this thread so
+// the main thread stays free to run its run loop — MediaRemote
+// registers this client for notifications through a main-queue
+// delivery, and the distributed notification center is a run-loop
+// source. A main thread blocked in fgets() never completes that
+// registration and keeps reading the state it first saw (observed: the
+// read side reported a stale isPlaying through whole play/pause
+// cycles while a run-loop-pumping client saw every transition).
+static void *stdinReader(void *unused) {
+  (void)unused;
+  char line[256];
+  int quit = 0;
+  while (!wantQuit && fgets(line, sizeof line, stdin)) {
+    size_t n = strlen(line);
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+    if (!n) continue;
+    handleCommand(line, &quit);
+    if (quit) break;
+  }
+  wantQuit = 1;
+  // Wake the main run loop so it notices and unwinds.
+  CFRunLoopStop(CFRunLoopGetMain());
+  return NULL;
+}
 
 // shelf_np_run is the bundle entry the Apple-signed host calls. It runs
 // until stdin is closed or "quit" arrives.
@@ -555,10 +637,10 @@ void shelf_np_run(void) {
   // First sample: the reader starts with a real state.
   poll();
 
-  // Timer thread: read when the system said something changed, and at
-  // least once a second (that anchor is what the reader extrapolates a
-  // moving progress bar from). The timer itself is cheap; the 1s gate
-  // keeps an idle system down to one MediaRemote round trip per second.
+  // Timer: read when the system said something changed, and at least
+  // once a second (that anchor is what the reader extrapolates a moving
+  // progress bar from). The 1s gate keeps an idle system down to one
+  // MediaRemote round trip per second.
   dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                                    dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
   dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
@@ -576,14 +658,16 @@ void shelf_np_run(void) {
   });
   dispatch_resume(timer);
 
-  char line[256];
-  while (fgets(line, sizeof line, stdin)) {
-    size_t n = strlen(line);
-    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
-    if (!n) continue;
-    int quit = 0;
-    handleCommand(line, &quit);
-    if (quit) break;
+  pthread_t rd;
+  if (pthread_create(&rd, NULL, stdinReader, NULL) != 0) wantQuit = 1;
+  // The main thread services its run loop until stdin ends: this is
+  // what lets MediaRemote finish registering this client and delivers
+  // now-playing notifications to the timer above.
+  while (!wantQuit) {
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, true);
   }
+  wantQuit = 1;
+  CFRunLoopStop(CFRunLoopGetMain());
+  if (rd) pthread_join(rd, NULL);
   dispatch_source_cancel(timer);
 }

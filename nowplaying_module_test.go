@@ -121,7 +121,7 @@ func TestNPSnapOf(t *testing.T) {
 
 func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	s.feed(t, `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`)
+	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","artist":"A","duration":100,"elapsed":5}`)
 	// Music never owns the collapsed notch: it feeds only the peek player
 	// and the panel card, so playing must report a track while paused does
 	// too — the controls are most useful while paused.
@@ -129,7 +129,7 @@ func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 		t.Fatal("playing music must still feed the peek player and card")
 	}
 	// Paused: the peek player and card stay for resuming.
-	s.feed(t, `{"ok":true,"playing":false,"title":"T","artist":"A","duration":100,"elapsed":5}`)
+	s.feed(t, `{"ok":true,"isPlaying":false,"appState":2,"title":"T","artist":"A","duration":100,"elapsed":5}`)
 	if !s.mod.hasTrack() {
 		t.Fatal("paused playback must still have a card")
 	}
@@ -146,7 +146,7 @@ func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 
 func TestNowPlayingCardDrawsTrackAndControls(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	s.feed(t, `{"ok":true,"playing":true,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
+	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}}
 	a.modules = []module{s.mod, &retentionModule{host: a}}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
@@ -200,7 +200,7 @@ func TestPeekSizeWidensForATrack(t *testing.T) {
 
 func TestNowPlayingPeekPlayerShowsTrackAndControl(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	s.feed(t, `{"ok":true,"playing":true,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
+	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{
 		settings:     settings.Settings{IslandNowPlaying: true},
 		notchX:       500,
@@ -237,7 +237,7 @@ func TestNowPlayingPeekPlayerShowsTrackAndControl(t *testing.T) {
 
 func TestPeekPlayerPressOnToggleDoesNotExpand(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	s.feed(t, `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`)
+	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","artist":"A","duration":100,"elapsed":5}`)
 	a := &shelf{
 		settings:     settings.Settings{IslandNowPlaying: true},
 		notchX:       500,
@@ -304,7 +304,7 @@ func (s *stubNowPlaying) push(t *testing.T, line string) {
 
 func TestPlayPausePressHoldsUntilHelperAgrees(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	s.feed(t, `{"ok":true,"playing":true,"title":"T","duration":100,"elapsed":5,"rate":1}`)
+	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","duration":100,"elapsed":5,"hasRate":true,"rate":1}`)
 	s.mod.send(mac.NPPlayPause)
 	s.expectCommand(t, "toggle")
 	if s.mod.last.Playing {
@@ -312,18 +312,18 @@ func TestPlayPausePressHoldsUntilHelperAgrees(t *testing.T) {
 	}
 	// A line the app emitted before processing the command still says
 	// playing: it must not flip the button back to "pause".
-	s.push(t, `{"ok":true,"playing":true,"title":"T","duration":100,"elapsed":6,"rate":1}`)
+	s.push(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","duration":100,"elapsed":6,"hasRate":true,"rate":1}`)
 	if s.mod.last.Playing {
 		t.Fatal("a stale helper line overwrote the press")
 	}
 	// The helper catches up. Agreement clears the override.
-	s.push(t, `{"ok":true,"playing":false,"title":"T","duration":100,"elapsed":6,"rate":0}`)
+	s.push(t, `{"ok":true,"isPlaying":false,"appState":2,"title":"T","duration":100,"elapsed":6,"hasRate":true,"rate":0}`)
 	if s.mod.last.Playing {
 		t.Fatal("the helper's paused state was not adopted")
 	}
 	// With the override settled, the next real state is trusted, so the
 	// user's later play (from the app) is not masked.
-	s.push(t, `{"ok":true,"playing":true,"title":"T","duration":100,"elapsed":6,"rate":1}`)
+	s.push(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","duration":100,"elapsed":6,"hasRate":true,"rate":1}`)
 	if !s.mod.last.Playing {
 		t.Fatal("a settled override must not mask real playback")
 	}
@@ -335,7 +335,7 @@ func TestNowPlayingCardHiddenWithoutTrack(t *testing.T) {
 		t.Fatal("no track: the card must not claim it drew anything")
 	}
 	// A helper line with nothing playing is not a track either.
-	s.feed(t, `{"ok":true,"playing":false,"title":"","artist":""}`)
+	s.feed(t, `{"ok":true,"isPlaying":false,"appState":2,"title":"","artist":""}`)
 	if s.mod.card(nil) {
 		t.Fatal("an empty state must not draw a card")
 	}
@@ -429,7 +429,7 @@ func TestNowPlayingFallsBackToTheAppIcon(t *testing.T) {
 
 func TestNowPlayingStopsWhenHelperDies(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	s.feed(t, `{"ok":true,"playing":true,"title":"T","elapsed":1}`)
+	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","elapsed":1}`)
 	if !s.mod.playing() {
 		t.Fatal("state must be live")
 	}

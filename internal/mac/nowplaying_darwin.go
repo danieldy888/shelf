@@ -76,9 +76,12 @@ func commandName(c NowPlayingCommand) string {
 	return ""
 }
 
-// NowPlayingState is the latest snapshot the helper reported. It is
-// stable: a new state is only published once a full line parsed.
+// NowPlayingState is the latest snapshot the helper reported, reconciled.
+// A new state is only published once a full line parsed.
 type NowPlayingState struct {
+	// Playing is reconciled from MediaRemote's two truth signals — the
+	// app's playback state and its IsPlaying flag — never from the info
+	// dict's rate, which some apps (NetEase) leave at 0 while playing.
 	Playing bool
 	Title   string
 	Artist  string
@@ -86,12 +89,18 @@ type NowPlayingState struct {
 	// Duration is the track length in seconds; 0 when unknown (a live
 	// stream or a source that does not report one).
 	Duration float64
-	// Elapsed is the playback position the helper saw, and Received the
-	// local time it arrived: position == Elapsed + (now-Received)*rate
-	// while playing.
+	// Elapsed is the playback position the publisher's info dict last
+	// named, and InfoAt the wall-clock time that position referred to
+	// (the dict's own Timestamp). InfoAt is zero when the dict carries
+	// none; then Received — the local time the line arrived — anchors
+	// the extrapolation instead.
 	Elapsed  float64
-	Rate     float64
+	InfoAt   time.Time
 	Received time.Time
+	// Rate is the effective playback rate for extrapolating Position:
+	// the reported rate while playing, 0 while paused, and 1 when a
+	// playing source publishes no rate (or a frozen 0).
+	Rate float64
 	// App is the bundle id of the app that is playing, when known.
 	App string
 	// ArtID identifies the current track's artwork; Art is its PNG
@@ -103,12 +112,21 @@ type NowPlayingState struct {
 }
 
 // Position extrapolates the playback position at now: frozen while
-// paused, advancing at the reported rate while playing. It never goes
-// negative or past Duration (when known).
+// paused, advancing at Rate while playing. It anchors at the info
+// dict's own timestamp (InfoAt) so a publisher that only rewrites its
+// dict on state changes still shows a moving clock; without one the
+// line's arrival time is the anchor. It never goes negative or past
+// Duration (when known).
 func (s NowPlayingState) Position(now time.Time) float64 {
 	p := s.Elapsed
-	if s.Playing && s.Rate > 0 {
-		if d := now.Sub(s.Received).Seconds(); d > 0 {
+	anchor := s.InfoAt
+	if anchor.IsZero() {
+		anchor = s.Received
+	}
+	// Without an anchor the position stays frozen: extrapolating from
+	// the zero time would pin the bar at the track's end.
+	if s.Playing && s.Rate != 0 && !anchor.IsZero() {
+		if d := now.Sub(anchor).Seconds(); d > 0 {
 			p += d * s.Rate
 		}
 	}
@@ -180,7 +198,8 @@ func decodeNPLine(s string) (npUpdate, bool) {
 		return npUpdate{err: msg}, true
 	}
 	u := npUpdate{}
-	u.state.Playing = fields["playing"] == true
+	isPlaying, known := jsonBool(fields["isPlaying"])
+	u.state.Playing = reconcilePlaying(isPlaying, known, int(jsonFloat(fields["appState"])))
 	u.state.Title = jsonString(fields["title"])
 	u.state.Artist = jsonString(fields["artist"])
 	u.state.Album = jsonString(fields["album"])
@@ -188,9 +207,13 @@ func decodeNPLine(s string) (npUpdate, bool) {
 	u.state.ArtID = jsonString(fields["artID"])
 	u.state.Duration = jsonFloat(fields["duration"])
 	u.state.Elapsed = jsonFloat(fields["elapsed"])
-	u.state.Rate = jsonFloat(fields["rate"])
+	hasRate := fields["hasRate"] == true
+	u.state.Rate = reconcileRate(u.state.Playing, hasRate, jsonFloat(fields["rate"]))
 	if at := jsonFloat(fields["at"]); at > 0 {
 		u.state.Received = time.Unix(int64(at), int64((at-float64(int64(at)))*1e9))
+	}
+	if at := jsonFloat(fields["infoAt"]); at > 0 {
+		u.state.InfoAt = time.Unix(int64(at), int64((at-float64(int64(at)))*1e9))
 	}
 	u.state.ArtMissing = fields["artMissing"] == true
 	if art := jsonString(fields["art"]); art != "" {
@@ -211,6 +234,58 @@ func jsonString(v any) string {
 func jsonFloat(v any) float64 {
 	f, _ := v.(float64)
 	return f
+}
+
+// jsonBool converts a decoded JSON value to a bool; known reports whether
+// the field was an actual boolean (the helper emits null on a timed-out
+// read).
+func jsonBool(v any) (b, known bool) {
+	b, ok := v.(bool)
+	return b, ok
+}
+
+// MRPlaybackState values, as MediaRemote reports them.
+const (
+	mrStateUnknown     = 0
+	mrStatePlaying     = 1
+	mrStatePaused      = 2
+	mrStateStopped     = 3
+	mrStateInterrupted = 4
+)
+
+// reconcilePlaying decides the shown play state from MediaRemote's two
+// truth signals. The playback state wins outright when it names a
+// definite state: Playing overrides a lagging IsPlaying=false, and
+// Paused/Stopped/Interrupted override a lagging IsPlaying=true (some
+// apps, NetEase among them, keep reporting playing for a while after a
+// pause). IsPlaying alone carries the verdict when the state is
+// unknown, absent (0 or negative: timeout or missing symbol) or a
+// neutral value like a seek direction. The info dict's rate is never
+// consulted: probes show publishers leave PlaybackRate 0 in a
+// minutes-stale dict while audio plays.
+func reconcilePlaying(isPlaying, known bool, appState int) bool {
+	switch appState {
+	case mrStatePlaying:
+		return true
+	case mrStatePaused, mrStateStopped, mrStateInterrupted:
+		return false
+	}
+	return known && isPlaying
+}
+
+// reconcileRate picks the rate Position extrapolates with. It is only a
+// clock speed, never part of the play verdict: paused freezes at 0;
+// playing uses the reported rate, or 1 when the source publishes none
+// or left a 0 behind (the same stale dict that rate-override bugs came
+// from — the clock must still move).
+func reconcileRate(playing, hasRate bool, rate float64) float64 {
+	if !playing {
+		return 0
+	}
+	if hasRate && rate != 0 {
+		return rate
+	}
+	return 1
 }
 
 // NowPlayingHost keeps the Apple-signed perl host running and feeds the

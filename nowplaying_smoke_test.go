@@ -61,7 +61,7 @@ func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 		mod.have = true
 		mod.last = mac.NowPlayingState{
 			Playing: true, Title: "Fashion Killa", Artist: "A$AP Rocky",
-			Duration: 236, Elapsed: 28, Received: time.Now(),
+			Duration: 236, Elapsed: 28, Rate: 1, Received: time.Now(),
 		}
 		a.place(mygo.Screen.CursorScreenPoint())
 		a.peeking = true

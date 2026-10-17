@@ -15,8 +15,9 @@ import (
 )
 
 func TestDecodeNPLine(t *testing.T) {
-	full := `{"ok":true,"playing":true,"title":"Title","artist":"Artist","album":"Album",` +
-		`"duration":300.5,"elapsed":42.25,"rate":1,"at":1700000000.5,"app":"com.apple.Music",` +
+	full := `{"ok":true,"isPlaying":true,"appState":1,"title":"Title","artist":"Artist","album":"Album",` +
+		`"duration":300.5,"elapsed":42.25,"hasRate":true,"rate":1,"at":1700000000.5,` +
+		`"infoAt":1700000000,"app":"com.apple.Music",` +
 		`"artID":"id-1","art":"` + base64.StdEncoding.EncodeToString([]byte("PNGBYTES")) + `"}`
 	u, ok := decodeNPLine(full)
 	if !ok {
@@ -38,6 +39,9 @@ func TestDecodeNPLine(t *testing.T) {
 	if want := time.Unix(1700000000, 500000000); !s.Received.Equal(want) {
 		t.Errorf("at: got %v, want %v", s.Received, want)
 	}
+	if want := time.Unix(1700000000, 0); !s.InfoAt.Equal(want) {
+		t.Errorf("infoAt: got %v, want %v", s.InfoAt, want)
+	}
 }
 
 func TestDecodeNPLineVariants(t *testing.T) {
@@ -49,13 +53,13 @@ func TestDecodeNPLineVariants(t *testing.T) {
 	}{
 		{"error line", `{"error":"bad command"}`, true, "bad command"},
 		{"empty object", `{}`, true, ""},
-		{"missing fields default", `{"playing":false}`, true, ""},
-		{"unknown fields are ignored", `{"future":"x","playing":true}`, true, ""},
+		{"missing fields default", `{"isPlaying":false,"appState":2}`, true, ""},
+		{"unknown fields are ignored", `{"future":"x","isPlaying":true,"appState":1}`, true, ""},
 		{"not json", `hello`, false, ""},
 		{"json array", `[1,2]`, false, ""},
 		{"json null", `null`, false, ""},
 		{"empty line", ``, false, ""},
-		{"truncated", `{"playing":`, false, ""},
+		{"truncated", `{"isPlaying":`, false, ""},
 		{"string not object", `"hello"`, false, ""},
 		{"number not object", `42`, false, ""},
 	}
@@ -72,7 +76,7 @@ func TestDecodeNPLineVariants(t *testing.T) {
 }
 
 func TestDecodeNPLineBadArtworkIsEmptyNotFatal(t *testing.T) {
-	u, ok := decodeNPLine(`{"playing":true,"artID":"x","art":"!!not base64!!"}`)
+	u, ok := decodeNPLine(`{"isPlaying":true,"appState":1,"artID":"x","art":"!!not base64!!"}`)
 	if !ok {
 		t.Fatal("line must still decode")
 	}
@@ -154,7 +158,7 @@ func fakeHostScript(t *testing.T, state string) string {
 }
 
 func TestNowPlayingHostReadsAndSends(t *testing.T) {
-	state := `{"ok":true,"playing":true,"title":"T","artist":"A","duration":100,"elapsed":5}`
+	state := `{"ok":true,"isPlaying":true,"appState":1,"title":"T","artist":"A","duration":100,"elapsed":5,"hasRate":true,"rate":1}`
 	path := fakeHostScript(t, state)
 	h := NewNowPlayingHost()
 	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
@@ -194,7 +198,7 @@ func TestNowPlayingHostReadsAndSends(t *testing.T) {
 }
 
 func TestNowPlayingHostDeadAfterHelperExit(t *testing.T) {
-	path := fakeHostScript(t, `{"ok":true,"playing":false}`)
+	path := fakeHostScript(t, `{"ok":true,"isPlaying":false,"appState":2}`)
 	h := NewNowPlayingHost()
 	h.start = func(ctx context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
 		return startCommand(ctx, path)
@@ -313,8 +317,8 @@ func TestDecodeNPLineRoundTripFromHelperSource(t *testing.T) {
 	if err != nil {
 		t.Skipf("helper source not found: %v", err)
 	}
-	for _, field := range []string{"playing", "title", "artist", "album", "duration",
-		"elapsed", "rate", "at", "app", "artID", "artMissing", "art", "error"} {
+	for _, field := range []string{"isPlaying", "appState", "title", "artist", "album", "duration",
+		"elapsed", "hasRate", "rate", "infoAt", "at", "app", "artID", "artMissing", "art", "error"} {
 		if !strings.Contains(string(src), `"`+field+`\"`) && !strings.Contains(string(src), `\"`+field) {
 			t.Errorf("helper.c does not mention field %q", field)
 		}
@@ -358,5 +362,128 @@ func TestHelperSourceContracts(t *testing.T) {
 	}
 	if strings.Contains(string(src), "workSem") {
 		t.Error("helper.c still uses a shared semaphore")
+	}
+}
+
+// TestReconcilePlaying covers the truth-signal matrix. The bug this
+// guards: NetEase playing "Fashion Killa" reported IsPlaying=true while
+// its minutes-stale info dict still said rate 0 — folding rate into the
+// verdict showed a paused glyph on playing audio.
+func TestReconcilePlaying(t *testing.T) {
+	cases := []struct {
+		name             string
+		isPlaying, known bool
+		appState         int
+		want             bool
+	}{
+		{"both true", true, true, mrStatePlaying, true},
+		{"both false", false, true, mrStatePaused, false},
+		// The NetEase playing bug: IsPlaying true, state Playing, and the
+		// dict's rate is irrelevant — the verdict must be playing.
+		{"playing overrides lagging isPlaying flag", false, true, mrStatePlaying, true},
+		{"paused vetoes lagging isPlaying flag", true, true, mrStatePaused, false},
+		{"stopped vetoes", true, true, mrStateStopped, false},
+		{"interrupted vetoes", true, true, mrStateInterrupted, false},
+		// Unknown or absent state: IsPlaying alone decides.
+		{"unknown state trusts isPlaying", true, true, mrStateUnknown, true},
+		{"unknown state trusts isPlaying false", false, true, mrStateUnknown, false},
+		{"state timeout trusts isPlaying", true, true, -1, true},
+		{"symbol absent trusts isPlaying", false, true, -2, false},
+		{"seeking forward keeps isPlaying", true, true, 5, true},
+		{"isPlaying timeout is not playing", false, false, mrStateUnknown, false},
+	}
+	for _, c := range cases {
+		if got := reconcilePlaying(c.isPlaying, c.known, c.appState); got != c.want {
+			t.Errorf("%s: reconcilePlaying(%v,%v,%d) = %v, want %v",
+				c.name, c.isPlaying, c.known, c.appState, got, c.want)
+		}
+	}
+}
+
+// TestReconcileRate: the rate is a clock speed, never a verdict.
+func TestReconcileRate(t *testing.T) {
+	cases := []struct {
+		name       string
+		playing    bool
+		hasRate    bool
+		rate, want float64
+	}{
+		{"paused freezes", false, true, 1.5, 0},
+		{"paused ignores rate", false, false, 0, 0},
+		{"playing uses reported rate", true, true, 1.0, 1.0},
+		{"playing half speed", true, true, 0.5, 0.5},
+		{"playing rewind", true, true, -1.0, -1.0},
+		// NetEase playing with a frozen 0 rate: the clock still moves.
+		{"playing rateless moves", true, false, 0, 1},
+		{"playing frozen zero moves", true, true, 0, 1},
+	}
+	for _, c := range cases {
+		if got := reconcileRate(c.playing, c.hasRate, c.rate); got != c.want {
+			t.Errorf("%s: reconcileRate = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestDecodeNetEasePlayingTrace replays the exact line shape the live
+// probe recorded while a NetEase-profile publisher played: IsPlaying 1,
+// playback state Playing, but the info dict pinned at rate 0 with a
+// frozen elapsed and a Timestamp that only updates on state changes.
+// The reconciled state must say playing and the clock must still move.
+func TestDecodeNetEasePlayingTrace(t *testing.T) {
+	u, ok := decodeNPLine(`{"ok":true,"isPlaying":true,"appState":1,` +
+		`"title":"Fashion Killa","artist":"A$AP Rocky","duration":236.33,` +
+		`"elapsed":37.279,"hasRate":true,"rate":0,` +
+		`"infoAt":1700000000,"at":1700000060,"app":"com.netease.163music"}`)
+	if !ok {
+		t.Fatal("netease-shaped line must decode")
+	}
+	s := u.state
+	if !s.Playing {
+		t.Error("rate 0 in a stale dict must not veto playing")
+	}
+	if s.Rate != 1 {
+		t.Errorf("a playing source without a real rate extrapolates at 1, got %v", s.Rate)
+	}
+	// The position anchors at the dict's Timestamp, not at receipt: the
+	// 60 s since the dict was written must count.
+	if got := s.Position(time.Unix(1700000060, 0)); got != 97.279 {
+		t.Errorf("position = %v, want 37.279 + 60 = 97.279", got)
+	}
+}
+
+// TestDecodeNetEasePausedTrace: paused keeps reporting the frozen dict,
+// and a lagging IsPlaying must not resurrect it as playing.
+func TestDecodeNetEasePausedTrace(t *testing.T) {
+	u, ok := decodeNPLine(`{"ok":true,"isPlaying":false,"appState":2,` +
+		`"title":"Fashion Killa","artist":"A$AP Rocky","duration":236.33,` +
+		`"elapsed":37.279,"hasRate":true,"rate":0,` +
+		`"infoAt":1700000000,"at":1700005000,"app":"com.netease.163music"}`)
+	if !ok {
+		t.Fatal("paused line must decode")
+	}
+	if u.state.Playing || u.state.Rate != 0 {
+		t.Errorf("paused must stay paused and frozen: %+v", u.state)
+	}
+	if got := u.state.Position(time.Unix(1700005000, 0)); got != 37.279 {
+		t.Errorf("paused position = %v, want frozen 37.279", got)
+	}
+
+	// The stale-IsPlaying window the original rate hack tried to paper
+	// over: appState Paused still wins.
+	u2, ok := decodeNPLine(`{"ok":true,"isPlaying":true,"appState":2,"rate":0,"elapsed":37.279}`)
+	if !ok || u2.state.Playing {
+		t.Error("a lagging IsPlaying against an explicit pause must read paused")
+	}
+}
+
+// TestDecodeIsPlayingTimeout: a null isPlaying (timed-out read) decodes
+// as unknown, and an unknown flag with an unknown state is not playing.
+func TestDecodeIsPlayingTimeout(t *testing.T) {
+	u, ok := decodeNPLine(`{"ok":true,"isPlaying":null,"appState":-1,"title":"T"}`)
+	if !ok {
+		t.Fatal("null isPlaying must decode")
+	}
+	if u.state.Playing {
+		t.Error("a timed-out isPlaying read must not report playing")
 	}
 }
