@@ -216,10 +216,11 @@ func (a *shelf) windowLevel() int {
 	}
 }
 
-// Idle clicks below the hardware notch pass through; the notch band itself
-// never does. File drags to the top of the notch must hit a window, or
-// WindowServer treats Y=0 as the Spaces edge. ignoresMouseEvents stays off
-// so the overlay stays in the hit-test list for the whole drag.
+// While idle the overlay ignores the mouse altogether, so clicks under and
+// beside the notch reach whatever is below. Peeking, expanded and in-flight
+// drags take the whole window: file drags to the top of the notch must hit
+// a window, or WindowServer treats Y=0 as the Spaces edge (pointerDrag
+// flips this on the drag's first movement, long before the top).
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
 	acceptAll := a.visible || a.progress > 0.01 || a.dragging || a.pointerDrag || a.peeking || a.peekProgress > 0.01
@@ -228,7 +229,7 @@ func (a *shelf) syncMousePassThrough() {
 		return
 	}
 	h := a.win.NativeHandle()
-	mac.SetOverlayHitTest(h, acceptAll, max(180, a.notchW), max(8, a.notchH))
+	mac.SetOverlayAcceptsMouse(h, acceptAll)
 	mac.SetWindowLevel(h, a.windowLevel())
 }
 

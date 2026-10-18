@@ -4,7 +4,6 @@ package mac
 
 import (
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -33,14 +32,12 @@ func cstr(p unsafe.Pointer) string {
 // thread (all callers run on it; AppKit's own dispatch is main-thread).
 var classOrigs = map[id]map[objc.SEL]uintptr{}
 
-// assocKeys are the associated-object keys marking the objects the
-// class-level patches answer for: assocOverlay marks the notch's surface
-// view (the hitTest: band rule), assocUnconstrain the notch/basket windows
-// (unclamped constrainFrameRect:). Association dies with the object, so a
-// recycled address can never inherit a patch — the failure mode a bare
-// stored pointer would leave once the basket window closes.
+// assocUnconstrain is the associated-object key marking the notch/basket
+// windows the class-level constrainFrameRect: patch answers for.
+// Association dies with the object, so a recycled address can never
+// inherit a patch — the failure mode a bare stored pointer would leave
+// once the basket window closes.
 var (
-	assocOverlay     byte
 	assocUnconstrain byte
 	assocSentinel    id
 )
@@ -83,10 +80,6 @@ func classPatch(cls id, selName string, imp uintptr, types string) uintptr {
 	return orig
 }
 
-// origPointFns caches the Go-callable wrapper for each saved original IMP
-// so a hitTest: call does not rebuild a purego closure every event.
-var origPointFns = map[uintptr]func(obj id, sel objc.SEL, p NSPoint) id{}
-
 // origIMP looks up the IMP that answered selName on self's class before
 // this package patched it, walking the superclass chain so a subclass that
 // inherited the patch still finds its stock implementation. 0 means no
@@ -99,22 +92,6 @@ func origIMP(self id, selName string) uintptr {
 		}
 	}
 	return 0
-}
-
-// callOrigPoint forwards a (self, sel, NSPoint) call to the saved original
-// IMP. 0 means the class never implemented the selector; answering 0 is
-// safer than re-sending, which would recurse into the patched IMP.
-func callOrigPoint(self id, selName string, p NSPoint) id {
-	orig := origIMP(self, selName)
-	if orig == 0 {
-		return 0
-	}
-	fn, ok := origPointFns[orig]
-	if !ok {
-		purego.RegisterFunc(&fn, orig)
-		origPointFns[orig] = fn
-	}
-	return fn(self, sel(selName), p)
 }
 
 // callOrigRectScreen forwards a (self, sel, NSRect, screen) call — the
@@ -134,64 +111,6 @@ func callOrigRectScreen(self id, cmd objc.SEL, fx, fy, fw, fh float64, screen id
 	return fn(self, cmd, fx, fy, fw, fh, screen)
 }
 
-// overlayHits is the idle-strip hit rule, in a flipped view whose Y=0 is the
-// screen's top edge. Only the bandW × bandH region centered on the strip is
-// solid while idle: it follows the drawn hardware notch, so file drags at
-// Y=0 hit a window instead of the Spaces edge while menu-bar items beside
-// the notch keep their clicks. bandW <= 0 means the full strip width.
-func overlayHits(acceptAll bool, bandW, bandH int, localX, localY, viewW, viewH float64) bool {
-	if acceptAll {
-		return true
-	}
-	if bandH <= 0 || viewH <= 0 {
-		return false
-	}
-	band := float64(bandH)
-	if band > viewH {
-		band = viewH
-	}
-	if localY < 0 || localY >= band {
-		return false
-	}
-	w := float64(bandW)
-	if w <= 0 || w > viewW {
-		w = viewW
-	}
-	x0 := (viewW - w) / 2
-	return localX >= x0 && localX < x0+w
-}
-
-var (
-	overlayHitOnce  sync.Once
-	overlayHitIMP   uintptr
-	overlayAccept   atomic.Bool
-	overlayBandW    atomic.Int64
-	overlayBandH    atomic.Int64
-	msgConvertPoint func(obj id, sel objc.SEL, p NSPoint, view id) NSPoint
-)
-
-func overlayHitTest(self id, _ objc.SEL, px, py float64) id {
-	if !hasAssoc(self, &assocOverlay) {
-		// Not the overlay's view: behave exactly as the class did before
-		// the patch. The class-wide method is installed once, so other
-		// mygo windows keep their ordinary hit testing.
-		return callOrigPoint(self, "hitTest:", NSPoint{X: px, Y: py})
-	}
-	b := msgRect(self, sel("bounds"))
-	var localX, localY float64
-	if msgConvertPoint != nil {
-		superview := send(self, "superview")
-		local := msgConvertPoint(self, sel("convertPoint:fromView:"), NSPoint{X: px, Y: py}, superview)
-		localX, localY = local.X, local.Y
-	} else {
-		localX, localY = px, py
-	}
-	if overlayHits(overlayAccept.Load(), int(overlayBandW.Load()), int(overlayBandH.Load()), localX, localY, b.Size.Width, b.Size.Height) {
-		return self
-	}
-	return 0
-}
-
 func overlaySurfaceView(window id) id {
 	content := send(window, "contentView")
 	if content == 0 {
@@ -207,23 +126,6 @@ func overlaySurfaceView(window id) id {
 		return 0
 	}
 	return view
-}
-
-func installOverlayHitTest(window id) {
-	overlayHitOnce.Do(func() {
-		load()
-		purego.RegisterFunc(&msgConvertPoint, msgSendAddr)
-		overlayHitIMP = purego.NewCallback(overlayHitTest)
-	})
-	view := overlaySurfaceView(window)
-	if view == 0 || overlayHitIMP == 0 {
-		return
-	}
-	// The band rule is per window even though hitTest: sits on the shared
-	// class: only the view carrying the assocOverlay mark takes the band
-	// path; every other instance forwards to the saved original IMP.
-	classPatch(id(send(view, "class")), "hitTest:", overlayHitIMP, "@@:{CGPoint=dd}")
-	markAssoc(view, &assocOverlay)
 }
 
 var (
@@ -249,10 +151,9 @@ func loadBridge() {
 
 // SurfaceHitTest sends hitTest: to window's mygo surface view at the
 // content point (x, y) — top-left origin, matching MyGo's flipped surface
-// coordinates — and reports whether any view accepted it. It is the native
-// side of "does this window answer clicks here": used by the gated
-// real-window test that proves the notch's hit-test band does not leak
-// into other windows. Main thread only.
+// coordinates — and reports whether any view accepted it. A view-level
+// answer only: WindowServer decides which window a click reaches before
+// any view is asked (see WindowAtPoint). Main thread only.
 func SurfaceHitTest(window uintptr, x, y float64) bool {
 	if window == 0 {
 		return false
@@ -367,20 +268,15 @@ func registerOverlayDropTypes(window id) {
 	register(overlaySurfaceView(window))
 }
 
-// SetOverlayHitTest keeps the overlay in WindowServer's hit-test list (never
-// ignoresMouseEvents) and decides which pixels of the flipped surface are
-// solid. acceptAll is peeking, expanded, or an in-flight drag; otherwise
-// only the bandWidth × bandHeight region centered at the top of the strip —
-// the hardware notch — receives events, so a file dragged onto the camera
-// housing hits a drop target instead of the Spaces edge while clicks beside
-// the notch fall through to the menu bar. Main thread only.
-func SetOverlayHitTest(window uintptr, acceptAll bool, bandWidth, bandHeight int) {
-	if bandHeight < 1 {
-		bandHeight = 32
-	}
-	overlayAccept.Store(acceptAll)
-	overlayBandW.Store(int64(bandWidth))
-	overlayBandH.Store(int64(bandHeight))
+// SetOverlayAcceptsMouse decides whether the overlay window takes mouse
+// events at all. accept is peeking, expanded, or an in-flight drag; then
+// the whole window is a click and drop target, re-ordered to the front of
+// its level. Otherwise it ignores the mouse entirely, so every click under
+// and beside the notch reaches the app or menu bar below. WindowServer
+// routes a click to a window before any of its views is hit-tested — a
+// view refusing hitTest: still swallows the click — so ignoresMouseEvents
+// is the only switch that lets clicks through. Main thread only.
+func SetOverlayAcceptsMouse(window uintptr, accept bool) {
 	if window == 0 {
 		return
 	}
@@ -389,13 +285,40 @@ func SetOverlayHitTest(window uintptr, acceptAll bool, bandWidth, bandHeight int
 	}
 	withPool(func() {
 		w := id(window)
-		installOverlayHitTest(w)
 		registerOverlayDropTypes(w)
-		if send(w, "ignoresMouseEvents") != 0 {
+		ignoring := send(w, "ignoresMouseEvents") != 0
+		switch {
+		case accept && ignoring:
 			send(w, "setIgnoresMouseEvents:", 0)
 			send(w, "orderFrontRegardless")
+		case !accept && !ignoring:
+			send(w, "setIgnoresMouseEvents:", 1)
 		}
 	})
+}
+
+// msgWindowAtPoint sends windowNumberAtPoint:belowWindowWithWindowNumber:,
+// whose NSPoint argument needs a registered function.
+var (
+	windowAtPointOnce sync.Once
+	msgWindowAtPoint  func(cls id, sel objc.SEL, p NSPoint, below int) int
+)
+
+// WindowAtPoint returns the number of the frontmost window a mouse-down at
+// the global top-left point (x, y) would reach, as WindowServer routes it
+// (windows ignoring the mouse are skipped). screenH is the primary
+// screen's height, for the flip into AppKit's bottom-left space. Used by
+// the gated real-window tests. Main thread only.
+func WindowAtPoint(x, y, screenH float64) int {
+	if err := Init(); err != nil {
+		return 0
+	}
+	windowAtPointOnce.Do(func() { purego.RegisterFunc(&msgWindowAtPoint, msgSendAddr) })
+	var n int
+	withPool(func() {
+		n = msgWindowAtPoint(class("NSWindow"), sel("windowNumberAtPoint:belowWindowWithWindowNumber:"), NSPoint{X: x, Y: screenH - y}, 0)
+	})
+	return n
 }
 
 const (

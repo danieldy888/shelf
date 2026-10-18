@@ -16,15 +16,14 @@ import (
 )
 
 // TestSettingsWindowAnswersClicksAndScroll is the regression test for the
-// class-level swizzle leak: the notch overlay's native patches (hitTest:
-// band rule on the surface view, constrainFrameRect:toScreen: on the
-// window) used to be installed on the shared mygo classes, so every window
-// inherited them. The Settings window then hit-tested only inside the
-// notch band — its controls and scroll container were dead. The fix grafts
-// per-instance subclasses instead; this test proves the notch keeps its
-// patches while a real Settings window answers clicks everywhere and
-// scrolls its content. Run with SHELF_BASKET_SMOKE=1 (the shared real-app
-// harness); uses a temporary data dir and never the user's Shelf data.
+// class-level swizzle leak: the notch overlay's native patches used to be
+// installed on the shared mygo classes, so every window inherited them and
+// the Settings window's controls and scroll container went dead. The
+// remaining patch (constrainFrameRect:toScreen:) gates on the window
+// pointer; this test proves a real Settings window still answers clicks
+// everywhere and scrolls its content next to the notch overlay. Run with
+// SHELF_BASKET_SMOKE=1 (the shared real-app harness); uses a temporary
+// data dir and never the user's Shelf data.
 func TestSettingsWindowAnswersClicksAndScroll(t *testing.T) {
 	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
 		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native window smoke test")
@@ -37,7 +36,7 @@ func TestSettingsWindowAnswersClicksAndScroll(t *testing.T) {
 	onMain(func() {
 		a.newNotchWindow()
 		a.place(mygo.Screen.CursorScreenPoint())
-		a.syncMousePassThrough() // idle: only the notch band accepts events
+		a.syncMousePassThrough() // idle: the overlay ignores the mouse
 		a.win.ShowInactive()
 		a.openSettings()
 	})
@@ -67,11 +66,11 @@ func TestSettingsWindowAnswersClicksAndScroll(t *testing.T) {
 	}
 
 	// Hit-test, while the notch is idle: the Settings surface answers
-	// across its content — before the fix only a notch-band-high strip did.
+	// across its content.
 	onMain(func() {
 		for _, p := range [][2]float64{{230, 60}, {230, 260}, {230, 450}, {60, 300}} {
 			if !mac.SurfaceHitTest(settings, p[0], p[1]) {
-				t.Errorf("Settings hitTest(%v,%v) rejected: the notch band leaked into this window", p[0], p[1])
+				t.Errorf("Settings hitTest(%v,%v) rejected", p[0], p[1])
 			}
 		}
 	})
@@ -123,16 +122,4 @@ func TestSettingsWindowAnswersClicksAndScroll(t *testing.T) {
 	if !mac.SurfaceHitTest(a.basket.win.NativeHandle(), 110, 80) {
 		t.Error("basket surface rejected a centered hit")
 	}
-
-	// And the notch itself still gates: outside its idle band it stays
-	// click-through, inside the band it stays solid.
-	onMain(func() {
-		strip := a.win.Bounds()
-		if mac.SurfaceHitTest(notch, 4, float64(a.notchH)+4) {
-			t.Error("idle notch outside the drawn band must pass clicks through")
-		}
-		if a.notchW > 0 && !mac.SurfaceHitTest(notch, float64(strip.Width)/2, 8) {
-			t.Error("idle notch band must keep accepting hits")
-		}
-	})
 }
