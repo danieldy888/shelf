@@ -1,7 +1,7 @@
 {
   "name": "Shelf",
   "identifier": "local.y3.shelf",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "updates": {
     "publicKey": "U392UXk3CKWS5zmlwlygGPnVbOppcJHEMJEeKXXBbAo=",
     "github": "henryyu333/shelf"
