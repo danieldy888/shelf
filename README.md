@@ -19,10 +19,6 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/demo.gif" width="880" alt="Shelf peeks from the notch with now-playing controls, accepts a file drop, shows the tray and clipboard, then collapses as an item is dragged out">
-</p>
-
-<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/macOS-13%2B%20Apple%20Silicon-blue.svg" alt="macOS 13+ Apple Silicon">
   <img src="https://img.shields.io/badge/built%20with-Go-00ADD8.svg" alt="Built with Go">
