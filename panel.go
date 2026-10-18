@@ -92,6 +92,11 @@ var panelTheme = func() *ui.Theme {
 	t.Selection = accent.Alpha(0.35)
 	t.Focus = accent.Alpha(0.6)
 	t.Background = ui.Transparent
+	// Tooltips (the ear icons' names) take Inverse/InverseText, which
+	// otherwise fall back to Text on Background — ink on transparent, a
+	// blank white tip. A raised dark chip reads on the black panel.
+	t.Inverse = ui.Hex("#2C2C2E")
+	t.InverseText = ink
 	t.FontSize = 13
 	return t
 }()
@@ -137,14 +142,23 @@ func contentFade(k float32) float32 {
 	return ui.EaseOut(min(max((k-0.4)/0.6, 0), 1))
 }
 
-// tabFade is the incoming tab body's progress, 0→1 over tabAnimation
-// after a switch; 1 when no switch is under way.
-func (a *shelf) tabFade(now time.Time) float32 {
+// Page switch "fade through": the page being left fades out over the first
+// tabOutShare of the switch, then the new page fades in, drifting tabShift
+// points from its icon's side. The two never overlap, so their different
+// rows (a grid, a list) don't show through each other.
+const (
+	tabShift    = 8
+	tabOutShare = 0.35
+)
+
+// tabPhase is how far a page switch has run, 0→1 over tabAnimation; 1 when
+// no switch is under way.
+func (a *shelf) tabPhase(now time.Time) float32 {
 	if a.tabAt.IsZero() {
 		return 1
 	}
 	t := float32(now.Sub(a.tabAt)) / float32(tabAnimation)
-	return ui.EaseOut(min(max(t, 0), 1))
+	return min(max(t, 0), 1)
 }
 
 // panelHeightKey keys the panel's height animation to one opening, so a
@@ -289,27 +303,42 @@ func (a *shelf) view(c *ui.Context) {
 	}
 }
 
-// tabBody holds the current tab's content. After a switch it fades in and
-// settles from a few points toward its tab's side of the header. This is
-// driven per frame rather than by an element Transition: a switch that
-// changes the panel's height resizes the window, and mygo does not
-// animate a resized frame's transitions.
+// tabBody holds the current page's module bar and stage, fading through
+// from the page just left (see tabOutShare). This is driven per frame
+// rather than by an element Transition: a switch that changes the panel's
+// height resizes the window, and mygo does not animate a resized frame's
+// transitions.
 func (a *shelf) tabBody(c *ui.Context, over bool) {
-	body := ui.Column(c.Key("body")).FillWidth().Grow(1).MinHeight(0)
+	t := float32(1)
 	if a.win != nil {
-		if k := a.tabFade(c.Now()); k < 1 {
-			dx := float32(-10)
-			if a.tab == tabClipboard {
-				dx = 10
-			}
-			if c.Preferences().ReduceMotion {
-				dx = 0
-			}
-			body.Opacity(k).Translate(dx*(1-k), 0)
+		t = a.tabPhase(c.Now())
+	}
+	// The pages sit left to right as their icons do: going right, the new
+	// page arrives from the right.
+	dir := float32(1)
+	if a.tab < a.tabFrom {
+		dir = -1
+	}
+	if c.Preferences().ReduceMotion {
+		dir = 0
+	}
+	stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
+	stage.Children(func() {
+		body := ui.Column(c.Key("body")).FillWidth().Grow(1).MinHeight(0)
+		if t < 1 {
+			in := ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
+			body.Opacity(in).Translate(tabShift*dir*(1-in), 0)
 			c.AnimationFrame()
 		}
-	}
-	body.Children(func() { a.panelBody(c, over) })
+		body.Children(func() { a.panelBody(c, over, a.tab, true) })
+		if t < tabOutShare && a.tabFrom != a.tab {
+			// The outgoing page is only a picture: it takes no pointer
+			// and never the keyboard.
+			old := ui.Column(c.Key("body-out")).Absolute().Left(0).Right(0).Top(0).Bottom(0).
+				PassThrough().Opacity(1 - ui.EaseIn(t/tabOutShare))
+			old.Children(func() { a.panelBody(c, false, a.tabFrom, false) })
+		}
+	})
 }
 
 // earLayout places the ear bar. Normally it sits in the notch band itself,
@@ -442,18 +471,18 @@ func (a *shelf) activityStrip(c *ui.Context) {
 	})
 }
 
-// panelBody renders the current page under the activity strip: its module
-// bar, then the tray's thumbnail grid or the clipboard's search field and
-// list.
-func (a *shelf) panelBody(c *ui.Context, over bool) {
-	list := a.visibleItems()
-	a.moduleBar(c, list)
-	if a.tab == tabClipboard {
-		a.clipboardBody(c, list)
+// panelBody renders a page under the activity strip: its module bar, then
+// the tray's thumbnail grid or the clipboard's search field and list. live
+// is false for the page fading out after a switch, which is drawn only.
+func (a *shelf) panelBody(c *ui.Context, over bool, tab int, live bool) {
+	list := a.itemsFor(tab)
+	a.moduleBar(c, list, tab, live)
+	if tab == tabClipboard {
+		a.clipboardBody(c, list, live)
 		return
 	}
 	if len(list) == 0 {
-		a.emptyState(c)
+		a.emptyState(c, tab)
 		return
 	}
 	ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Children(func() {
@@ -469,9 +498,9 @@ func (a *shelf) panelBody(c *ui.Context, over bool) {
 
 // moduleBar is the page's own 28pt row: its name and count on the left;
 // on the right the tray's multi-select hint and the page's 清空.
-func (a *shelf) moduleBar(c *ui.Context, list []store.Item) {
+func (a *shelf) moduleBar(c *ui.Context, list []store.Item, tab int, live bool) {
 	title, count := "托盘", fmt.Sprintf("%d 项", len(list))
-	if a.tab == tabClipboard {
+	if tab == tabClipboard {
 		title, count = "剪贴板", fmt.Sprintf("%d 条", len(list))
 	}
 	ui.Row(c.Key("module-bar")).Height(moduleBarH).AlignItems(ui.Center).FillWidth().
@@ -481,15 +510,15 @@ func (a *shelf) moduleBar(c *ui.Context, list []store.Item) {
 			ui.Text(c, count).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 0, 0, 8)
 		}
 		ui.Box(c).Grow(1)
-		if a.tab == tabTray && len(list) > 0 {
+		if tab == tabTray && len(list) > 0 {
 			hint := "⌘ / ⇧ 多选 · 空格预览"
 			if n := a.selection.count(); n > 1 {
 				hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
 			}
 			ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 6, 0, 0)
 		}
-		if gone := a.clearable(list); len(gone) > 0 {
-			if a.iconButton(c, "clear", trashSymbol, "清空").Clicked() {
+		if gone := a.clearable(list, tab); len(gone) > 0 {
+			if a.iconButton(c, "clear", trashSymbol, "清空").Clicked() && live {
 				a.remove(gone)
 			}
 		}
@@ -500,8 +529,8 @@ func (a *shelf) moduleBar(c *ui.Context, list []store.Item) {
 // page shows, so the tray's button leaves the clipboard history alone and
 // the other way round. While a search narrows the clipboard list there is
 // nothing to clear — emptying only the matches would surprise.
-func (a *shelf) clearable(list []store.Item) []store.Item {
-	if a.tab == tabClipboard && strings.TrimSpace(a.search) != "" {
+func (a *shelf) clearable(list []store.Item, tab int) []store.Item {
+	if tab == tabClipboard && strings.TrimSpace(a.search) != "" {
 		return nil
 	}
 	var gone []store.Item
@@ -515,10 +544,10 @@ func (a *shelf) clearable(list []store.Item) []store.Item {
 
 // clipboardBody is the clipboard tab: the 32pt search field, then the
 // capture rows (source-app icon, text, 「应用 · 相对时间」).
-func (a *shelf) clipboardBody(c *ui.Context, list []store.Item) {
-	a.searchField(c)
+func (a *shelf) clipboardBody(c *ui.Context, list []store.Item, live bool) {
+	a.searchField(c, live)
 	if len(list) == 0 {
-		a.emptyState(c)
+		a.emptyState(c, tabClipboard)
 		return
 	}
 	ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0).Children(func() {
@@ -535,9 +564,22 @@ func (a *shelf) clipboardBody(c *ui.Context, list []store.Item) {
 // goes; while the shelf was opened for search the box keeps the keyboard
 // focus, so ↑/↓ walk the list and ⏎ copies and collapses without reaching
 // for the mouse. Esc clears the search first, then collapses.
-func (a *shelf) searchField(c *ui.Context) {
+func (a *shelf) searchField(c *ui.Context, live bool) {
 	wrap := ui.Row(c.Key("clip-search")).Height(clipSearchH).Padding(0, 10, 0, 10).Gap(7).
 		AlignItems(ui.Center).Radius(10).Background(fill1)
+	if !live {
+		// The outgoing page's box is a picture of the field: an input here
+		// would compete for the keyboard and the global keys.
+		wrap.Children(func() {
+			ui.Icon(c, searchSymbol).Size(14, 14).TextColor(ink3)
+			if a.search != "" {
+				ui.Text(c, a.search).SingleLine().FontSize(13).TextColor(ink)
+			} else {
+				ui.Text(c, "搜索剪贴板").SingleLine().FontSize(13).TextColor(ink3)
+			}
+		})
+		return
+	}
 	wrap.Children(func() {
 		ui.Icon(c, searchSymbol).Size(14, 14).TextColor(ink3)
 		in := ui.TextInputBase(c.Key("clip-query"), &a.search).Grow(1).MinWidth(0).
@@ -573,16 +615,16 @@ func (a *shelf) searchField(c *ui.Context) {
 	})
 }
 
-// emptyState is what the panel shows when the current tab has no rows: a
-// centered ink3 icon, a medium ink2 title and an ink3 note line.
-func (a *shelf) emptyState(c *ui.Context) {
+// emptyState is what a page shows when it has no rows: a centered ink3
+// icon, a medium ink2 title and an ink3 note line.
+func (a *shelf) emptyState(c *ui.Context, tab int) {
 	icon, title, hint := shelfSymbol, "把文件拖到这里", "文件、文件夹、文字和图片"
 	switch {
-	case a.tab == tabClipboard && a.search != "":
+	case tab == tabClipboard && a.search != "":
 		icon, title, hint = searchSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
-	case a.tab == tabClipboard && !a.settings.ClipboardHistory:
+	case tab == tabClipboard && !a.settings.ClipboardHistory:
 		icon, title, hint = textSymbol, "剪贴板记录已关闭", "在设置里打开「记录复制的内容」"
-	case a.tab == tabClipboard:
+	case tab == tabClipboard:
 		icon, title, hint = textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
 	case a.settings.ClipboardHistory:
 		hint += "\n复制的文字与截图也会自动收好"
@@ -768,19 +810,23 @@ func (a *shelf) panelTargetH() int {
 // within each group (otherwise newest first). Rows, selection ranges,
 // menus and drag-outs all use it, so no action can reach a row the tab is
 // not showing and the display order is the selection order.
-func (a *shelf) visibleItems() []store.Item {
+func (a *shelf) visibleItems() []store.Item { return a.itemsFor(a.tab) }
+
+// itemsFor is visibleItems for the given page (the page fading out after
+// a switch draws its own rows).
+func (a *shelf) itemsFor(tab int) []store.Item {
 	if a.store == nil {
 		return nil
 	}
 	query := strings.ToLower(strings.TrimSpace(a.search))
 	var pinned, rest []store.Item
 	for _, it := range a.store.Items {
-		if a.tab == tabClipboard && (it.Source != store.SourceClipboard || !clipboardItemMatches(it, query)) {
+		if tab == tabClipboard && (it.Source != store.SourceClipboard || !clipboardItemMatches(it, query)) {
 			continue
 		}
 		// 设计决定：剪贴板收录的文字只属于剪贴板标签；托盘放文件、
 		// 文件夹、图片（含剪贴板截图）以及拖入/服务收录/置顶的文字。
-		if a.tab == tabTray && it.Source == store.SourceClipboard &&
+		if tab == tabTray && it.Source == store.SourceClipboard &&
 			it.Kind == store.KindText && !it.Pinned {
 			continue
 		}
@@ -813,7 +859,7 @@ func (a *shelf) setTab(tab int) {
 	if a.tab == tab {
 		return
 	}
-	a.tab = tab
+	a.tabFrom, a.tab = a.tab, tab
 	if a.visible {
 		a.tabAt = time.Now()
 	}

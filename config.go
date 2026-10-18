@@ -26,7 +26,7 @@ const (
 	panelAnimation  = 260 * time.Millisecond // 展开/收起 260ms 缓出（DESIGN.md「动效」）
 	peekAnimation   = 160 * time.Millisecond // 悬停探头长出/缩回
 	resizeAnimation = 240 * time.Millisecond // 切换标签、内容增减时面板高度的过渡
-	tabAnimation    = 200 * time.Millisecond // 标签切换：胶囊滑动、新内容淡入
+	tabAnimation    = 240 * time.Millisecond // 页面切换：胶囊滑动、旧页淡出后新页淡入
 	// 探头里的图形必须整体落在硬件刘海下方：刘海区域没有像素。
 	peekBody       = 18 // 空手悬停：刘海下方露出的高度（放下拉箭头）
 	dropPillBody   = 32 // 拖拽中：刘海下方「松开放入」那一行的高度

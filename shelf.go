@@ -40,7 +40,8 @@ type shelf struct {
 	np                                         *nowPlayingModule     // the peek player reads its state
 	clip                                       *clipboardModule      // nil while clipboard history is off
 	tab                                        int                   // panelTab: which list the expanded panel shows
-	tabAt                                      time.Time             // when the tab last switched; drives the body's fade-in
+	tabAt                                      time.Time             // when the tab last switched; drives the pages' crossfade
+	tabFrom                                    int                   // the page being left by the last switch, drawn fading out
 	search                                     string                // clipboard tab's search text
 	reveal                                     string                // row to keep in view after a keyboard move
 	focusMode                                  bool                  // the window took the keyboard for clipboard search

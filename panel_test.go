@@ -300,6 +300,45 @@ func (f *fakeActivity) activity(c *ui.Context, compact bool) {
 	ui.Text(c, f.label).FontSize(12).TextColor(ink)
 }
 
+// Resting on an ear icon shows its name in a tip the user can read: text
+// that stands out from the tip's own fill (regression: the panel theme's
+// transparent background left the text invisible on a blank white chip).
+func TestEarIconTooltipIsReadable(t *testing.T) {
+	a := &shelf{topInset: 32, notchW: 180, notchH: 32}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	r, ok := view.Find("剪贴板")
+	if !ok {
+		t.Fatal("clipboard ear icon missing")
+	}
+	before := view.Image()
+	view.Move(r.X+r.W/2, r.Y+r.H/2)
+	view.Advance(time.Second)
+	after := view.Image()
+	var changed, bright int
+	b := after.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r0, g0, b0, _ := before.At(x, y).RGBA()
+			r1, g1, b1, _ := after.At(x, y).RGBA()
+			if r0 == r1 && g0 == g1 && b0 == b1 {
+				continue
+			}
+			changed++
+			if (r1+g1+b1)/3 > 0xB000 {
+				bright++
+			}
+		}
+	}
+	if changed < 200 {
+		t.Fatalf("no tooltip appeared after resting on the icon (%d pixels changed)", changed)
+	}
+	// Readable text: some bright glyph pixels on a fill that is mostly not
+	// the glyphs' colour.
+	if bright < 20 || bright > changed/2 {
+		t.Fatalf("tooltip text not readable: %d bright of %d changed pixels", bright, changed)
+	}
+}
+
 // 探头态（peeking）下刘海胶囊显示展开提示，单击后托盘标记为展开；
 // 无窗口环境下窗口相关操作安全跳过。
 func TestNotchPeekClickExpandsShelf(t *testing.T) {
