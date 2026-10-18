@@ -63,7 +63,29 @@ func Write(dst string, paragraphs []string, pic *Picture) error {
 			return err
 		}
 	}
-	data, err := build(paragraphs, pic)
+	data, err := zipDocx(documentXML(paragraphs, pic), pic)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(dst, data, 0o600); err != nil {
+		return fmt.Errorf("docx: %w", err)
+	}
+	return nil
+}
+
+// WritePages creates a text-only .docx at dst with the same A4 layout
+// and fonts as Write. pages[i] holds the paragraphs of page i; a
+// dedicated paragraph containing <w:br w:type="page"/> separates
+// consecutive pages, with no break after the last one. (w:br is used
+// rather than w:pageBreakBefore because the Cocoa importers behind
+// Pages and Quick Look ignore pageBreakBefore.) Empty pages still
+// produce their page (an empty paragraph) so page numbering matches
+// the source document.
+// The document carries no pictures, media part or image relationship.
+// The file is written atomically through a temp file in dst's
+// directory plus rename.
+func WritePages(dst string, pages [][]string) error {
+	data, err := zipDocx(pagesDocumentXML(pages), nil)
 	if err != nil {
 		return err
 	}
@@ -103,6 +125,15 @@ func (p *Picture) fileExt() string {
 	return strings.ToLower(p.Ext)
 }
 
+// mediaName is the media file name inside word/media, empty for a nil
+// picture.
+func (p *Picture) mediaName() string {
+	if p == nil {
+		return ""
+	}
+	return "image1." + p.fileExt()
+}
+
 // pictureExtent returns the inline extent in EMU: the picture's natural
 // size (pixels at 96 dpi) scaled down — keeping the aspect ratio — to
 // fit the text width and height, never scaled up beyond natural.
@@ -120,9 +151,12 @@ func pictureExtent(p *Picture) (cx, cy int64) {
 	return cx, cy
 }
 
-// build assembles the whole package in memory and returns the .docx
-// bytes. Media is a few megabytes at most, so buffering is fine.
-func build(paragraphs []string, pic *Picture) ([]byte, error) {
+// zipDocx assembles the whole package in memory and returns the .docx
+// bytes. documentXML is the already-rendered document part; pic, when
+// non-nil, adds the image relationship and media part that documentXML
+// references through rId1. Media is a few megabytes at most, so
+// buffering is fine.
+func zipDocx(documentXML string, pic *Picture) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	add := func(name, body string) error {
@@ -142,10 +176,7 @@ func build(paragraphs []string, pic *Picture) ([]byte, error) {
 		return err
 	}
 
-	var mediaName string
-	if pic != nil {
-		mediaName = "image1." + pic.fileExt()
-	}
+	mediaName := pic.mediaName()
 	if err := add("[Content_Types].xml", contentTypesXML(pic)); err != nil {
 		return nil, err
 	}
@@ -158,7 +189,7 @@ func build(paragraphs []string, pic *Picture) ([]byte, error) {
 	if err := add("docProps/app.xml", appPropsXML); err != nil {
 		return nil, err
 	}
-	if err := add("word/document.xml", documentXML(paragraphs, pic, mediaName)); err != nil {
+	if err := add("word/document.xml", documentXML); err != nil {
 		return nil, err
 	}
 	if pic != nil {
@@ -223,39 +254,98 @@ const appPropsXML = `<Properties xmlns="http://schemas.openxmlformats.org/office
 	`<Application>Shelf</Application>` +
 	`</Properties>`
 
-// documentXML renders the body: one w:p per paragraph, then the picture
-// paragraph, then the section properties fixing the A4 layout.
-func documentXML(paragraphs []string, pic *Picture, mediaName string) string {
+// documentOpen and documentClose wrap every generated document part;
+// the namespaces cover text runs, drawings and relationships alike.
+const documentOpen = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>`
+const documentClose = `</w:body></w:document>`
+
+// documentXML renders the body of a Write document: one w:p per
+// paragraph, then the optional picture paragraph, then the section
+// properties fixing the A4 layout.
+func documentXML(paragraphs []string, pic *Picture) string {
 	var b strings.Builder
-	b.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>`)
+	b.WriteString(documentOpen)
 	for _, p := range paragraphs {
-		if p == "" {
-			b.WriteString(`<w:p/>`)
-			continue
-		}
-		// The East Asian font hint keeps Chinese readable in Word.
-		b.WriteString(`<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr><w:t xml:space="preserve">`)
-		escapeText(&b, p)
-		b.WriteString(`</w:t></w:r></w:p>`)
+		appendParagraph(&b, p)
 	}
 	if pic != nil {
-		cx, cy := pictureExtent(pic)
-		fmt.Fprintf(&b, `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">`+
-			`<wp:extent cx="%d" cy="%d"/><wp:effectExtent l="0" t="0" r="0" b="0"/>`+
-			`<wp:docPr id="1" name="%s" descr="%s"/><wp:cNvGraphicFramePr/>`+
-			`<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>`+
-			`<pic:nvPicPr><pic:cNvPr id="0" name="%s"/><pic:cNvPicPr/></pic:nvPicPr>`+
-			`<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`+
-			`<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm>`+
-			`<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`+
-			`</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`,
-			cx, cy, mediaName, mediaName, mediaName, cx, cy)
+		appendPicture(&b, pic)
 	}
-	fmt.Fprintf(&b, `<w:sectPr><w:pgSz w:w="%d" w:h="%d"/>`+
-		`<w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d" w:header="720" w:footer="720" w:gutter="0"/>`+
-		`</w:sectPr></w:body></w:document>`,
-		pageWidth, pageHeight, pageMargin, pageMargin, pageMargin, pageMargin)
+	writeSectPr(&b)
+	b.WriteString(documentClose)
 	return b.String()
+}
+
+// pagesDocumentXML renders the body of a WritePages document: the
+// paragraphs of each page, separated by a page-break paragraph
+// (<w:p><w:r><w:br w:type="page"/></w:r></w:p>) before every page after
+// the first. An empty page contributes an empty paragraph so the page
+// still exists between its two breaks.
+func pagesDocumentXML(pages [][]string) string {
+	var b strings.Builder
+	b.WriteString(documentOpen)
+	for i, page := range pages {
+		if i > 0 {
+			appendPageBreak(&b)
+		}
+		if len(page) == 0 {
+			appendParagraph(&b, "")
+			continue
+		}
+		for _, p := range page {
+			appendParagraph(&b, p)
+		}
+	}
+	if len(pages) == 0 {
+		appendParagraph(&b, "")
+	}
+	writeSectPr(&b)
+	b.WriteString(documentClose)
+	return b.String()
+}
+
+// appendParagraph writes one w:p holding text; an empty text produces
+// an empty paragraph. The East Asian font hint keeps Chinese readable
+// in Word.
+func appendParagraph(b *strings.Builder, text string) {
+	if text == "" {
+		b.WriteString(`<w:p/>`)
+		return
+	}
+	b.WriteString(`<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr><w:t xml:space="preserve">`)
+	escapeText(b, text)
+	b.WriteString(`</w:t></w:r></w:p>`)
+}
+
+// appendPageBreak writes the paragraph that ends the current page.
+func appendPageBreak(b *strings.Builder) {
+	b.WriteString(`<w:p><w:r><w:br w:type="page"/></w:r></w:p>`)
+}
+
+// appendPicture writes the w:p holding pic as an inline drawing sized
+// by pictureExtent, referencing the image relationship rId1.
+func appendPicture(b *strings.Builder, pic *Picture) {
+	cx, cy := pictureExtent(pic)
+	mediaName := pic.mediaName()
+	fmt.Fprintf(b, `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">`+
+		`<wp:extent cx="%d" cy="%d"/><wp:effectExtent l="0" t="0" r="0" b="0"/>`+
+		`<wp:docPr id="1" name="%s" descr="%s"/><wp:cNvGraphicFramePr/>`+
+		`<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>`+
+		`<pic:nvPicPr><pic:cNvPr id="0" name="%s"/><pic:cNvPicPr/></pic:nvPicPr>`+
+		`<pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`+
+		`<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm>`+
+		`<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`+
+		`</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`,
+		cx, cy, mediaName, mediaName, mediaName, cx, cy)
+}
+
+// writeSectPr writes the section properties fixing the A4 page size
+// and 1-inch margins; it is the last body element in every document.
+func writeSectPr(b *strings.Builder) {
+	fmt.Fprintf(b, `<w:sectPr><w:pgSz w:w="%d" w:h="%d"/>`+
+		`<w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d" w:header="720" w:footer="720" w:gutter="0"/>`+
+		`</w:sectPr>`,
+		pageWidth, pageHeight, pageMargin, pageMargin, pageMargin, pageMargin)
 }
 
 // escapeText writes s to b with XML character escaping.

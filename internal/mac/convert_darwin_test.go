@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,19 +22,11 @@ import (
 // and pixel access for colour assertions.
 var (
 	cfStringCreate  func(alloc uintptr, cstr *byte, enc uint32) uintptr
-	cgCtxSetFill    func(ctx uintptr, r, g, b, a float64)
-	cgCtxFillRect   func(ctx uintptr, r NSRect)
-	cgCtxSetTextPos func(ctx uintptr, x, y float64)
 	ctFontCreate    func(name uintptr, size float64, mtx uintptr) uintptr
 	ctLineCreate    func(attrString uintptr) uintptr
 	ctLineDraw      func(line uintptr, ctx uintptr)
 	cfAttrStrCreate func(alloc uintptr, s uintptr, attrs uintptr) uintptr
 	kCTFontAttr     id
-
-	cgPDFDocCreateWithURL func(url uintptr) uintptr
-	cgPDFDocGetNumPages   func(doc uintptr) int
-	cgPDFDocGetPage       func(doc uintptr, page int) uintptr
-	cgPDFPageGetBoxRect   func(page uintptr, box int32) NSRect
 
 	testOnce sync.Once
 	testErr  error
@@ -60,16 +53,9 @@ func loadTest() error {
 		}
 		purego.RegisterLibFunc(&cfStringCreate, purego.RTLD_DEFAULT, "CFStringCreateWithCString")
 		purego.RegisterLibFunc(&cfAttrStrCreate, purego.RTLD_DEFAULT, "CFAttributedStringCreate")
-		purego.RegisterLibFunc(&cgCtxSetFill, libCG, "CGContextSetRGBFillColor")
-		purego.RegisterLibFunc(&cgCtxFillRect, libCG, "CGContextFillRect")
-		purego.RegisterLibFunc(&cgCtxSetTextPos, libCG, "CGContextSetTextPosition")
 		purego.RegisterLibFunc(&ctFontCreate, libCT, "CTFontCreateWithName")
 		purego.RegisterLibFunc(&ctLineCreate, libCT, "CTLineCreateWithAttributedString")
 		purego.RegisterLibFunc(&ctLineDraw, libCT, "CTLineDraw")
-		purego.RegisterLibFunc(&cgPDFDocCreateWithURL, libCG, "CGPDFDocumentCreateWithURL")
-		purego.RegisterLibFunc(&cgPDFDocGetNumPages, libCG, "CGPDFDocumentGetNumberOfPages")
-		purego.RegisterLibFunc(&cgPDFDocGetPage, libCG, "CGPDFDocumentGetPage")
-		purego.RegisterLibFunc(&cgPDFPageGetBoxRect, libCG, "CGPDFPageGetBoxRect")
 		addr, err := purego.Dlsym(libCT, "kCTFontAttributeName")
 		if err != nil {
 			testErr = err
@@ -466,19 +452,19 @@ func TestImagesToPDF(t *testing.T) {
 		t.Fatalf("not a PDF: % x", data[:8])
 	}
 	withPool(func() {
-		doc := cgPDFDocCreateWithURL(uintptr(cfURL(out)))
+		doc := pdfDocCreateWithURL(uintptr(cfURL(out)))
 		if doc == 0 {
 			t.Fatal("CGPDFDocument cannot open output")
 		}
 		defer cfRelease(doc)
-		if n := cgPDFDocGetNumPages(doc); n != 2 {
+		if n := pdfDocGetNumPages(doc); n != 2 {
 			t.Fatalf("pages = %d, want 2", n)
 		}
 		// kCGPDFMediaBox == 0. Pages are 1-based; default 72 DPI makes
 		// page points equal pixel counts.
 		want := [][2]float64{{12, 8}, {6, 14}}
 		for i := range 2 {
-			r := cgPDFPageGetBoxRect(uintptr(cgPDFDocGetPage(doc, i+1)), 0)
+			r := pdfPageGetBoxRect(uintptr(pdfDocGetPage(doc, i+1)), 0)
 			if math.Abs(r.Size.Width-want[i][0]) > 0.5 || math.Abs(r.Size.Height-want[i][1]) > 0.5 {
 				t.Fatalf("page %d box = %v, want %v", i+1, r.Size, want[i])
 			}
@@ -552,5 +538,243 @@ func TestConvertImageMissingSource(t *testing.T) {
 	}
 	if err := ImagesToPDF([]string{filepath.Join(dir, "nope.png")}, filepath.Join(dir, "o.pdf")); err == nil {
 		t.Fatal("expected ImagesToPDF error for missing source")
+	}
+}
+
+// --- PDF reading/rendering ----------------------------------------------
+
+// drawTextLine renders one line of text at PDF/Quartz coordinates (x, y)
+// — the baseline sits y points up from the page bottom.
+func drawTextLine(t *testing.T, ctx uintptr, font uintptr, x, y float64, s string) {
+	t.Helper()
+	cfs := cfStr(s)
+	attrs := newDict(kCTFontAttr, id(font))
+	as := cfAttrStrCreate(0, cfs, uintptr(attrs))
+	cfRelease(cfs)
+	if as == 0 {
+		t.Fatal("drawTextLine: no attributed string")
+	}
+	line := ctLineCreate(as)
+	cfRelease(as)
+	if line == 0 {
+		t.Fatal("drawTextLine: no line")
+	}
+	defer cfRelease(line)
+	cgCtxSetTextPos(ctx, x, y)
+	ctLineDraw(line, ctx)
+}
+
+// makeTestPDF builds a PDF with one page per spec at path: each spec is
+// {w, h, draw}. The drawing runs in the page's point coordinate space.
+func makeTestPDF(t *testing.T, path string, pages ...struct {
+	w, h float64
+	draw func(ctx uintptr)
+}) {
+	t.Helper()
+	withPool(func() {
+		ctx := cgPDFCtxCreateWithURL(uintptr(cfURL(path)), nil, 0)
+		if ctx == 0 {
+			t.Fatalf("makeTestPDF: cannot create %s", path)
+		}
+		// Close writes the xref before release.
+		defer cgPDFCtxClose(ctx)
+		defer cfRelease(ctx)
+		for _, pg := range pages {
+			box := NSRect{Size: NSSize{Width: pg.w, Height: pg.h}}
+			boxData := cfDataCreate(0, unsafe.Pointer(&box), int(unsafe.Sizeof(box)))
+			if boxData == 0 {
+				t.Fatal("makeTestPDF: no box data")
+			}
+			info := newDict(kPDFCtxMediaBox, id(boxData))
+			cgCtxBeginPDFPage(ctx, uintptr(info))
+			pg.draw(ctx)
+			cgCtxEndPDFPage(ctx)
+			cfRelease(boxData)
+		}
+	})
+}
+
+func TestPDFPageCountAndText(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "doc.pdf")
+
+	cfName := cfStr("Helvetica")
+	font := ctFontCreate(cfName, 28, 0)
+	cfRelease(cfName)
+	if font == 0 {
+		t.Fatal("no font")
+	}
+	defer cfRelease(font)
+
+	// Page 1: two text lines; page 2: text plus a red bar; page 3: only a
+	// filled rectangle (no text layer).
+	makeTestPDF(t, src,
+		struct {
+			w, h float64
+			draw func(ctx uintptr)
+		}{600, 300, func(ctx uintptr) {
+			cgCtxSetFill(ctx, 0, 0, 0, 1)
+			drawTextLine(t, ctx, font, 40, 200, "Hello Page")
+			drawTextLine(t, ctx, font, 40, 120, "中文页面")
+		}},
+		struct {
+			w, h float64
+			draw func(ctx uintptr)
+		}{400, 200, func(ctx uintptr) {
+			cgCtxSetFill(ctx, 1, 0, 0, 1)
+			cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: 120, Height: 80}})
+			cgCtxSetFill(ctx, 0, 0, 0, 1)
+			drawTextLine(t, ctx, font, 40, 100, "Second")
+		}},
+		struct {
+			w, h float64
+			draw func(ctx uintptr)
+		}{200, 200, func(ctx uintptr) {
+			cgCtxSetFill(ctx, 0, 1, 0, 1)
+			cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: 200, Height: 200}})
+		}},
+	)
+
+	n, err := PDFPageCount(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("PDFPageCount = %d, want 3", n)
+	}
+
+	pages, err := PDFText(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 3 {
+		t.Fatalf("PDFText returned %d pages, want 3", len(pages))
+	}
+	joined := func(ls []string) string {
+		return strings.ReplaceAll(strings.Join(ls, "\n"), " ", "")
+	}
+	p1 := joined(pages[0])
+	if !strings.Contains(p1, "HelloPage") || !strings.Contains(p1, "中文页面") {
+		t.Fatalf("page 1 lines = %q", pages[0])
+	}
+	p2 := joined(pages[1])
+	if !strings.Contains(p2, "Second") {
+		t.Fatalf("page 2 lines = %q", pages[1])
+	}
+	if pages[2] != nil {
+		t.Fatalf("page 3 should have no text layer, got %q", pages[2])
+	}
+}
+
+func TestNormalizeText(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	// U+2F2F KANGXI RADICAL LABOR must compose to U+5DE5 工.
+	if got := NormalizeText("⼯作"); got != "工作" {
+		t.Fatalf("NormalizeText = %q, want %q", got, "工作")
+	}
+	// Latin is untouched; empty stays empty.
+	if got := NormalizeText("plain ASCII"); got != "plain ASCII" {
+		t.Fatalf("NormalizeText mangled ASCII: %q", got)
+	}
+	if got := NormalizeText(""); got != "" {
+		t.Fatalf("NormalizeText(\"\") = %q", got)
+	}
+}
+
+// TestPDFPageLines exercises the splitting contract directly: trailing
+// spaces trimmed, leading/trailing empty lines dropped, inner empty lines
+// kept as "".
+func TestPDFPageLines(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want []string
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"hello", []string{"hello"}},
+		{"a\nb", []string{"a", "b"}},
+		{"a\n\nb", []string{"a", "", "b"}},
+		{"\n\na\n\n\n", []string{"a"}},
+		{"a  \nb", []string{"a", "b"}},
+		{"a\r\nb\rc", []string{"a", "b", "c"}},
+		{"a\vb\fc\u2028d", []string{"a", "b", "c", "d"}},
+		{"\u0085a", []string{"a"}},   // NEL is a break; empty first line is edge-dropped
+		{"\u0085 a", []string{" a"}}, // leading space is content (only trailing trimmed)
+	} {
+		if got := pdfPageLines(tc.raw); !slices.Equal(got, tc.want) {
+			t.Fatalf("pdfPageLines(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestRenderPDFPage(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "r.pdf")
+	// Page is 300×200 pt; a red rect occupies the bottom-left quarter in
+	// PDF space (y up), which renders to the image's bottom-left.
+	makeTestPDF(t, src, struct {
+		w, h float64
+		draw func(ctx uintptr)
+	}{300, 200, func(ctx uintptr) {
+		cgCtxSetFill(ctx, 1, 1, 1, 1)
+		cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: 300, Height: 200}})
+		cgCtxSetFill(ctx, 1, 0, 0, 1)
+		cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: 150, Height: 100}})
+	}})
+
+	out := filepath.Join(dir, "page.png")
+	if err := RenderPDFPage(src, 1, out, FormatPNG); err != nil {
+		t.Fatal(err)
+	}
+	px, w, h := decodePixels(t, out)
+	if w != 600 || h != 400 {
+		t.Fatalf("rendered size = %dx%d, want 600x400 (2x points)", w, h)
+	}
+	// Bottom-left quadrant is red; every other corner is white.
+	bl := (h - 1) * w * 4 // pixel row h-1 = bottom-left
+	if !nearRGBA(px, bl, 255, 0, 0, 0) {
+		t.Fatalf("bottom-left = % x, want red", px[bl:])
+	}
+	if !nearRGBA(px, 0, 255, 255, 255, 0) {
+		t.Fatalf("top-left = % x, want white", px[:4])
+	}
+	if !nearRGBA(px, (w-1)*4, 255, 255, 255, 0) {
+		t.Fatalf("top-right = % x, want white", px[(w-1)*4:])
+	}
+	br := (h-1)*w*4 + (w-1)*4
+	if !nearRGBA(px, br, 255, 255, 255, 0) {
+		t.Fatalf("bottom-right = % x, want white", px[br:])
+	}
+
+	if err := RenderPDFPage(src, 2, filepath.Join(dir, "x.png"), FormatPNG); err == nil {
+		t.Fatal("expected out-of-range page error")
+	}
+	if err := RenderPDFPage(src, 0, filepath.Join(dir, "x.png"), FormatPNG); err == nil {
+		t.Fatal("expected page 0 error")
+	}
+}
+
+func TestPDFMissingSource(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "nope.pdf")
+	if _, err := PDFPageCount(missing); err == nil {
+		t.Fatal("expected PDFPageCount error for missing file")
+	}
+	if _, err := PDFText(missing); err == nil {
+		t.Fatal("expected PDFText error for missing file")
+	}
+	if err := RenderPDFPage(missing, 1, filepath.Join(dir, "o.png"), FormatPNG); err == nil {
+		t.Fatal("expected RenderPDFPage error for missing file")
 	}
 }

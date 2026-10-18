@@ -26,12 +26,25 @@ type convertFakes struct {
 	lines    []string
 	failFor  string // convertImage fails for this source
 	onConver func()
+	// PDFs: page count and per-page text (nil page = scanned, no text
+	// layer); rendered pages and the pages written to Word.
+	pages    int
+	pageText [][]string
+	rendered []int
+	docPages [][][]string
 }
 
 func fakeConverters(t *testing.T) *convertFakes {
 	t.Helper()
 	f := &convertFakes{}
-	origs := []any{convertImage, imagesToPDF, recognizeText, imageSize, writeDocx, convertWork, convertDispatch}
+	oImage, oToPDF, oOCR, oSize := convertImage, imagesToPDF, recognizeText, imageSize
+	oCount, oText, oRender := pdfPageCount, pdfText, renderPDFPage
+	oDocx, oPages, oWork, oDispatch := writeDocx, writeDocxPages, convertWork, convertDispatch
+	t.Cleanup(func() {
+		convertImage, imagesToPDF, recognizeText, imageSize = oImage, oToPDF, oOCR, oSize
+		pdfPageCount, pdfText, renderPDFPage = oCount, oText, oRender
+		writeDocx, writeDocxPages, convertWork, convertDispatch = oDocx, oPages, oWork, oDispatch
+	})
 	convertImage = func(src, dst string, format mac.ImageFormat) error {
 		if f.onConver != nil {
 			f.onConver()
@@ -46,8 +59,21 @@ func fakeConverters(t *testing.T) *convertFakes {
 		f.pdfSrcs = append(f.pdfSrcs, srcs)
 		return os.WriteFile(dst, []byte("%PDF"), 0o600)
 	}
-	recognizeText = func(string) ([]string, error) { return f.lines, nil }
+	recognizeText = func(string) ([]string, error) { return slices.Clone(f.lines), nil }
 	imageSize = func(string) (int, int, error) { return 40, 20, nil }
+	pdfPageCount = func(string) (int, error) { return f.pages, nil }
+	pdfText = func(string) ([][]string, error) {
+		out := make([][]string, len(f.pageText))
+		for i, p := range f.pageText {
+			out[i] = slices.Clone(p)
+		}
+		return out, nil
+	}
+	renderPDFPage = func(src string, page int, dst string, format mac.ImageFormat) error {
+		f.rendered = append(f.rendered, page)
+		f.formats = append(f.formats, format)
+		return os.WriteFile(dst, []byte("page"), 0o600)
+	}
 	writeDocx = func(dst string, paragraphs []string, pic *docx.Picture) error {
 		f.docText = append(f.docText, paragraphs)
 		if pic == nil || len(pic.Data) == 0 {
@@ -55,17 +81,12 @@ func fakeConverters(t *testing.T) *convertFakes {
 		}
 		return os.WriteFile(dst, []byte("docx"), 0o600)
 	}
+	writeDocxPages = func(dst string, pages [][]string) error {
+		f.docPages = append(f.docPages, pages)
+		return os.WriteFile(dst, []byte("docx"), 0o600)
+	}
 	convertWork = func(fn func()) { fn() }
 	convertDispatch = func(fn func()) { fn() }
-	t.Cleanup(func() {
-		convertImage = origs[0].(func(string, string, mac.ImageFormat) error)
-		imagesToPDF = origs[1].(func([]string, string) error)
-		recognizeText = origs[2].(func(string) ([]string, error))
-		imageSize = origs[3].(func(string) (int, int, error))
-		writeDocx = origs[4].(func(string, []string, *docx.Picture) error)
-		convertWork = origs[5].(func(func()))
-		convertDispatch = origs[6].(func(func()))
-	})
 	return f
 }
 
@@ -317,5 +338,88 @@ func TestConvertClipboardScreenshot(t *testing.T) {
 	got := outputNames(a)
 	if len(got) != 1 || strings.Contains(got[0], ":") || !strings.HasPrefix(got[0], "截图 ") || !strings.HasSuffix(got[0], ".pdf") {
 		t.Fatalf("outputs = %v", got)
+	}
+}
+
+// A PDF offers Word and per-page images; mixed with an image it offers
+// nothing, so a selection is never half converted.
+func TestConvertPDFMenu(t *testing.T) {
+	fakeConverters(t)
+	a, view, _ := convertShelf(t, "cv.pdf", "a.png")
+	if err := view.RightClick("cv.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(view.Menu(), "转换为") {
+		t.Fatalf("a PDF's menu lacks 转换为: %v", view.Menu())
+	}
+	view.CloseMenu()
+	selectAll(a)
+	view.Frame()
+	if err := view.RightClick("cv.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range view.Menu() {
+		if strings.HasPrefix(l, "转换") || l == "合并为一个 PDF" {
+			t.Fatalf("a PDF mixed with an image must not offer conversion: %v", view.Menu())
+		}
+	}
+}
+
+// PDF to Word keeps one Word page per PDF page: text pages as they are,
+// a scanned page (no text layer) through text recognition.
+func TestConvertPDFToWord(t *testing.T) {
+	f := fakeConverters(t)
+	f.pageText = [][]string{{"张三 · 产品经理", "工作经历"}, nil, {"Education"}}
+	f.lines = []string{"扫描页的文字"}
+	a, view, _ := convertShelf(t, "cv.pdf")
+	if err := view.RightClick("cv.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("转换为", "Word（提取文字）"); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"张三 · 产品经理", "工作经历"}, {"扫描页的文字"}, {"Education"}}
+	if len(f.docPages) != 1 || !slices.EqualFunc(f.docPages[0], want, slices.Equal[[]string]) {
+		t.Fatalf("Word pages = %v, want %v", f.docPages, want)
+	}
+	if !slices.Equal(f.rendered, []int{2}) {
+		t.Fatalf("only the scanned page must be rendered for recognition, rendered %v", f.rendered)
+	}
+	if got := outputNames(a); !slices.Equal(got, []string{"cv.docx"}) {
+		t.Fatalf("outputs = %v", got)
+	}
+	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 1 {
+		t.Fatalf("the rendered page must not stay behind: %v", entries)
+	}
+}
+
+// PDF to images gives one picture per page, numbered; a one-page PDF
+// keeps its plain name.
+func TestConvertPDFToImagesPerPage(t *testing.T) {
+	f := fakeConverters(t)
+	f.pages = 3
+	a, view, _ := convertShelf(t, "cv.pdf")
+	if err := view.RightClick("cv.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("转换为", "PNG（每页一张）"); err != nil {
+		t.Fatal(err)
+	}
+	if got := outputNames(a); !slices.Equal(got, []string{"cv 第 1 页.png", "cv 第 2 页.png", "cv 第 3 页.png"}) {
+		t.Fatalf("outputs = %v", got)
+	}
+	if !slices.Equal(f.rendered, []int{1, 2, 3}) {
+		t.Fatalf("rendered pages = %v", f.rendered)
+	}
+	f.pages, f.rendered = 1, nil
+	view.Frame()
+	if err := view.RightClick("cv.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("转换为", "JPEG（每页一张）"); err != nil {
+		t.Fatal(err)
+	}
+	if got := outputNames(a); !slices.Contains(got, "cv.jpg") {
+		t.Fatalf("a one-page PDF must keep its name: %v", got)
 	}
 }

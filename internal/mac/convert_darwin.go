@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -61,6 +62,16 @@ var (
 	cgCtxEndPDFPage       func(ctx uintptr)
 	cgCtxConcatCTM        func(ctx uintptr, t CGAffineTransform)
 	cgCtxDrawImage        func(ctx uintptr, rect NSRect, image uintptr)
+	cgCtxDrawPDFPage      func(ctx uintptr, page uintptr)
+	cgCtxSetFill          func(ctx uintptr, r, g, b, a float64)
+	cgCtxFillRect         func(ctx uintptr, r NSRect)
+	cgCtxSetTextPos       func(ctx uintptr, x, y float64)
+
+	// CGPDFDocument reading: page counting and page boxes for rendering.
+	pdfDocCreateWithURL func(url uintptr) uintptr
+	pdfDocGetNumPages   func(doc uintptr) int
+	pdfDocGetPage       func(doc uintptr, page int) uintptr
+	pdfPageGetBoxRect   func(page uintptr, box int32) NSRect
 
 	// objc_msgSend variants for signatures that move values through the
 	// FP registers, which SyscallN cannot: numberWithDouble: takes a
@@ -110,6 +121,9 @@ func loadConvert() error {
 		libCF := dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
 		libImageIO = dlopen("/System/Library/Frameworks/ImageIO.framework/ImageIO")
 		libVision = dlopen("/System/Library/Frameworks/Vision.framework/Vision")
+		// Quartz.framework provides PDFKit (PDFDocument/PDFPage) for text
+		// extraction; it must be loaded before class("PDFDocument") resolves.
+		dlopen("/System/Library/Frameworks/Quartz.framework/Quartz")
 		if convErr != nil {
 			return
 		}
@@ -133,6 +147,14 @@ func loadConvert() error {
 		purego.RegisterLibFunc(&cgCtxEndPDFPage, libCG, "CGPDFContextEndPage")
 		purego.RegisterLibFunc(&cgCtxConcatCTM, libCG, "CGContextConcatCTM")
 		purego.RegisterLibFunc(&cgCtxDrawImage, libCG, "CGContextDrawImage")
+		purego.RegisterLibFunc(&cgCtxDrawPDFPage, libCG, "CGContextDrawPDFPage")
+		purego.RegisterLibFunc(&cgCtxSetFill, libCG, "CGContextSetRGBFillColor")
+		purego.RegisterLibFunc(&cgCtxFillRect, libCG, "CGContextFillRect")
+		purego.RegisterLibFunc(&cgCtxSetTextPos, libCG, "CGContextSetTextPosition")
+		purego.RegisterLibFunc(&pdfDocCreateWithURL, libCG, "CGPDFDocumentCreateWithURL")
+		purego.RegisterLibFunc(&pdfDocGetNumPages, libCG, "CGPDFDocumentGetNumberOfPages")
+		purego.RegisterLibFunc(&pdfDocGetPage, libCG, "CGPDFDocumentGetPage")
+		purego.RegisterLibFunc(&pdfPageGetBoxRect, libCG, "CGPDFPageGetBoxRect")
 		purego.RegisterFunc(&msgDouble, msgSendAddr)
 		purego.RegisterFunc(&msgRetDouble, msgSendAddr)
 		purego.RegisterLibFunc(&cgPDFCtxClose, libCG, "CGPDFContextClose")
@@ -369,15 +391,6 @@ func ConvertImage(src, dst string, format ImageFormat) (err error) {
 	default:
 		return fmt.Errorf("mac: unknown image format %d", int(format))
 	}
-	tmpPath, err := atomicTemp(filepath.Dir(dst))
-	if err != nil {
-		return fmt.Errorf("mac: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			os.Remove(tmpPath)
-		}
-	}()
 
 	withPool(func() {
 		isrc, e := imageSource(src)
@@ -392,24 +405,35 @@ func ConvertImage(src, dst string, format ImageFormat) (err error) {
 			return
 		}
 		defer cfRelease(img)
-		dstRef := imgDstCreateWithURL(uintptr(cfURL(tmpPath)), uti, 1, 0)
-		if dstRef == 0 {
-			err = fmt.Errorf("mac: cannot create encoder for %s", dst)
-			return
-		}
-		defer cfRelease(dstRef)
-		var props id
-		if format == FormatJPEG || format == FormatHEIC {
-			props = newDict(kDstLossyQuality, nsFloat(0.85))
-		}
-		imgDstAddImage(dstRef, img, uintptr(props))
-		if !imgDstFinalize(dstRef) {
-			err = fmt.Errorf("mac: cannot write %s", dst)
-			return
-		}
+		err = encodeCGImage(img, uti, format, dst)
 	})
+	return err
+}
+
+// encodeCGImage writes img to dst as format via a temp file + rename.
+// Call inside withPool; img stays owned by the caller.
+func encodeCGImage(img uintptr, uti id, format ImageFormat, dst string) (err error) {
+	tmpPath, err := atomicTemp(filepath.Dir(dst))
 	if err != nil {
-		return err
+		return fmt.Errorf("mac: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(tmpPath)
+		}
+	}()
+	dstRef := imgDstCreateWithURL(uintptr(cfURL(tmpPath)), uti, 1, 0)
+	if dstRef == 0 {
+		return fmt.Errorf("mac: cannot create encoder for %s", dst)
+	}
+	defer cfRelease(dstRef)
+	var props id
+	if format == FormatJPEG || format == FormatHEIC {
+		props = newDict(kDstLossyQuality, nsFloat(0.85))
+	}
+	imgDstAddImage(dstRef, img, uintptr(props))
+	if !imgDstFinalize(dstRef) {
+		return fmt.Errorf("mac: cannot write %s", dst)
 	}
 	if err := os.Rename(tmpPath, dst); err != nil {
 		os.Remove(tmpPath)
@@ -650,4 +674,213 @@ func ImageSize(src string) (w, h int, err error) {
 		}
 	})
 	return w, h, err
+}
+
+// --- PDF reading and rendering -----------------------------------------
+
+// pdfDocument opens the PDF at src via CGPDFDocument (thread-safe, no
+// PDFKit). Caller CFReleases it.
+func pdfDocument(src string) (uintptr, error) {
+	doc := pdfDocCreateWithURL(uintptr(cfURL(src)))
+	if doc == 0 {
+		return 0, fmt.Errorf("mac: cannot read PDF %s", src)
+	}
+	return doc, nil
+}
+
+// PDFPageCount reports how many pages the PDF at src has.
+// Safe on any goroutine.
+func PDFPageCount(src string) (n int, err error) {
+	if err := loadConvert(); err != nil {
+		return 0, err
+	}
+	withPool(func() {
+		doc, e := pdfDocument(src)
+		if e != nil {
+			err = e
+			return
+		}
+		defer cfRelease(doc)
+		n = pdfDocGetNumPages(doc)
+	})
+	return n, err
+}
+
+// NormalizeText applies Unicode compatibility composition (NFKC) to s —
+// the same mapping NSString's precomposedStringWithCompatibilityMapping
+// performs — so CJK compatibility and Kangxi radical code points
+// (U+2F00–U+2FDF, U+2E80–U+2FFF) become the ordinary unified ideographs.
+// Returns s unchanged when the frameworks cannot be loaded.
+func NormalizeText(s string) string {
+	if s == "" || loadConvert() != nil {
+		return s
+	}
+	var out string
+	withPool(func() {
+		ns := nsString(s)
+		if ns == 0 {
+			return
+		}
+		norm := send(ns, "precomposedStringWithCompatibilityMapping")
+		if norm == 0 {
+			norm = ns
+		}
+		out = goString(norm)
+	})
+	if out == "" && s != "" {
+		return s
+	}
+	return out
+}
+
+// pdfPageLines splits a page's extracted text into lines: \r\n, \r,
+// \v and \f all count as breaks; trailing whitespace is trimmed per line;
+// empty lines at the page's start and end are dropped while inner empty
+// lines survive as "". Returns nil when the page carries no text.
+func pdfPageLines(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	// Normalize every break sequence to \n first (\r\n collapses to one),
+	// then Split so inner empty lines survive (FieldsFunc would drop them).
+	s := strings.ReplaceAll(raw, "\r\n", "\n")
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\v', '\f', '\u0085', '\u2028', '\u2029':
+			return '\n'
+		}
+		return r
+	}, s)
+	rawLines := strings.Split(s, "\n")
+	for i := range rawLines {
+		rawLines[i] = strings.TrimRight(rawLines[i], " \t ")
+	}
+	lo, hi := 0, len(rawLines)
+	for lo < hi && rawLines[lo] == "" {
+		lo++
+	}
+	for hi > lo && rawLines[hi-1] == "" {
+		hi--
+	}
+	if lo >= hi {
+		return nil
+	}
+	return rawLines[lo:hi]
+}
+
+// PDFText returns the text of every page of the PDF at src (index =
+// page-1), each page's string split into lines (trailing spaces trimmed,
+// empty lines at page start/end dropped, inner empty lines kept as "").
+// Text is normalized with NFKC so CJK compatibility / Kangxi radical code
+// points become the ordinary characters. A page with no text layer yields
+// nil for that page. Extraction goes through PDFKit (PDFDocument /
+// PDFPage.string), which is safe off the main thread — unlike the rest of
+// AppKit, PDFKit's data model needs no run loop. Safe on any goroutine.
+func PDFText(src string) (pages [][]string, err error) {
+	if err := loadConvert(); err != nil {
+		return nil, err
+	}
+	withPool(func() {
+		doc := send(send(class("PDFDocument"), "alloc"),
+			"initWithURL:", uintptr(cfURL(src)))
+		if doc == 0 {
+			err = fmt.Errorf("mac: cannot read PDF %s", src)
+			return
+		}
+		defer send(doc, "release")
+		n := sendInt(doc, "pageCount")
+		pages = make([][]string, n)
+		for i := range n {
+			page := send(doc, "pageAtIndex:", uintptr(i))
+			if page == 0 {
+				continue
+			}
+			raw := send(page, "string")
+			if raw == 0 {
+				continue
+			}
+			norm := send(raw, "precomposedStringWithCompatibilityMapping")
+			if norm == 0 {
+				norm = raw
+			}
+			pages[i] = pdfPageLines(goString(norm))
+		}
+	})
+	return pages, err
+}
+
+// RenderPDFPage renders page (1-based) of the PDF at src to an image file
+// at dst in format, at scale 2 — the page's media box in points times 2
+// pixels (144 dpi) — on a white background, drawn upright. The write is
+// atomic like ConvertImage. Safe on any goroutine.
+func RenderPDFPage(src string, page int, dst string, format ImageFormat) (err error) {
+	if err := loadConvert(); err != nil {
+		return err
+	}
+	var uti id
+	switch format {
+	case FormatJPEG:
+		uti = utiJPEG
+	case FormatPNG:
+		uti = utiPNG
+	case FormatHEIC:
+		uti = utiHEIC
+	default:
+		return fmt.Errorf("mac: unknown image format %d", int(format))
+	}
+	withPool(func() {
+		doc, e := pdfDocument(src)
+		if e != nil {
+			err = e
+			return
+		}
+		defer cfRelease(doc)
+		if page < 1 || page > pdfDocGetNumPages(doc) {
+			err = fmt.Errorf("mac: page %d out of range", page)
+			return
+		}
+		p := pdfDocGetPage(doc, page)
+		if p == 0 {
+			err = fmt.Errorf("mac: page %d out of range", page)
+			return
+		}
+		box := pdfPageGetBoxRect(p, 0) // kCGPDFMediaBox
+		w := int(math.Ceil(box.Size.Width * 2))
+		h := int(math.Ceil(box.Size.Height * 2))
+		if w <= 0 || h <= 0 {
+			err = fmt.Errorf("mac: bad page box for page %d", page)
+			return
+		}
+		space := cgColorSpaceDeviceRGB()
+		if space == 0 {
+			err = errors.New("mac: no colorspace")
+			return
+		}
+		defer cfRelease(space)
+		ctx := cgBitmapCreate(nil, w, h, 8, 0, space, uint32(1|4<<12))
+		if ctx == 0 {
+			err = errors.New("mac: no bitmap context")
+			return
+		}
+		defer cfRelease(ctx)
+		// White background, then draw the page: PDF space is y-up like
+		// Quartz, so no flip is needed — scale points to the 2× pixels.
+		cgCtxSetFill(ctx, 1, 1, 1, 1)
+		cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: float64(w), Height: float64(h)}})
+		cgCtxConcatCTM(ctx, CGAffineTransform{
+			A:  2,
+			D:  2,
+			Tx: -box.Origin.X * 2,
+			Ty: -box.Origin.Y * 2,
+		})
+		cgCtxDrawPDFPage(ctx, p)
+		img := cgBitmapCreateImage(ctx)
+		if img == 0 {
+			err = errors.New("mac: render produced no image")
+			return
+		}
+		defer cfRelease(img)
+		err = encodeCGImage(img, uti, format, dst)
+	})
+	return err
 }

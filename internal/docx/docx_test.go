@@ -83,15 +83,36 @@ func assertWellFormed(t *testing.T, parts map[string][]byte) {
 	}
 }
 
+// paraInfo is one w:p from document.xml: its text plus whether it
+// holds a <w:br w:type="page"/> break.
+type paraInfo struct {
+	text      string
+	pageBreak bool
+}
+
 // paragraphTexts returns the text of every w:p in document.xml, in
-// order; runs inside a paragraph are concatenated.
+// order.
 func paragraphTexts(t *testing.T, documentXML []byte) []string {
+	t.Helper()
+	infos := paragraphInfos(t, documentXML)
+	texts := make([]string, len(infos))
+	for i, p := range infos {
+		texts[i] = p.text
+	}
+	return texts
+}
+
+// paragraphInfos parses document.xml into per-paragraph records, in
+// order; runs inside a paragraph are concatenated and a
+// <w:br w:type="page"/> inside a run sets pageBreak.
+func paragraphInfos(t *testing.T, documentXML []byte) []paraInfo {
 	t.Helper()
 	const wNS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 	dec := xml.NewDecoder(bytes.NewReader(documentXML))
-	var texts []string
+	var infos []paraInfo
 	inP, inT := false, false
-	var cur strings.Builder
+	var cur paraInfo
+	var text strings.Builder
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
@@ -105,25 +126,33 @@ func paragraphTexts(t *testing.T, documentXML []byte) []string {
 			switch {
 			case e.Name.Space == wNS && e.Name.Local == "p":
 				inP = true
-				cur.Reset()
+				cur = paraInfo{}
+				text.Reset()
+			case inP && e.Name.Space == wNS && e.Name.Local == "br":
+				for _, a := range e.Attr {
+					if a.Name.Local == "type" && a.Value == "page" {
+						cur.pageBreak = true
+					}
+				}
 			case e.Name.Space == wNS && e.Name.Local == "t":
 				inT = true
 			}
 		case xml.EndElement:
 			switch {
 			case e.Name.Space == wNS && e.Name.Local == "p":
-				texts = append(texts, cur.String())
+				cur.text = text.String()
+				infos = append(infos, cur)
 				inP = false
 			case e.Name.Space == wNS && e.Name.Local == "t":
 				inT = false
 			}
 		case xml.CharData:
 			if inP && inT {
-				cur.Write(e)
+				text.Write(e)
 			}
 		}
 	}
-	return texts
+	return infos
 }
 
 // inlineExtent returns the wp:inline extent (EMU) of the first drawing.
@@ -446,4 +475,147 @@ func keys(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// --- WritePages -----------------------------------------------------
+
+func TestWritePagesBreakPositions(t *testing.T) {
+	dst := docPath(t)
+	pages := [][]string{
+		{"p1a", "p1b"},
+		{"p2a"},
+		{"p3a", "p3b", "p3c"},
+	}
+	if err := WritePages(dst, pages); err != nil {
+		t.Fatalf("WritePages: %v", err)
+	}
+	parts := unzip(t, dst)
+	assertWellFormed(t, parts)
+	infos := paragraphInfos(t, parts["word/document.xml"])
+	// Pages are separated by dedicated break paragraphs in document
+	// order: p1a, p1b, [break], p2a, [break], p3a, p3b, p3c.
+	want := []paraInfo{
+		{text: "p1a"},
+		{text: "p1b"},
+		{pageBreak: true},
+		{text: "p2a"},
+		{pageBreak: true},
+		{text: "p3a"},
+		{text: "p3b"},
+		{text: "p3c"},
+	}
+	if len(infos) != len(want) {
+		t.Fatalf("paragraph count = %d, want %d: %+v", len(infos), len(want), infos)
+	}
+	breaks := 0
+	for i, p := range infos {
+		if p != want[i] {
+			t.Errorf("paragraph %d = %+v, want %+v", i, p, want[i])
+		}
+		if p.pageBreak {
+			breaks++
+		}
+	}
+	if breaks != 2 {
+		t.Fatalf("%d page breaks for 3 pages, want 2", breaks)
+	}
+	for name := range parts {
+		if strings.HasPrefix(name, "word/media/") {
+			t.Errorf("text-only document contains media part %s", name)
+		}
+	}
+	if _, ok := parts["word/_rels/document.xml.rels"]; ok {
+		t.Error("WritePages document should not need document.xml.rels")
+	}
+}
+
+func TestWritePagesEmptyMiddlePage(t *testing.T) {
+	dst := docPath(t)
+	pages := [][]string{
+		{"first"},
+		{}, // empty page: still produces its page
+		{"last"},
+	}
+	if err := WritePages(dst, pages); err != nil {
+		t.Fatalf("WritePages: %v", err)
+	}
+	parts := unzip(t, dst)
+	assertWellFormed(t, parts)
+	infos := paragraphInfos(t, parts["word/document.xml"])
+	// first, [break], (empty page 2 paragraph), [break], last
+	want := []paraInfo{
+		{text: "first"},
+		{pageBreak: true},
+		{text: ""},
+		{pageBreak: true},
+		{text: "last"},
+	}
+	if len(infos) != len(want) {
+		t.Fatalf("paragraphs = %+v, want %+v", infos, want)
+	}
+	for i, p := range infos {
+		if p != want[i] {
+			t.Errorf("paragraph %d = %+v, want %+v", i, p, want[i])
+		}
+	}
+}
+
+func TestWritePagesZeroPages(t *testing.T) {
+	for _, pages := range [][][]string{nil, {}} {
+		dst := docPath(t)
+		if err := WritePages(dst, pages); err != nil {
+			t.Fatalf("WritePages(%v): %v", pages, err)
+		}
+		parts := unzip(t, dst)
+		assertWellFormed(t, parts)
+		infos := paragraphInfos(t, parts["word/document.xml"])
+		if len(infos) != 1 || infos[0].text != "" || infos[0].pageBreak {
+			t.Fatalf("zero-page document paragraphs = %+v, want one empty paragraph", infos)
+		}
+	}
+}
+
+func TestWritePagesSinglePageNoBreak(t *testing.T) {
+	dst := docPath(t)
+	if err := WritePages(dst, [][]string{{"only", "page"}}); err != nil {
+		t.Fatalf("WritePages: %v", err)
+	}
+	parts := unzip(t, dst)
+	for _, p := range paragraphInfos(t, parts["word/document.xml"]) {
+		if p.pageBreak {
+			t.Errorf("single page paragraph %q has a page break", p.text)
+		}
+	}
+}
+
+func TestWritePagesTextutilRoundTrip(t *testing.T) {
+	if _, err := exec.LookPath("textutil"); err != nil {
+		t.Skip("textutil not available")
+	}
+	dst := docPath(t)
+	pages := [][]string{
+		{"第一页开头", "page one end"},
+		{},
+		{"第三页", "final line"},
+	}
+	var flat []string
+	for _, page := range pages {
+		flat = append(flat, page...)
+	}
+	if err := WritePages(dst, pages); err != nil {
+		t.Fatalf("WritePages: %v", err)
+	}
+	out, err := exec.Command("textutil", "-convert", "txt", "-stdout", dst).Output()
+	if err != nil {
+		t.Fatalf("textutil: %v", err)
+	}
+	txt := string(out)
+	pos := 0
+	for _, want := range flat {
+		i := strings.Index(txt[pos:], want)
+		if i < 0 {
+			t.Fatalf("textutil output lacks %q after offset %d\nfull output:\n%s", want, pos, txt)
+		}
+		pos += i + len(want)
+	}
 }

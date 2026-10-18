@@ -63,7 +63,11 @@ var (
 	imagesToPDF     = mac.ImagesToPDF
 	recognizeText   = mac.RecognizeText
 	imageSize       = mac.ImageSize
+	pdfPageCount    = mac.PDFPageCount
+	pdfText         = mac.PDFText
+	renderPDFPage   = mac.RenderPDFPage
 	writeDocx       = docx.Write
+	writeDocxPages  = docx.WritePages
 	convertWork     = func(fn func()) { go fn() }
 	convertDispatch = mygo.RunOnMain
 )
@@ -87,6 +91,12 @@ func convertible(item store.Item) bool {
 		return imageExts[strings.ToLower(filepath.Ext(item.Path))]
 	}
 	return false
+}
+
+// isPDF reports whether item is a PDF file that is still there; PDFs
+// convert to Word (their text) and to images (one per page).
+func isPDF(item store.Item) bool {
+	return item.Kind == store.KindFile && !item.Missing && strings.EqualFold(filepath.Ext(item.Path), ".pdf")
 }
 
 // imageFormatOf names an image item's format as an output extension
@@ -121,6 +131,7 @@ func convertBaseName(item store.Item) string {
 type convertJob struct {
 	target  convertTarget
 	total   int
+	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs)
 	done    atomic.Int32
 	ocr     atomic.Bool // the current step is text recognition
 	cancel  atomic.Bool
@@ -169,7 +180,7 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 	case toMergedPDF:
 		title = "正在合并 PDF"
 	}
-	step := fmt.Sprintf("第 %d / %d 张", min(done+1, j.total), j.total)
+	step := fmt.Sprintf("第 %d / %d %s", min(done+1, j.total), j.total, j.unit)
 	if j.ocr.Load() {
 		step = fmt.Sprintf("识别文字 %d / %d", min(done+1, j.total), j.total)
 	}
@@ -212,8 +223,10 @@ type convertOut struct {
 	noText bool // a Word output for which nothing was recognized
 }
 
-// startConvert begins converting items to target. Names are reserved here,
-// on the main thread, so outputs of one job never collide.
+// startConvert begins converting items — all images or all PDFs — to
+// target. Names are reserved here, on the main thread, so outputs of one
+// job never collide; a PDF turned into images gives one output per page
+// (「名 第 2 页.png」, or just 「名.png」 for a one-page PDF).
 func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	if a.conv == nil || a.conv.busy() || a.store == nil || len(items) == 0 {
 		return
@@ -222,15 +235,45 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	taken := map[string]bool{}
 	type task struct {
 		src, dst string
+		pdf      bool
+		page     int   // > 0: render this page of the PDF src
+		err      error // the task failed before it ran (unreadable PDF)
 	}
 	var tasks []task
-	if target == toMergedPDF {
+	unit := "张"
+	switch {
+	case target == toMergedPDF:
 		name := convertBaseName(items[0])
 		if len(items) > 1 {
 			name = fmt.Sprintf("%s 等 %d 张", name, len(items))
 		}
 		tasks = append(tasks, task{dst: uniquePath(dir, name, "pdf", taken)})
-	} else {
+	case isPDF(items[0]) && target == toWord:
+		unit = "个"
+		for _, it := range items {
+			tasks = append(tasks, task{src: it.Path, pdf: true, dst: uniquePath(dir, convertBaseName(it), "docx", taken)})
+		}
+	case isPDF(items[0]):
+		unit = "页"
+		for _, it := range items {
+			base := convertBaseName(it)
+			n, err := pdfPageCount(it.Path)
+			if err != nil || n < 1 {
+				if err == nil {
+					err = fmt.Errorf("%s 没有页面", filepath.Base(it.Path))
+				}
+				tasks = append(tasks, task{src: it.Path, pdf: true, dst: filepath.Join(dir, base), err: err})
+				continue
+			}
+			for p := 1; p <= n; p++ {
+				name := base
+				if n > 1 {
+					name = fmt.Sprintf("%s 第 %d 页", base, p)
+				}
+				tasks = append(tasks, task{src: it.Path, pdf: true, page: p, dst: uniquePath(dir, name, convertExt(target), taken)})
+			}
+		}
+	default:
 		for _, it := range items {
 			tasks = append(tasks, task{src: it.Path, dst: uniquePath(dir, convertBaseName(it), convertExt(target), taken)})
 		}
@@ -239,10 +282,7 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	for i, it := range items {
 		srcs[i] = it.Path
 	}
-	job := &convertJob{target: target, total: len(tasks), started: time.Now()}
-	if target == toMergedPDF {
-		job.total = 1
-	}
+	job := &convertJob{target: target, total: len(tasks), unit: unit, started: time.Now()}
 	a.conv.job, a.conv.seen = job, false
 	convertWork(func() {
 		var outs []convertOut
@@ -250,24 +290,31 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 			if job.cancel.Load() {
 				break
 			}
-			var out convertOut
-			out.path = t.dst
+			out := convertOut{path: t.dst, err: t.err}
+			format := mac.FormatPNG
 			switch target {
-			case toMergedPDF:
+			case toJPEG:
+				format = mac.FormatJPEG
+			case toHEIC:
+				format = mac.FormatHEIC
+			}
+			switch {
+			case out.err != nil:
+			case target == toMergedPDF:
 				out.err = imagesToPDF(srcs, t.dst)
-			case toPDF:
+			case t.pdf && target == toWord:
+				out.noText, out.err = wordFromPDF(t.src, t.dst, job)
+			case t.pdf:
+				out.err = renderPDFPage(t.src, t.page, t.dst, format)
+			case target == toPDF:
 				out.err = imagesToPDF([]string{t.src}, t.dst)
-			case toWord:
+			case target == toWord:
 				job.ocr.Store(true)
 				out.noText, out.err = wordFromImage(t.src, t.dst)
-			case toJPEG:
-				out.err = convertImage(t.src, t.dst, mac.FormatJPEG)
-			case toHEIC:
-				out.err = convertImage(t.src, t.dst, mac.FormatHEIC)
-			case toPNG:
-				out.err = convertImage(t.src, t.dst, mac.FormatPNG)
+			default:
+				out.err = convertImage(t.src, t.dst, format)
 			}
-			if out.err != nil {
+			if out.err != nil && t.err == nil {
 				_ = os.Remove(t.dst)
 			}
 			outs = append(outs, out)
@@ -275,6 +322,40 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 		}
 		convertDispatch(func() { a.finishConvert(job, outs) })
 	})
+}
+
+// wordFromPDF writes dst as a text-only Word document with one page per
+// page of the PDF src: the page's own text, or for a scanned page without
+// a text layer, the text recognized in its picture. It reports whether no
+// page had any text.
+func wordFromPDF(src, dst string, job *convertJob) (noText bool, err error) {
+	pages, err := pdfText(src)
+	if err != nil {
+		return false, err
+	}
+	noText = true
+	for i, lines := range pages {
+		if len(lines) == 0 {
+			job.ocr.Store(true)
+			tmp := filepath.Join(filepath.Dir(dst), fmt.Sprintf(".%s.page%d.png", filepath.Base(dst), i+1))
+			err := renderPDFPage(src, i+1, tmp, mac.FormatPNG)
+			if err == nil {
+				lines, err = recognizeText(tmp)
+			}
+			os.Remove(tmp)
+			if err != nil {
+				return false, err
+			}
+			for j, l := range lines {
+				lines[j] = mac.NormalizeText(l)
+			}
+			pages[i] = lines
+		}
+		if len(pages[i]) > 0 {
+			noText = false
+		}
+	}
+	return noText, writeDocxPages(dst, pages)
 }
 
 // wordFromImage writes dst as a Word document holding the text recognized
@@ -381,21 +462,45 @@ func uniquePath(dir, name, ext string, taken map[string]bool) string {
 	}
 }
 
-// convertMenu adds the conversion group to an item menu: 「转换为 ▸」 (or
-// 「转换 N 张为 ▸」) and, for several images, 「合并为一个 PDF」. Both appear
-// only when every target is an image, so a mixed selection is never half
-// converted; they are disabled while a job runs. The format every target
-// already has is greyed as 「当前格式」.
+// convertMenu adds the conversion group to an item menu when every target
+// is an image, or every target is a PDF — a mixed selection is never half
+// converted. Images: 「转换为 ▸」 (「转换 N 张为 ▸」) JPEG / HEIC / PNG / PDF /
+// Word, the format every target already has greyed as 「当前格式」, and for
+// several 「合并为一个 PDF」. PDFs: 「转换为 ▸」 (「转换 N 个为 ▸」) Word, PNG,
+// JPEG. Everything is disabled while a job runs.
 func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 	if a.conv == nil || a.store == nil || len(items) == 0 {
 		return
 	}
+	allImages, allPDFs := true, true
 	for _, it := range items {
-		if !convertible(it) {
-			return
-		}
+		allImages = allImages && convertible(it)
+		allPDFs = allPDFs && isPDF(it)
 	}
 	busy := a.conv.busy()
+	if allPDFs {
+		label := "转换为"
+		if len(items) > 1 {
+			label = fmt.Sprintf("转换 %d 个为", len(items))
+		}
+		m.Separator()
+		m.Submenu(label, func(sm *ui.Menu) {
+			if sm.Item("Word（提取文字）").Disabled(busy).Chosen() {
+				a.startConvert(items, toWord)
+			}
+			sm.Separator()
+			if sm.Item("PNG（每页一张）").Disabled(busy).Chosen() {
+				a.startConvert(items, toPNG)
+			}
+			if sm.Item("JPEG（每页一张）").Disabled(busy).Chosen() {
+				a.startConvert(items, toJPEG)
+			}
+		}).Disabled(busy)
+		return
+	}
+	if !allImages {
+		return
+	}
 	current := imageFormatOf(items[0])
 	for _, it := range items[1:] {
 		if imageFormatOf(it) != current {
