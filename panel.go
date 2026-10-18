@@ -770,32 +770,40 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool
 
 // panelContentH is the expanded panel's desired content height (excluding
 // the window frame margin): the ears, the activity strip when something
-// is under way, the module bar, then the page's stage clamped between
-// stageMinH and stageMaxH (it scrolls past that). Pure; unit-tested.
+// is under way, the module bar, then the stage. The stage is as tall as
+// the tallest page needs, clamped between stageMinH and stageMaxH (each
+// page scrolls past that), so switching pages never resizes the panel —
+// only content coming and going does. Pure; unit-tested.
 func (a *shelf) panelContentH() int {
 	spacer, rowH, _ := a.earLayout()
 	h := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
 	if len(a.liveActivities()) > 0 {
 		h += liveH + liveGap
 	}
-	list := a.visibleItems()
-	var stage int
-	switch {
-	case a.tab == tabClipboard:
-		stage = clipSearchH
-		if len(list) > 0 {
-			stage += clipListTop + len(list)*(clipRowH+clipRowGap) - clipRowGap
-		}
-	case len(list) > 0:
-		rows := (len(list) + gridCols - 1) / gridCols
-		stage = rows*tileH + (rows-1)*gridGap
-	}
+	stage := max(a.stageH(tabTray), a.stageH(tabClipboard))
 	h += min(max(stage, stageMinH), stageMaxH)
-	if a.tab == tabClipboard && (a.focusMode || a.search != "") {
-		// The keyboard hint pill floats over the stage's foot.
+	if a.focusMode || a.search != "" {
+		// The keyboard hint pill floats over the clipboard stage's foot.
 		h += hintPillH
 	}
 	return h
+}
+
+// stageH is the height a page's stage content wants, before clamping.
+func (a *shelf) stageH(tab int) int {
+	list := a.itemsFor(tab)
+	switch {
+	case tab == tabClipboard:
+		h := clipSearchH
+		if len(list) > 0 {
+			h += clipListTop + len(list)*(clipRowH+clipRowGap) - clipRowGap
+		}
+		return h
+	case len(list) > 0:
+		rows := (len(list) + gridCols - 1) / gridCols
+		return rows*tileH + (rows-1)*gridGap
+	}
+	return 0
 }
 
 // panelTargetH is panelContentH clamped to the panel's size bound; the

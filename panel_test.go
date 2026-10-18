@@ -638,6 +638,40 @@ func TestPanelHeightFollowsVisibleItems(t *testing.T) {
 	}
 }
 
+// Switching pages must not resize the panel: the stage is sized for the
+// taller page, so a short tray and a long clipboard history share one
+// height and the switch is only a change of content.
+func TestPageSwitchKeepsPanelHeight(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.AddText("托盘里一条"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 { // 4 rows: taller than the tray's one row, under stageMaxH
+		if err := s.AddClipText(fmt.Sprintf("剪贴板 %d", i), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
+	a.x, a.y, a.h = 455, 0, 900
+	tray := a.desiredFrame().Height
+	a.setTab(tabClipboard)
+	if clip := a.desiredFrame().Height; clip != tray {
+		t.Fatalf("switching to the clipboard resized the panel: %d -> %d", tray, clip)
+	}
+	// Content coming in still grows it.
+	if err := s.AddClipText("再来一条", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.desiredFrame().Height; got <= tray {
+		t.Fatalf("a longer clipboard list must still grow the panel: %d -> %d", tray, got)
+	}
+}
+
 // While the shell eases down to a shorter panel (a tab switch), the window
 // must keep the drawn height, or the shell's bottom is cut off; once the
 // drawn height arrives, the frame follows the content again.
