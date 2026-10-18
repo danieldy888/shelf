@@ -31,7 +31,7 @@ const (
 	peekBody       = 18 // 空手悬停：刘海下方露出的高度（放下拉箭头）
 	dropPillBody   = 32 // 拖拽中：刘海下方「松开放入」那一行的高度
 	dropPillExtraW = 60 // 拖拽中：比刘海宽出的部分
-	panelWidth     = 520
+	panelWidth     = 560
 	panelHeight    = 400
 	// 设置窗口：普通有标题窗口的尺寸（设置内容超出时内部滚动）。
 	settingsWidth  = 460

@@ -479,14 +479,16 @@ func TestPassiveHideForgetsPreviousApp(t *testing.T) {
 	}
 }
 
-// 清空保留置顶项及其图片；选中剪到仍在的行，缩略图只留置顶项的。
+// 剪贴板页的清空保留置顶项；选中剪到仍在的行，被清掉的缩略图作废。
 func TestClearKeepsPinnedItems(t *testing.T) {
 	a, view, _ := clipShelf(t, "plain clip", "pinned clip")
 	if err := a.store.SetPinned(a.store.Items[1].ID, true); err != nil {
 		t.Fatal(err)
 	}
-	a.thumbnails["stale"] = &ui.Bitmap{}
-	a.selection.only(a.store.Items[0].ID) // 选中将被清掉的那行
+	a.tab = tabClipboard
+	gone := a.store.Items[0].ID
+	a.thumbnails[gone] = &ui.Bitmap{}
+	a.selection.only(gone) // 选中将被清掉的那行
 	view.Frame()
 	if err := view.Click("清空"); err != nil {
 		t.Fatalf("click clear: %v", err)
@@ -498,7 +500,7 @@ func TestClearKeepsPinnedItems(t *testing.T) {
 	if a.selection.count() != 0 {
 		t.Fatal("selection kept an item that no longer exists")
 	}
-	if _, ok := a.thumbnails["stale"]; ok {
+	if _, ok := a.thumbnails[gone]; ok {
 		t.Fatal("stale thumbnail survived clear")
 	}
 	if !view.HasText("pinned clip") || view.HasText("plain clip") {

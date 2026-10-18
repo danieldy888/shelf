@@ -101,11 +101,10 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 		}
 		view.CloseMenu()
 	}
-	// 缩略图在途解码与缓存命中都必须在清空时失效。
+	// 缩略图在途解码必须在清空时作废。
 	if len(a.thumbPending) == 0 {
 		t.Fatal("expected in-flight thumbnail decodes for file and image items")
 	}
-	a.thumbnails["cached"] = &ui.Bitmap{}
 
 	if err := view.RightClick("note.txt"); err != nil {
 		t.Fatalf("right-click note.txt: %v", err)
@@ -140,9 +139,6 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 	if view.HasText("清空") {
 		t.Fatal("clear-all button still rendered on empty shelf")
 	}
-	if len(a.thumbnails) != 0 {
-		t.Fatal("cached thumbnails not invalidated by clear-all")
-	}
 	for id := range a.thumbPending {
 		if !a.thumbDiscard[id] {
 			t.Fatalf("in-flight thumbnail %s not marked for discard", id)
@@ -153,9 +149,70 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 	}
 }
 
-// 刘海屏 topInset>0 时顶部插入留白，把顶栏整体推到刘海下沿以下，
-// 顶栏文字与按钮（收起/清空）仍然正常渲染且可点击。
-func TestNotchTopInsetPushesHeaderBelowNotch(t *testing.T) {
+// Each page's 清空 removes only what that page shows: clearing the tray
+// keeps the clipboard history, and the other way round. Pinned rows stay.
+func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	dir := t.TempDir()
+	note := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(note, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{note}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipText("复制的文字", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipText("置顶的文字", ""); err != nil {
+		t.Fatal(err)
+	}
+	var pinned string
+	for _, it := range s.Items {
+		if it.Text == "置顶的文字" {
+			pinned = it.ID
+		}
+	}
+	if err := s.SetPinned(pinned, true); err != nil {
+		t.Fatal(err)
+	}
+	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("tray clear: %v", err)
+	}
+	var left []string
+	for _, it := range s.Items {
+		left = append(left, it.Text)
+	}
+	if len(left) != 2 || !slices.Contains(left, "复制的文字") || !slices.Contains(left, "置顶的文字") {
+		t.Fatalf("the tray's 清空 must remove only the file and keep the clipboard history: %q", left)
+	}
+	a.setTab(tabClipboard)
+	a.search = "复制"
+	view.Frame()
+	if view.HasText("清空") {
+		t.Fatal("a narrowed clipboard search must not offer 清空")
+	}
+	a.search = ""
+	view.Frame()
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("clipboard clear: %v", err)
+	}
+	if len(s.Items) != 1 || s.Items[0].ID != pinned {
+		t.Fatalf("the clipboard's 清空 must keep only the pinned row, left %+v", s.Items)
+	}
+}
+
+// On a notched display the ear bar sits in the notch band beside the camera
+// housing — never over it — and the page content starts below the notch.
+// While the clipboard search holds the keyboard the window drops under the
+// menu bar, so the bar moves below it.
+func TestEarBarFlanksTheNotch(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -164,29 +221,83 @@ func TestNotchTopInsetPushesHeaderBelowNotch(t *testing.T) {
 	if err := s.AddText("有内容"); err != nil {
 		t.Fatal(err)
 	}
-	a := &shelf{store: s, topInset: 32, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	const notchW, notchH = 180, 32
+	a := &shelf{store: s, topInset: notchH, notchW: notchW, notchH: notchH, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	for _, label := range []string{"托盘", "清空", "收起"} {
+	housingL := float32(panelWidth-notchW) / 2
+	housingR := housingL + notchW
+	for _, label := range []string{"托盘", "剪贴板", "设置", "收起"} {
 		r, ok := view.Find(label)
 		if !ok {
-			t.Fatalf("header element %q missing with topInset=32", label)
+			t.Fatalf("ear button %q missing", label)
 		}
-		if r.Y < 32 {
-			t.Fatalf("header element %q at y=%v overlaps the 32pt notch", label, r.Y)
+		if r.Y+r.H > notchH {
+			t.Fatalf("ear button %q at %+v leaves the notch band", label, r)
+		}
+		if r.X+r.W > housingL && r.X < housingR {
+			t.Fatalf("ear button %q at %+v sits under the camera housing [%v, %v]", label, r, housingL, housingR)
 		}
 	}
-	if err := view.Click("清空"); err != nil {
-		t.Fatalf("clear-all button not clickable below notch: %v", err)
+	if r, ok := view.Find("清空"); !ok || r.Y < notchH {
+		t.Fatalf("the module bar's 清空 must sit below the notch: %+v %v", r, ok)
 	}
-	if len(s.Items) != 0 {
-		t.Fatal("clear-all did not clear items")
+	if err := view.Click("剪贴板"); err != nil || a.tab != tabClipboard {
+		t.Fatalf("the ear icon must switch pages: %v tab=%d", err, a.tab)
 	}
-	if !view.HasText("把文件拖到这里") {
-		t.Fatal("empty state not shown after clear-all below notch")
+	a.focusMode = true
+	view.Frame()
+	for _, label := range []string{"托盘", "收起"} {
+		if r, ok := view.Find(label); !ok || r.Y < notchH {
+			t.Fatalf("with the keyboard taken, %q must move below the menu bar: %+v %v", label, r, ok)
+		}
 	}
 	if err := view.Click("收起"); err != nil {
-		t.Fatalf("collapse button not clickable below notch: %v", err)
+		t.Fatalf("collapse button not clickable: %v", err)
 	}
+}
+
+// The activity strip holds the first liveMax modules with something under
+// way, on every page; sharing the strip asks each for its compact form.
+func TestActivityStripShowsUpToTwoLiveModules(t *testing.T) {
+	idle := &fakeActivity{label: "空闲"}
+	first := &fakeActivity{label: "第一个活动", isLive: true}
+	second := &fakeActivity{label: "第二个活动", isLive: true}
+	third := &fakeActivity{label: "第三个活动", isLive: true}
+	a := &shelf{tab: tabTray}
+	a.modules = []module{idle, first, second, third}
+	for _, tab := range []int{tabTray, tabClipboard} {
+		a.tab = tab
+		first.compact, second.compact = false, false
+		view := ui.NewTester(a.view, panelWidth, panelHeight)
+		if view.HasText("空闲") || view.HasText("第三个活动") {
+			t.Fatalf("page %d: an idle activity and a third live one must not show", tab)
+		}
+		if !view.HasText("第一个活动") || !view.HasText("第二个活动") {
+			t.Fatalf("page %d: the first two live activities must show", tab)
+		}
+		if !first.compact || !second.compact {
+			t.Fatalf("page %d: two activities side by side must both be compact", tab)
+		}
+	}
+	a.modules = []module{first}
+	ui.NewTester(a.view, panelWidth, panelHeight)
+	if first.compact {
+		t.Fatal("a lone activity must get the full strip")
+	}
+}
+
+type fakeActivity struct {
+	label   string
+	isLive  bool
+	compact bool
+}
+
+func (f *fakeActivity) tick(time.Time) {}
+func (f *fakeActivity) live() bool     { return f.isLive }
+
+func (f *fakeActivity) activity(c *ui.Context, compact bool) {
+	f.compact = compact
+	ui.Text(c, f.label).FontSize(12).TextColor(ink)
 }
 
 // 探头态（peeking）下刘海胶囊显示展开提示，单击后托盘标记为展开；
@@ -412,51 +523,6 @@ func TestPeekLeavesNoPaintWhenPointerLeaves(t *testing.T) {
 	}
 }
 
-// The first module whose panelCard reports "drawn" gets the tray tab's
-// slot above the list; later cards and the clipboard tab are untouched.
-func TestPanelCardCallsFirstDrawnModule(t *testing.T) {
-	first := &fakeCard{label: "第一个卡片", drawn: false}
-	second := &fakeCard{label: "第二个卡片", drawn: true}
-	third := &fakeCard{label: "第三个卡片", drawn: true}
-	a := &shelf{tab: tabTray}
-	a.modules = []module{first, second, third}
-
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	if view.HasText("第一个卡片") || view.HasText("第三个卡片") {
-		t.Fatal("a card that reports not-drawn must not show, and later ones must not be asked")
-	}
-	if !view.HasText("第二个卡片") {
-		t.Fatal("the first card that draws must show above the list")
-	}
-	if !first.asked || !second.asked || third.asked {
-		t.Fatalf("cards must be asked in order until one draws: %v %v %v", first.asked, second.asked, third.asked)
-	}
-	// The clipboard tab keeps its list without any card.
-	second.asked = false
-	a.tab = tabClipboard
-	view = ui.NewTester(a.view, panelWidth, panelHeight)
-	if second.asked || view.HasText("第二个卡片") {
-		t.Fatal("the clipboard tab must not draw panel cards")
-	}
-}
-
-type fakeCard struct {
-	label string
-	drawn bool
-	asked bool
-}
-
-func (c *fakeCard) tick(time.Time) {}
-
-func (c *fakeCard) card(view *ui.Context) bool {
-	c.asked = true
-	if !c.drawn {
-		return false
-	}
-	ui.Text(view, c.label).FontSize(12).TextColor(textPrimary)
-	return true
-}
-
 // 置顶角标必须落在各自格子的右上角，而不是叠在网格层（回归：角标曾是
 // 网格的 Absolute 子元素，全部挤在网格右上角）。
 func TestPinBadgesStayInsideTheirTiles(t *testing.T) {
@@ -492,8 +558,10 @@ func TestPinBadgesStayInsideTheirTiles(t *testing.T) {
 	}
 }
 
-// 展开时内容增多，面板目标高度（desiredFrame）必须跟着变；原生窗口由
-// 每 tick 的 syncWindowFrame 对齐。
+// The panel's height follows the page: it grows with the tray's rows until
+// the stage reaches stageMaxH (then the stage scrolls), and an activity
+// adds exactly its strip. desiredFrame is what syncWindowFrame applies on
+// every tick.
 func TestPanelHeightFollowsVisibleItems(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -503,21 +571,31 @@ func TestPanelHeightFollowsVisibleItems(t *testing.T) {
 	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	// place() 需要真实显示器（AppKit）；无窗口测试直接给定几何。
 	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
-	a.x, a.y, a.h = 475, 0, 400
-	empty := a.desiredFrame().Height
-	for i := 0; i < 3; i++ {
-		if err := s.AddText(fmt.Sprintf("row %d", i)); err != nil {
-			t.Fatal(err)
+	a.x, a.y, a.h = 455, 0, 900
+	add := func(n int) {
+		for range n {
+			if err := s.AddText(fmt.Sprintf("row %d", len(s.Items))); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if got := a.desiredFrame().Height; got <= empty {
-		t.Fatalf("panel did not grow with items: %d -> %d", empty, got)
+	empty := a.desiredFrame().Height
+	add(gridCols + 1) // two rows: past the empty stage's minimum
+	twoRows := a.desiredFrame().Height
+	if twoRows <= empty {
+		t.Fatalf("panel did not grow with items: %d -> %d", empty, twoRows)
 	}
-	// 正在播放卡片出现时也要让位。
+	add(gridCols * 4) // six rows: past stageMaxH
+	full := a.desiredFrame().Height
+	add(gridCols)
+	if got := a.desiredFrame().Height; got != full || full-twoRows != stageMaxH-(2*tileH+gridGap) {
+		t.Fatalf("a full stage must stop growing at stageMaxH: two rows %d, full %d, more %d", twoRows, full, got)
+	}
+	a.settings.IslandNowPlaying = true
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T", Artist: "A"}}
-	withCard := a.desiredFrame().Height
-	if withCard <= a.panelTargetH()-panelCardTop-panelCardH {
-		t.Fatalf("card space not reflected: %d", withCard)
+	a.modules = []module{a.np}
+	if got := a.desiredFrame().Height; got != full+liveH+liveGap {
+		t.Fatalf("the activity strip must add exactly its own height: %d -> %d", full, got)
 	}
 }
 

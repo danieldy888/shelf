@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +23,9 @@ var (
 	// 图钉：置顶标记（网格角标与列表行尾），填充的竖向 pin。
 	pinSymbol = symbol(`<path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v3.76z"/>`)
 	pinFill   = fillSymbol(`<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v3.76z"/><path d="M12 17v5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>`)
-	// 顶栏图标按钮：清空、设置、收起。
+	// 耳栏：模块切换（托盘、剪贴板）与全局按钮（设置、收起）；清空在模块栏。
+	trayNavSymbol   = symbol(`<path d="M3 13.5 5.5 5h13l2.5 8.5V19H3z"/><path d="M3 13.5h5.5l1.5 2.5h4l1.5-2.5H21"/>`)
+	clipNavSymbol   = symbol(`<rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4V3h6v1M9 10h6M9 14h4"/>`)
 	trashSymbol     = symbol(`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>`)
 	gearSymbol      = symbol(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>`)
 	chevronUpSymbol = symbol(`<path d="M6 15l6-6 6 6"/>`)
@@ -95,28 +96,34 @@ var panelTheme = func() *ui.Theme {
 	return t
 }()
 
-// 展开面板布局常量（对应 DESIGN.md「展开面板」；headerTop 是刘海下沿
-// 到顶栏的 8pt 间隔）。
+// 展开面板布局常量（对应 DESIGN.md「展开面板」）：耳栏 → 活动条 → 模块栏
+// → 舞台，提示浮在舞台底部。
 const (
 	panelPadX      = 16                      // 左右内边距
 	panelPadBottom = 16                      // 底部内边距
-	headerTopGap   = 8                       // 刘海下沿到顶栏
-	headerH        = 28                      // 顶栏高
-	panelCardTop   = 14                      // 正在播放卡片上边距（margin-top:14）
-	panelCardH     = 94                      // 卡片块：56 内容 + 10 上距 + 28 进度行
-	panelSecTop    = 18                      // 区块标题上边距
-	panelSecBottom = 8                       // 区块标题到网格
-	panelSecLineH  = 15                      // 区块标题行高（11pt）
+	earMinH        = 32                      // 耳栏最低高度（无刘海屏按菜单栏留出）
+	earBtn         = 26                      // 耳栏图标按钮
+	earBtnGap      = 6                       // 耳栏按钮间距
+	earHousingPad  = 6                       // 摄像头壳体两侧各让出的空隙
+	menuBarMinH    = 24                      // 无刘海屏的菜单栏高
+	headerTopGap   = 8                       // 键盘搜索时：菜单栏下沿到耳栏
+	headerH        = 28                      // 键盘搜索时耳栏的行高
+	earBottomGap   = 8                       // 耳栏到活动条或模块栏
+	liveH          = 56                      // 活动条高
+	liveGap        = 12                      // 活动条到模块栏
+	liveMax        = 2                       // 活动条最多并排的活动数
+	moduleBarH     = 28                      // 模块栏高
+	stageGap       = 6                       // 模块栏到舞台
+	stageMinH      = 140                     // 舞台最矮（空状态）
+	stageMaxH      = 320                     // 舞台最高，超出在舞台内滚动
 	gridCols       = 5                       // 托盘网格列数
 	gridGap        = 4                       // 格子间距
 	tileH          = 100                     // 格子高
-	clipSearchTop  = 14                      // 搜索框上边距
 	clipSearchH    = 32                      // 搜索框高
 	clipListTop    = 8                       // 列表上边距
 	clipRowH       = 46                      // 剪贴板行高
 	clipRowGap     = 2                       // 行间距
 	hintPillH      = 34                      // 提示胶囊：12 上距 + 22 高
-	panelMinH      = 160                     // 空态最小面板高
 	panelMaxH      = 560                     // 面板最大高，受屏高钳制
 	toastLife      = 2500 * time.Millisecond // 状态胶囊的展示时长
 	toastFade      = 220 * time.Millisecond  // 淡出时长
@@ -267,9 +274,8 @@ func (a *shelf) view(c *ui.Context) {
 				content.Opacity(contentFade(openK))
 			}
 			content.Children(func() {
-				// 刘海黑壳本身占据顶部；内容顶栏从刘海下沿 +8 开始。
-				ui.Box(c.Key("notch-spacer")).Height(float32(max(0, a.topInset+headerTopGap)))
-				a.panelHeader(c)
+				a.earBar(c)
+				a.activityStrip(c)
 				a.tabBody(c, over)
 				a.toastLayer(c, over)
 			})
@@ -306,73 +312,80 @@ func (a *shelf) tabBody(c *ui.Context, over bool) {
 	body.Children(func() { a.panelBody(c, over) })
 }
 
-// panelHeader is the 28pt top bar of the expanded panel: text tabs on the
-// left, icon buttons on the right — clear, settings, collapse. The active
-// tab's capsule is drawn by the bar itself and glides to the other tab on
-// a switch, instead of jumping.
-func (a *shelf) panelHeader(c *ui.Context) {
-	hdr := ui.Row(c.Key("hdr")).Height(headerH).AlignItems(ui.Center).Gap(6).FillWidth()
-	var tabs [2]ui.Element
-	hdr.Children(func() {
-		tabs[tabTray] = a.panelTab(c, "tab-tray", "托盘", tabTray)
-		tabs[tabClipboard] = a.panelTab(c, "tab-clipboard", "剪贴板", tabClipboard)
-		ui.Box(c).Grow(1)
-		hasUnpinned := a.store != nil && slices.ContainsFunc(a.store.Items, func(it store.Item) bool { return !it.Pinned })
-		if hasUnpinned {
-			if a.headerIcon(c, "clear", trashSymbol, "清空").Clicked() {
-				if err := a.store.Clear(); err != nil {
-					// The list may already be empty and saved even
-					// when a stored image could not be deleted.
-					a.report(err)
-				}
-				// 置顶项连同受管图片留在列表里：作废被清掉的
-				// 缩略图、把选中剪到仍在的行，再重绘。
-				a.dropStaleThumbnails()
-				a.selection.keepExisting(a.visibleItems())
-				if a.win != nil {
-					a.win.Invalidate()
-				}
+// earLayout places the ear bar. Normally it sits in the notch band itself,
+// split around the camera housing; there is nothing else in that band
+// while the panel is open. While the clipboard search holds the keyboard
+// the window drops below the menu bar's level (see windowLevel), so the
+// band is covered: the bar then moves below the menu bar as an ordinary
+// row, without the housing gap.
+func (a *shelf) earLayout() (spacer, rowH int, inBand bool) {
+	if a.focusMode {
+		return max(a.topInset, menuBarMinH) + headerTopGap, headerH, false
+	}
+	return 0, max(earMinH, a.topInset), true
+}
+
+// earBar is the panel's top row: page icons in the left ear, settings and
+// collapse in the right one, the camera housing between them. The active
+// page's capsule is drawn by the bar and glides to the other icon on a
+// switch instead of jumping.
+func (a *shelf) earBar(c *ui.Context) {
+	spacer, rowH, inBand := a.earLayout()
+	if spacer > 0 {
+		ui.Box(c.Key("ear-spacer")).Height(float32(spacer))
+	}
+	bar := ui.Row(c.Key("ears")).Height(float32(rowH)).AlignItems(ui.Center).FillWidth()
+	var navs [2]ui.Element
+	bar.Children(func() {
+		// Both ears grow from a zero basis, so they split the width evenly
+		// and the housing gap stays centred on the notch.
+		ui.Row(c.Key("ear-left")).Grow(1).MinWidth(0).Gap(earBtnGap).AlignItems(ui.Center).Children(func() {
+			navs[tabTray] = a.navButton(c, "tab-tray", trayNavSymbol, "托盘", tabTray)
+			navs[tabClipboard] = a.navButton(c, "tab-clipboard", clipNavSymbol, "剪贴板", tabClipboard)
+		})
+		if inBand && a.notchW > 0 {
+			ui.Box(c.Key("ear-housing")).Width(float32(a.notchW + 2*earHousingPad)).Shrink(0)
+		}
+		ui.Row(c.Key("ear-right")).Grow(1).MinWidth(0).Gap(earBtnGap).AlignItems(ui.Center).Justify(ui.End).Children(func() {
+			if a.iconButton(c, "settings", gearSymbol, "设置").Clicked() {
+				a.openSettings()
 			}
-		}
-		if a.headerIcon(c, "settings", gearSymbol, "设置").Clicked() {
-			a.openSettings()
-		}
-		if a.headerIcon(c, "collapse", chevronUpSymbol, "收起").Clicked() {
-			a.hide(hideExplicit)
-		}
+			if a.iconButton(c, "collapse", chevronUpSymbol, "收起").Clicked() {
+				a.hide(hideExplicit)
+			}
+		})
 	})
-	// The capsule follows the active tab's box from the last frame; the
-	// tab paints its own capsule until that box is known (first frame).
-	r := tabs[a.tab].LayoutBounds()
+	// The capsule follows the active icon's box from the last frame; the
+	// icon paints its own capsule until that box is known (first frame).
+	r := navs[a.tab].LayoutBounds()
 	if r.W <= 0 {
-		tabs[a.tab].Background(fill2)
+		navs[a.tab].Background(fill2)
 		return
 	}
-	x, w := r.X, r.W
+	x := r.X
 	if a.win != nil {
-		glide := ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut}
-		x = hdr.AnimateTo("tab-x", r.X, glide)
-		w = hdr.AnimateTo("tab-w", r.W, glide)
+		x = bar.AnimateTo("tab-x", r.X, ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut})
 	}
-	hdr.Draw(func(p *ui.Painter, _ ui.Rect) {
-		p.Fill(ui.Rect{X: x, Y: r.Y, W: w, H: r.H}, fill2, r.H/2)
+	bar.Draw(func(p *ui.Painter, _ ui.Rect) {
+		p.Fill(ui.Rect{X: x, Y: r.Y, W: r.W, H: r.H}, fill2, r.H/2)
 	})
 }
 
-// panelTab is one text tab of the header: ink when active (its capsule is
-// panelHeader's), ink2 with a fill1 hover otherwise.
-func (a *shelf) panelTab(c *ui.Context, key, label string, tab int) ui.Element {
+// navButton is one page icon of the left ear: ink when active (its capsule
+// is earBar's), ink2 with a fill1 hover otherwise. The page's name is its
+// tooltip and accessible label; the module bar spells it out below.
+func (a *shelf) navButton(c *ui.Context, key string, icon *ui.SVG, label string, tab int) ui.Element {
 	on := a.tab == tab
-	b := ui.ButtonBase(c.Key(key)).Height(26).Padding(0, 11, 0, 11).Radius(13).Label(label)
+	b := ui.ButtonBase(c.Key(key)).Size(earBtn, earBtn).Radius(earBtn / 2).Center().Label(label).Tooltip(label)
 	if !on && b.Hovered() {
 		b.Background(fill1)
 	}
 	b.Children(func() {
-		text := ui.Text(c, label).SingleLine().FontSize(13).FontWeight(600)
-		if on {
-			text.TextColor(ink)
+		g := ui.Icon(c, icon).Size(15, 15)
+		if on || b.Hovered() {
+			g.TextColor(ink)
 		} else {
-			text.TextColor(ink2)
+			g.TextColor(ink2)
 		}
 	})
 	if b.Clicked() {
@@ -381,9 +394,9 @@ func (a *shelf) panelTab(c *ui.Context, key, label string, tab int) ui.Element {
 	return b
 }
 
-// headerIcon is one 26×26 circular icon button of the header.
-func (a *shelf) headerIcon(c *ui.Context, key string, icon *ui.SVG, label string) ui.Element {
-	b := ui.ButtonBase(c.Key(key)).Size(26, 26).Radius(13).Center().Label(label)
+// iconButton is one 26×26 circular icon button (ears and module bar).
+func (a *shelf) iconButton(c *ui.Context, key string, icon *ui.SVG, label string) ui.Element {
+	b := ui.ButtonBase(c.Key(key)).Size(earBtn, earBtn).Radius(earBtn / 2).Center().Label(label).Tooltip(label)
 	if b.Hovered() {
 		b.Background(fill2)
 	}
@@ -398,31 +411,43 @@ func (a *shelf) headerIcon(c *ui.Context, key string, icon *ui.SVG, label string
 	return b
 }
 
-// panelBody renders the part below the header for the current tab: the
-// tray's now-playing card, section line and thumbnail grid, or the
-// clipboard tab's search field and list.
-func (a *shelf) panelBody(c *ui.Context, over bool) {
-	list := a.visibleItems()
-	if a.tab == tabTray {
-		// 托盘标签列表上方：第一个报告已绘制的 panelCard（如正在播放）。
-		for _, m := range a.modules {
-			if card, ok := m.(panelCard); ok && card.card(c) {
+// liveActivities are the modules with something under way, in module
+// order, at most liveMax: the strip has room for two side by side.
+func (a *shelf) liveActivities() []liveActivity {
+	var acts []liveActivity
+	for _, m := range a.modules {
+		if act, ok := m.(liveActivity); ok && act.live() {
+			acts = append(acts, act)
+			if len(acts) == liveMax {
 				break
 			}
 		}
-		// 区块标题行只在有内容时出现。
-		if len(list) > 0 {
-			ui.Row(c.Key("sec")).Height(panelSecLineH).AlignItems(ui.Center).FillWidth().
-				Margin(panelSecTop, 2, panelSecBottom, 2).Children(func() {
-				ui.Text(c, fmt.Sprintf("%d 项", len(list))).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Grow(1)
-				hint := "⌘ / ⇧ 多选 · 空格预览"
-				if n := a.selection.count(); n > 1 {
-					hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
-				}
-				ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3)
-			})
-		}
 	}
+	return acts
+}
+
+// activityStrip is the row under the ears that shows what is under way,
+// on every page. With no activity it takes no space at all.
+func (a *shelf) activityStrip(c *ui.Context) {
+	acts := a.liveActivities()
+	gap := float32(earBottomGap)
+	if len(acts) == 0 {
+		ui.Box(c.Key("live-none")).Height(gap)
+		return
+	}
+	ui.Row(c.Key("live")).Height(liveH).FillWidth().Gap(6).Margin(gap, 0, liveGap, 0).Children(func() {
+		for _, act := range acts {
+			act.activity(c, len(acts) > 1)
+		}
+	})
+}
+
+// panelBody renders the current page under the activity strip: its module
+// bar, then the tray's thumbnail grid or the clipboard's search field and
+// list.
+func (a *shelf) panelBody(c *ui.Context, over bool) {
+	list := a.visibleItems()
+	a.moduleBar(c, list)
 	if a.tab == tabClipboard {
 		a.clipboardBody(c, list)
 		return
@@ -440,6 +465,52 @@ func (a *shelf) panelBody(c *ui.Context, over bool) {
 			}
 		})
 	})
+}
+
+// moduleBar is the page's own 28pt row: its name and count on the left;
+// on the right the tray's multi-select hint and the page's 清空.
+func (a *shelf) moduleBar(c *ui.Context, list []store.Item) {
+	title, count := "托盘", fmt.Sprintf("%d 项", len(list))
+	if a.tab == tabClipboard {
+		title, count = "剪贴板", fmt.Sprintf("%d 条", len(list))
+	}
+	ui.Row(c.Key("module-bar")).Height(moduleBarH).AlignItems(ui.Center).FillWidth().
+		Padding(0, 0, 0, 2).Margin(0, 0, stageGap, 0).Children(func() {
+		ui.Text(c, title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
+		if len(list) > 0 {
+			ui.Text(c, count).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 0, 0, 8)
+		}
+		ui.Box(c).Grow(1)
+		if a.tab == tabTray && len(list) > 0 {
+			hint := "⌘ / ⇧ 多选 · 空格预览"
+			if n := a.selection.count(); n > 1 {
+				hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
+			}
+			ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 6, 0, 0)
+		}
+		if gone := a.clearable(list); len(gone) > 0 {
+			if a.iconButton(c, "clear", trashSymbol, "清空").Clicked() {
+				a.remove(gone)
+			}
+		}
+	})
+}
+
+// clearable is what the module bar's 清空 removes: the unpinned rows the
+// page shows, so the tray's button leaves the clipboard history alone and
+// the other way round. While a search narrows the clipboard list there is
+// nothing to clear — emptying only the matches would surprise.
+func (a *shelf) clearable(list []store.Item) []store.Item {
+	if a.tab == tabClipboard && strings.TrimSpace(a.search) != "" {
+		return nil
+	}
+	var gone []store.Item
+	for _, it := range list {
+		if !it.Pinned {
+			gone = append(gone, it)
+		}
+	}
+	return gone
 }
 
 // clipboardBody is the clipboard tab: the 32pt search field, then the
@@ -466,8 +537,7 @@ func (a *shelf) clipboardBody(c *ui.Context, list []store.Item) {
 // for the mouse. Esc clears the search first, then collapses.
 func (a *shelf) searchField(c *ui.Context) {
 	wrap := ui.Row(c.Key("clip-search")).Height(clipSearchH).Padding(0, 10, 0, 10).Gap(7).
-		AlignItems(ui.Center).Radius(10).Background(fill1).
-		Margin(clipSearchTop, 0, 0, 0)
+		AlignItems(ui.Center).Radius(10).Background(fill1)
 	wrap.Children(func() {
 		ui.Icon(c, searchSymbol).Size(14, 14).TextColor(ink3)
 		in := ui.TextInputBase(c.Key("clip-query"), &a.search).Grow(1).MinWidth(0).
@@ -657,43 +727,39 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool
 }
 
 // panelContentH is the expanded panel's desired content height (excluding
-// the window frame margin), computed so the shell hugs its content like
-// the mock does and scrolls only past panelMaxH. Pure; unit-tested.
+// the window frame margin): the ears, the activity strip when something
+// is under way, the module bar, then the page's stage clamped between
+// stageMinH and stageMaxH (it scrolls past that). Pure; unit-tested.
 func (a *shelf) panelContentH() int {
-	top := max(0, a.topInset+headerTopGap) + headerH + panelPadBottom
-	list := a.visibleItems()
-	switch a.tab {
-	case tabClipboard:
-		h := top + clipSearchTop + clipSearchH
-		if len(list) == 0 {
-			return max(panelMinH, h+96)
-		}
-		h += clipListTop + len(list)*(clipRowH+clipRowGap) - clipRowGap
-		if a.focusMode || a.search != "" {
-			h += hintPillH
-		}
-		return h
-	default:
-		h := top
-		if len(list) > 0 {
-			// 区块标题行只在有内容时存在（与 panelBody 一致）。
-			h += panelSecTop + panelSecLineH + panelSecBottom
-		}
-		if a.np != nil && a.np.hasTrack() {
-			h += panelCardTop + panelCardH
-		}
-		if len(list) == 0 {
-			return max(panelMinH, h+96)
-		}
-		rows := (len(list) + gridCols - 1) / gridCols
-		return h + rows*tileH + (rows-1)*gridGap
+	spacer, rowH, _ := a.earLayout()
+	h := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
+	if len(a.liveActivities()) > 0 {
+		h += liveH + liveGap
 	}
+	list := a.visibleItems()
+	var stage int
+	switch {
+	case a.tab == tabClipboard:
+		stage = clipSearchH
+		if len(list) > 0 {
+			stage += clipListTop + len(list)*(clipRowH+clipRowGap) - clipRowGap
+		}
+	case len(list) > 0:
+		rows := (len(list) + gridCols - 1) / gridCols
+		stage = rows*tileH + (rows-1)*gridGap
+	}
+	h += min(max(stage, stageMinH), stageMaxH)
+	if a.tab == tabClipboard && (a.focusMode || a.search != "") {
+		// The keyboard hint pill floats over the stage's foot.
+		h += hintPillH
+	}
+	return h
 }
 
-// panelTargetH is panelContentH clamped to the panel's size bounds; the
+// panelTargetH is panelContentH clamped to the panel's size bound; the
 // caller clamps it to the work area.
 func (a *shelf) panelTargetH() int {
-	return min(panelMaxH, max(panelMinH, a.panelContentH()))
+	return min(panelMaxH, a.panelContentH())
 }
 
 // visibleItems is the list the expanded panel shows and acts on: the tray

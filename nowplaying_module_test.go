@@ -145,21 +145,26 @@ func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 	}
 }
 
-func TestNowPlayingCardDrawsTrackAndControls(t *testing.T) {
+func TestNowPlayingActivityDrawsTrackAndControls(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}}
 	a.modules = []module{s.mod, &retentionModule{host: a}}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
 	if !view.HasText("夜曲") || !view.HasText("周杰伦") {
-		t.Fatal("the card must show title and artist")
+		t.Fatal("the activity must show title and artist")
 	}
-	if !view.HasText("0:05") {
-		t.Fatal("the card must show the elapsed position")
+	for _, label := range []string{"上一首", "下一首"} {
+		if _, ok := view.Find(label); !ok {
+			t.Fatalf("a lone activity keeps its %s control", label)
+		}
 	}
-	if !view.HasText("-1:35") {
-		t.Fatal("the card must count the remaining time down, as the reference does")
+	// The strip sits above every page, not only the tray.
+	a.tab = tabClipboard
+	if !ui.NewTester(a.view, panelWidth, panelHeight).HasText("夜曲") {
+		t.Fatal("the clipboard page must keep the activity strip")
 	}
+	a.tab = tabTray
 	// Clicking the play/pause button must send the toggle command to the
 	// helper; the button is reachable by its accessibility label.
 	if err := view.Click("暂停"); err != nil {
@@ -336,15 +341,15 @@ func TestPlayPausePressHoldsUntilHelperAgrees(t *testing.T) {
 	}
 }
 
-func TestNowPlayingCardHiddenWithoutTrack(t *testing.T) {
+func TestNowPlayingActivityHiddenWithoutTrack(t *testing.T) {
 	s := newStubNowPlaying(t, true)
-	if s.mod.card(nil) {
-		t.Fatal("no track: the card must not claim it drew anything")
+	if s.mod.live() {
+		t.Fatal("no track: the activity must not be live")
 	}
 	// A helper line with nothing playing is not a track either.
 	s.feed(t, `{"ok":true,"isPlaying":false,"appState":2,"title":"","artist":""}`)
-	if s.mod.card(nil) {
-		t.Fatal("an empty state must not draw a card")
+	if s.mod.live() {
+		t.Fatal("an empty state must not show an activity")
 	}
 }
 

@@ -16,9 +16,14 @@ type module interface {
 	tick(now time.Time)
 }
 
-// A panelCard is a module that adds a card at the top of the expanded
-// panel's tray tab, e.g. now-playing controls. It is drawn inside the
-// panel's content column and must keep to the panel palette.
-type panelCard interface {
-	card(c *ui.Context) bool // reports whether it drew anything
+// A liveActivity is a module with something under way (now playing; later
+// timers or transfers) for the expanded panel's activity strip, which sits
+// above every page. It is drawn inside the panel's content column and must
+// keep to the panel palette.
+type liveActivity interface {
+	live() bool // has something to show now
+	// activity draws it at liveH tall, growing to share the strip's width;
+	// compact asks for one primary control because another activity sits
+	// beside it.
+	activity(c *ui.Context, compact bool)
 }

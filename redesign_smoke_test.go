@@ -207,8 +207,8 @@ func peekRestore(t *testing.T, a *shelf) {
 	})
 }
 
-// TestRedesignTrayMusic shoots the expanded tray tab with the now-playing
-// card, the section line and the item grid.
+// TestRedesignTrayMusic shoots the expanded tray page: the ear bar, the
+// now-playing activity, the module bar and the item grid.
 func TestRedesignTrayMusic(t *testing.T) {
 	a := redesignShelf(t)
 	// Fixtures: a text item (note-card tile), an image with a warmed
@@ -237,7 +237,7 @@ func TestRedesignTrayMusic(t *testing.T) {
 	onMain(func() {
 		a.settings.IslandNowPlaying = true
 		fakeTrack(a, true)
-		a.modules = []module{a.np} // panelBody 遍历 modules 找 panelCard
+		a.modules = []module{a.np} // the activity strip asks modules for live activities
 		_ = a.store.AddText("周五发布 Shelf v1.0 · 记得更新截图")
 		_ = a.store.AddImage(pngb)
 		_ = a.store.AddFiles([]string{doc})
@@ -294,6 +294,24 @@ func TestRedesignClipboardSearch(t *testing.T) {
 	expandShelf(t, a)
 	shotNotch(t, a, "clipboard-search")
 	onMain(func() { a.search, a.focusMode = "", false })
+}
+
+// TestRedesignClipboardMusic shoots the clipboard page opened by mouse:
+// the ears stay in the notch band and the activity strip sits above the
+// list, as on the tray.
+func TestRedesignClipboardMusic(t *testing.T) {
+	a := redesignShelf(t)
+	onMain(func() {
+		a.settings.IslandNowPlaying = true
+		fakeTrack(a, true)
+		a.modules = []module{a.np}
+		_ = a.store.AddClipText("购物清单：牛奶、鸡蛋、面包", "com.apple.Notes")
+		_ = a.store.AddClipText("https://example.com/release-notes", "com.apple.Safari")
+		_ = a.store.AddClipText("货架设计评审 周五 15:00", "com.apple.Calendar")
+		a.setTab(tabClipboard)
+	})
+	expandShelf(t, a)
+	shotNotch(t, a, "clipboard-music")
 }
 
 // TestRedesignBasket shoots the shake-summoned drop card, idle and with

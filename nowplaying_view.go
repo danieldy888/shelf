@@ -15,8 +15,9 @@ import (
 // The now-playing module's drawing lives here; nowplaying_module.go owns
 // the helper's state. Two surfaces: the hover player that grows out of the
 // notch (cover, title, artist, equalizer, progress and transport — the
-// notch itself becomes the player, as Droppy does) and the tray tab's card
-// (56pt cover, title/「artist · app」, ⏮ ⏯ ⏭, elapsed/remaining).
+// notch itself becomes the player, as Droppy does) and the expanded
+// panel's activity (36pt cover, title/「artist · app」, ⏮ ⏯ ⏭, a hairline
+// progress track).
 
 // Hover player geometry: at least 400pt wide (the notch +220), and
 // npPlayerBody tall below the notch.
@@ -39,12 +40,14 @@ const (
 	eqStillH       = 8 // 减少动态效果时的静止高度
 )
 
-// Card geometry (DESIGN.md「展开面板」正在播放行)。
+// Activity geometry (DESIGN.md「活动条」) and the hover player's progress
+// row.
 const (
-	npCardArt  = 56
-	npCardArtR = 12
-	npCtlSize  = 32 // 上一首/下一首
-	npPlaySize = 38 // 播放/暂停
+	npLiveArt  = 36
+	npLiveArtR = 8
+	npLiveCtl  = 28 // 上一首/下一首
+	npLivePlay = 32 // 播放/暂停
+	npLiveBar  = 2  // 活动底部的细进度线
 	npTrackH   = 4
 	npProgRowH = 14
 )
@@ -136,39 +139,48 @@ func (m *nowPlayingModule) eqBars(c *ui.Context, playing bool) {
 	})
 }
 
-// card draws the now-playing card at the top of the expanded panel's
-// tray tab: 56pt cover with shadow, title, 「artist · app」, transport
-// controls and the progress track timed from the last helper line. It
-// reports whether it drew anything.
-func (m *nowPlayingModule) card(c *ui.Context) bool {
+// live reports whether the activity strip shows the player: the setting is
+// on and the source names a track, playing or paused (the controls are
+// most useful while paused).
+func (m *nowPlayingModule) live() bool { return m.hasTrack() }
+
+// activity draws the player in the expanded panel's activity strip: cover,
+// title and 「artist · app」, the transport controls, and a hairline
+// progress track along the bottom edge. Sharing the strip (compact) it
+// keeps only play/pause.
+func (m *nowPlayingModule) activity(c *ui.Context, compact bool) {
 	st, ok := m.track()
 	if !ok {
-		return false
+		return
 	}
-	now := time.Now()
-	ui.Column(c.Key("nowplaying")).Gap(10).Margin(panelCardTop, 0, 0, 0).Children(func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			m.cardArt(c)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
-				ui.Text(c.Key("np-title"), st.Title).SingleLine().FontSize(14).FontWeight(600).TextColor(ink)
-				if meta := m.cardMeta(st); meta != "" {
-					ui.Text(c.Key("np-artist"), meta).SingleLine().FontSize(12).TextColor(ink2)
-				}
-			})
-			ui.Row(c.Key("np-controls")).Gap(4).AlignItems(ui.Center).Children(func() {
-				m.controlButton(c, "np-prev", prevFill, "上一首", mac.NPPrevious, npCtlSize, 18)
-				m.controlButton(c, "np-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, npPlaySize, 22)
-				m.controlButton(c, "np-next", nextFill, "下一首", mac.NPNext, npCtlSize, 18)
-			})
+	row := ui.Row(c.Key("nowplaying")).Height(liveH).Grow(1).MinWidth(0).Radius(14).Background(fill1).
+		Padding(0, 8, 0, 10).Gap(10).AlignItems(ui.Center)
+	row.Children(func() {
+		m.coverArt(c, "np-art", npLiveArt, npLiveArtR)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
+			ui.Text(c.Key("np-title"), st.Title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
+			if meta := m.cardMeta(st); meta != "" {
+				ui.Text(c.Key("np-artist"), meta).SingleLine().FontSize(11).TextColor(ink2)
+			}
 		})
-		m.progressRow(c, st, now)
+		ui.Row(c.Key("np-controls")).Gap(2).AlignItems(ui.Center).Children(func() {
+			if !compact {
+				m.controlButton(c, "np-prev", prevFill, "上一首", mac.NPPrevious, npLiveCtl, 15)
+			}
+			m.controlButton(c, "np-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, npLivePlay, 18)
+			if !compact {
+				m.controlButton(c, "np-next", nextFill, "下一首", mac.NPNext, npLiveCtl, 15)
+			}
+		})
+		frac := float32(0.34) // unknown length: a quiet static bar
+		if st.Duration > 0 {
+			frac = float32(min(max(st.Position(time.Now())/st.Duration, 0), 1))
+		}
+		ui.Row(c.Key("np-line")).Absolute().Left(10).Right(10).Bottom(5).Height(npLiveBar).
+			Radius(1).Clip().Background(fill3).PassThrough().Children(func() {
+			ui.Box(c).WidthPercent(frac * 100).FillHeight().Radius(1).Background(progress)
+		})
 	})
-	return true
-}
-
-// cardArt is the card's 56pt cover.
-func (m *nowPlayingModule) cardArt(c *ui.Context) {
-	m.coverArt(c, "np-art", npCardArt, npCardArtR)
 }
 
 // coverArt draws the artwork rounded and shadowed, the app icon as-is when
