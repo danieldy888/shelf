@@ -813,11 +813,12 @@ func (a *shelf) panelTargetH() int {
 }
 
 // visibleItems is the list the expanded panel shows and acts on: the tray
-// tab lists every item and the clipboard tab lists clipboard captures that
-// match the search text; on both tabs pinned items come first, stable
-// within each group (otherwise newest first). Rows, selection ranges,
-// menus and drag-outs all use it, so no action can reach a row the tab is
-// not showing and the display order is the selection order.
+// tab lists every item except ones hidden from it, and the clipboard tab
+// lists clipboard captures that match the search text; on both tabs
+// pinned items come first, stable within each group (otherwise newest
+// first). Rows, selection ranges, menus and drag-outs all use it, so no
+// action can reach a row the tab is not showing and the display order is
+// the selection order.
 func (a *shelf) visibleItems() []store.Item { return a.itemsFor(a.tab) }
 
 // itemsFor is visibleItems for the given page (the page fading out after
@@ -830,6 +831,11 @@ func (a *shelf) itemsFor(tab int) []store.Item {
 	var pinned, rest []store.Item
 	for _, it := range a.store.Items {
 		if tab == tabClipboard && (it.Source != store.SourceClipboard || !clipboardItemMatches(it, query)) {
+			continue
+		}
+		// 托盘页的移除对剪贴板收录只做到「不在托盘显示」：标了 OffTray 的
+		// 项目仍留在剪贴板页，托盘不再列出。
+		if tab == tabTray && it.OffTray {
 			continue
 		}
 		// 设计决定：剪贴板收录的文字只属于剪贴板标签；托盘放文件、

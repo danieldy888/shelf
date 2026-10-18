@@ -248,21 +248,41 @@ func (a *shelf) removeExcludedApp(bundleID string) {
 	a.applySettings(next)
 }
 
-// remove takes items off the shelf in one save; original files stay.
+// remove takes items off the shelf; original files stay. On the tray
+// page, removing a clipboard capture only hides it from the tray — the
+// clipboard page keeps it and only its own 移除/清空 truly deletes —
+// while every other item is deleted outright. On the clipboard page all
+// of them are deleted.
 func (a *shelf) remove(items []store.Item) {
-	ids := make([]string, len(items))
-	for i, it := range items {
-		ids[i] = it.ID
+	var hide, del []string
+	for _, it := range items {
+		if a.tab == tabTray && it.Source == store.SourceClipboard {
+			hide = append(hide, it.ID)
+		} else {
+			del = append(del, it.ID)
+		}
 	}
-	n, err := a.store.RemoveMany(ids)
-	if err != nil {
-		// n > 0: removed and saved, but an image file could not be deleted.
-		a.report(err)
+	hidden := 0
+	if len(hide) > 0 {
+		n, err := a.store.HideFromTray(hide)
+		if err != nil {
+			a.report(err)
+		}
+		hidden = n
 	}
-	if n == 0 {
+	n := 0
+	if len(del) > 0 {
+		var err error
+		n, err = a.store.RemoveMany(del)
+		if err != nil {
+			// n > 0: removed and saved, but an image file could not be deleted.
+			a.report(err)
+		}
+	}
+	if hidden == 0 && n == 0 {
 		return
 	}
-	for _, id := range ids {
+	for _, id := range del {
 		a.invalidateThumbnail(id)
 	}
 	a.selection.keepExisting(a.visibleItems())

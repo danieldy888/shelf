@@ -58,6 +58,10 @@ var ErrLocked = errors.New("store: data directory is in use by another instance"
 // skipped by RemoveOlderThan and Clear. Source records how the item was
 // added (SourceClipboard for clipboard captures, empty otherwise) and
 // SourceApp the bundle id of the app the copy came from, when known.
+// OffTray hides the item from the tray page without deleting it (set by
+// the tray's remove/clear for clipboard captures); it stays in the
+// clipboard list, is cleared by pinning or by re-adding the same
+// content, and only the clipboard page can truly remove the item.
 // Missing is runtime-only and never persisted.
 type Item struct {
 	ID        string    `json:"id"`
@@ -68,6 +72,7 @@ type Item struct {
 	Pinned    bool      `json:"pinned,omitempty"`
 	Source    string    `json:"source,omitempty"`
 	SourceApp string    `json:"sourceApp,omitempty"`
+	OffTray   bool      `json:"offTray,omitempty"`
 	Missing   bool      `json:"-"`
 }
 
@@ -427,6 +432,7 @@ func (s *Store) addText(text string, clip bool, sourceApp string) error {
 	})
 	if idx >= 0 {
 		s.moveToFront(idx)
+		s.Items[0].OffTray = false // 重新收录同一条内容会把它带回托盘
 		if clip {
 			s.Items[0].Source = SourceClipboard
 			s.Items[0].SourceApp = sourceApp
@@ -508,6 +514,7 @@ func (s *Store) addImage(png []byte, clip bool, sourceApp string) error {
 			}
 			s.moveToFront(i)
 			s.Items[0].Missing = false
+			s.Items[0].OffTray = false // 重新收录同一张图片会把它带回托盘
 			if clip {
 				s.Items[0].Source = SourceClipboard
 				s.Items[0].SourceApp = sourceApp
@@ -628,19 +635,25 @@ func (s *Store) Remove(id string) error {
 }
 
 // SetPinned marks or unmarks the item with the given id as pinned and
-// persists atomically (memory rolls back on save failure). An unknown
-// id is an error; setting the flag to its current value is a no-op.
+// persists atomically (memory rolls back on save failure). Pinning also
+// clears OffTray: a pinned item belongs at the top of both pages. An
+// unknown id is an error; setting the flag to its current value is a
+// no-op unless pinning an off-tray item, which still saves to unhide it.
 func (s *Store) SetPinned(id string, pinned bool) error {
 	idx := slices.IndexFunc(s.Items, func(it Item) bool { return it.ID == id })
 	if idx < 0 {
 		return fmt.Errorf("store: no item with id %q", id)
 	}
-	if s.Items[idx].Pinned == pinned {
+	if s.Items[idx].Pinned == pinned && (!pinned || !s.Items[idx].OffTray) {
 		return nil
 	}
+	old := s.Items[idx]
 	s.Items[idx].Pinned = pinned
+	if pinned {
+		s.Items[idx].OffTray = false
+	}
 	if err := s.Save(); err != nil {
-		s.Items[idx].Pinned = !pinned
+		s.Items[idx] = old
 		return err
 	}
 	return nil
@@ -674,6 +687,38 @@ func (s *Store) RemoveMany(ids []string) (int, error) {
 		_, ok := want[it.ID]
 		return ok
 	}, "removed")
+}
+
+// HideFromTray marks the items with the given IDs OffTray and saves once.
+// The items stay in the store — the clipboard page still lists them and
+// managed files are never touched here; they only stop showing on the
+// tray. Unknown IDs and items already off the tray are ignored; nothing
+// to hide => no write, (0, nil). On save failure memory is rolled back.
+// Returns how many items were newly hidden.
+func (s *Store) HideFromTray(ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	old := slices.Clone(s.Items)
+	n := 0
+	for i := range s.Items {
+		if _, ok := want[s.Items[i].ID]; ok && !s.Items[i].OffTray {
+			s.Items[i].OffTray = true
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := s.Save(); err != nil {
+		s.Items = old
+		return 0, err
+	}
+	return n, nil
 }
 
 // RemoveOlderThan removes every unpinned item added before cutoff and

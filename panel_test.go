@@ -688,3 +688,132 @@ func TestPanelFrameHoldsWhileShrinking(t *testing.T) {
 		t.Fatalf("frame %d did not settle to the content height %d", got, target)
 	}
 }
+
+// 托盘页的「清空」对剪贴板收录只做隐藏：截图从托盘消失但留在剪贴板页，
+// 受管 PNG 不删；被拖入的文件仍被真正删除。再到剪贴板页点「清空」才把
+// 截图连图一起删掉。
+func TestTrayClearHidesClipboardCaptureInsteadOfDeleting(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	dir := t.TempDir()
+	note := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(note, []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{note}); err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipImage(buf.Bytes(), "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	var clip store.Item
+	for _, it := range s.Items {
+		if it.Kind == store.KindImage {
+			clip = it
+		}
+	}
+	managed := clip.Path
+	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("tray clear: %v", err)
+	}
+	// 文件引用真的被删了，但剪贴板截图只是移出托盘。
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("original file deleted by tray clear: %v", err)
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted by tray clear: %v", err)
+	}
+	for _, it := range s.Items {
+		if it.Kind == store.KindFile {
+			t.Fatal("tray clear kept the file item")
+		}
+	}
+	if len(s.Items) != 1 || s.Items[0].ID != clip.ID {
+		t.Fatalf("tray clear must keep the clipboard capture in the store: %+v", s.Items)
+	}
+	if !view.HasText("把文件拖到这里") {
+		t.Fatal("tray still shows the hidden capture")
+	}
+	a.setTab(tabClipboard)
+	view.Frame()
+	if !view.HasText(itemTitle(clip)) {
+		t.Fatal("hidden capture missing from the clipboard page")
+	}
+	// 剪贴板页的「清空」才是真正的删除。
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("clipboard clear: %v", err)
+	}
+	if len(s.Items) != 0 {
+		t.Fatalf("clipboard clear left %d items", len(s.Items))
+	}
+	if _, err := os.Stat(managed); !os.IsNotExist(err) {
+		t.Fatalf("managed png should be deleted by clipboard clear: %v", err)
+	}
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("original file deleted by clipboard clear: %v", err)
+	}
+}
+
+// 托盘页右键「移除」剪贴板截图同样只是把它移出托盘：项目保留、PNG 保留、
+// 剪贴板页仍可见；之后重新复制同一张图会把它带回托盘。
+func TestTrayMenuRemoveHidesClipboardCapture(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	pngA := buf.Bytes()
+	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	clip := s.Items[0]
+	managed := clip.Path
+	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+
+	if err := view.RightClick(itemTitle(clip)); err != nil {
+		t.Fatalf("right-click clip: %v", err)
+	}
+	if err := view.ChooseMenuItem("移除"); err != nil {
+		t.Fatalf("choose 移除: %v (%v)", err, view.Menu())
+	}
+	if len(s.Items) != 1 || s.Items[0].ID != clip.ID {
+		t.Fatalf("tray 移除 deleted the capture: %+v", s.Items)
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted by tray 移除: %v", err)
+	}
+	if !view.HasText("把文件拖到这里") {
+		t.Fatal("tray still shows the hidden capture")
+	}
+	a.setTab(tabClipboard)
+	view.Frame()
+	if !view.HasText(itemTitle(clip)) {
+		t.Fatal("hidden capture missing from the clipboard page")
+	}
+	// 再次复制同一张图：去重命中，回到托盘最前。
+	a.setTab(tabTray)
+	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if len(s.Items) != 1 || !view.HasText(itemTitle(clip)) {
+		t.Fatal("re-capture did not bring the item back to the tray")
+	}
+}
