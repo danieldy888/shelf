@@ -1,9 +1,10 @@
 // Package store implements Shelf's persistent storage: a versioned
-// state.json plus a managed images/ directory under a single root.
-// It is purely synchronous and owns no goroutines; the caller (UI/main
-// thread) drives every operation. One live process at a time owns the
-// directory through an exclusive flock on <root>/.lock. Managed image
-// items are persisted relative to <root>/images; file items keep
+// state.json plus managed images/ and converted/ directories under a
+// single root. It is purely synchronous and owns no goroutines; the
+// caller (UI/main thread) drives every operation. One live process at a
+// time owns the directory through an exclusive flock on <root>/.lock.
+// Managed image items are persisted relative to <root>/images and
+// converted items relative to <root>/converted; file items keep
 // absolute paths.
 package store
 
@@ -34,13 +35,14 @@ const (
 )
 
 const (
-	stateVersion   = 1
-	stateFileName  = "state.json"
-	imagesDirName  = "images"
-	lockFileName   = ".lock"
-	maxTextItems   = 30       // default cap on unpinned text items; see SetTextLimit
-	maxImageDim    = 16384    // max width or height accepted by AddImage
-	maxImagePixels = 64 << 20 // max total pixels accepted by AddImage (64 MP)
+	stateVersion     = 1
+	stateFileName    = "state.json"
+	imagesDirName    = "images"
+	convertedDirName = "converted"
+	lockFileName     = ".lock"
+	maxTextItems     = 30       // default cap on unpinned text items; see SetTextLimit
+	maxImageDim      = 16384    // max width or height accepted by AddImage
+	maxImagePixels   = 64 << 20 // max total pixels accepted by AddImage (64 MP)
 )
 
 // SourceClipboard marks items captured from the system clipboard.
@@ -62,6 +64,9 @@ var ErrLocked = errors.New("store: data directory is in use by another instance"
 // the tray's remove/clear for clipboard captures); it stays in the
 // clipboard list, is cleared by pinning or by re-adding the same
 // content, and only the clipboard page can truly remove the item.
+// Converted marks a KindFile item whose file Shelf itself created
+// inside <root>/converted: removal paths delete that file like a
+// managed image, while a plain KindFile item's path is never deleted.
 // Missing is runtime-only and never persisted.
 type Item struct {
 	ID        string    `json:"id"`
@@ -73,6 +78,7 @@ type Item struct {
 	Source    string    `json:"source,omitempty"`
 	SourceApp string    `json:"sourceApp,omitempty"`
 	OffTray   bool      `json:"offTray,omitempty"`
+	Converted bool      `json:"converted,omitempty"`
 	Missing   bool      `json:"-"`
 }
 
@@ -125,14 +131,17 @@ func DefaultRoot() (string, error) {
 	return filepath.Join(dir, "Shelf"), nil
 }
 
-// Open creates root/images (0700) if needed, takes an exclusive advisory
-// lock on <root>/.lock, and loads state.json. A second process opening
-// the same directory gets ErrLocked and must exit; distinct data
-// directories lock independently. Missing state starts empty; corrupt or
-// wrong-version state returns an error (lock released) and is never
-// overwritten. File/image items whose paths are genuinely nonexistent
-// are dropped; items whose paths exist but cannot be statted (e.g.
-// permission errors) are kept with Missing=true.
+// Open creates root/images and root/converted (0700) if needed, takes an
+// exclusive advisory lock on <root>/.lock, and loads state.json. A
+// second process opening the same directory gets ErrLocked and must
+// exit; distinct data directories lock independently. Missing state
+// starts empty; corrupt or wrong-version state returns an error (lock
+// released) and is never overwritten. File/image items whose paths are
+// genuinely nonexistent are dropped; items whose paths exist but cannot
+// be statted (e.g. permission errors) are kept with Missing=true.
+// Leftover files inside <root>/converted that no loaded item references
+// (e.g. from a conversion interrupted before AddConverted) are deleted
+// best-effort; nothing outside <root>/converted is ever touched.
 func Open(root string) (*Store, error) {
 	if root == "" {
 		return nil, fmt.Errorf("store: empty root path")
@@ -151,6 +160,9 @@ func Open(root string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(root, imagesDirName), 0o700); err != nil {
 		return nil, fmt.Errorf("store: creating data directories: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, convertedDirName), 0o700); err != nil {
+		return nil, fmt.Errorf("store: creating data directories: %w", err)
+	}
 	lock, err := lockRoot(root)
 	if err != nil {
 		return nil, err
@@ -166,6 +178,7 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			ok = true
+			s.cleanOrphanedConverted()
 			return s, nil
 		}
 		return nil, fmt.Errorf("store: reading %s: %w", stateFileName, err)
@@ -197,6 +210,10 @@ func Open(root string) (*Store, error) {
 				migrate = true
 			}
 			it.Path = s.resolveImagePath(it.Path)
+		} else if it.Converted {
+			// 转换产物与受管图片同样按文件名持久化，重开时解析回当前
+			// converted 目录，保证数据目录整体搬迁后仍然有效。
+			it.Path = s.resolveConvertedPath(it.Path)
 		}
 		_, statErr := os.Stat(it.Path)
 		switch {
@@ -208,6 +225,13 @@ func Open(root string) (*Store, error) {
 			it.Missing = true
 			kept = append(kept, it)
 		default:
+			if it.Converted {
+				// 转换产物的记录不因文件被删而静默丢弃：保留并标记
+				// Missing，让用户知道曾经有过这项输出。
+				it.Missing = true
+				kept = append(kept, it)
+				continue
+			}
 			// Stat says not-exist. Keep dangling symlinks (the link
 			// itself still exists) and odd lstat errors as Missing.
 			if _, lerr := os.Lstat(it.Path); !os.IsNotExist(lerr) {
@@ -228,6 +252,7 @@ func Open(root string) (*Store, error) {
 		}
 	}
 	ok = true
+	s.cleanOrphanedConverted()
 	return s, nil
 }
 
@@ -253,6 +278,56 @@ func (s *Store) resolveImagePath(stored string) string {
 		return clean
 	}
 	return filepath.Join(s.imagesDir(), filepath.Base(stored))
+}
+
+// resolveConvertedPath turns a persisted converted entry into an absolute
+// path under the current root, mirroring resolveImagePath: new state
+// stores converted files relative to <root>/converted (just the file
+// name), while an absolute path that resolves into the converted
+// directory — including entries written through a symlinked root — is
+// unified to the current root's actual location.
+func (s *Store) resolveConvertedPath(stored string) string {
+	if stored == "" {
+		return ""
+	}
+	if filepath.IsAbs(stored) {
+		clean := filepath.Clean(stored)
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil && s.convertedPath(resolved) {
+			return filepath.Join(s.convertedDir(), filepath.Base(resolved))
+		}
+		return clean
+	}
+	return filepath.Join(s.convertedDir(), filepath.Base(stored))
+}
+
+// cleanOrphanedConverted deletes files inside <root>/converted that no
+// item references — leftovers from a conversion interrupted between
+// writing the file and AddConverted. It runs on Open only, is
+// best-effort (errors are ignored; a future Open retries), and never
+// touches anything outside <root>/converted: subdirectories and their
+// contents are left alone.
+func (s *Store) cleanOrphanedConverted() {
+	dir := s.convertedDir()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, ent := range ents {
+		if ent.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, ent.Name())
+		referenced := false
+		for _, it := range s.Items {
+			if it.Path != "" && sameFilePath(it.Path, p) {
+				referenced = true
+				break
+			}
+		}
+		if !referenced {
+			_ = os.Remove(p)
+		}
+	}
 }
 
 // migrationBackupNames are tried in order for the pre-migration recovery
@@ -406,6 +481,71 @@ func (s *Store) AddFiles(paths []string) error {
 		return err
 	}
 	return nil
+}
+
+// ConvertedDir returns the managed directory (<root>/converted) where
+// Shelf writes files it creates by conversion. Open creates it.
+func (s *Store) ConvertedDir() string { return filepath.Join(s.Root, convertedDirName) }
+
+// AddConverted registers files Shelf produced inside <root>/converted.
+// Every path must resolve to an existing regular file inside that
+// directory (spellings through symlinks are resolved first, so a file
+// merely pointing outside is rejected); otherwise nothing is added and
+// an error names the offending path. One KindFile item per path is
+// added at the front in the given order — paths[0] becomes Items[0] —
+// with Converted set so removal paths delete the file like a managed
+// image. The change is persisted atomically; on save failure memory is
+// rolled back and the files are left for the caller. Returns the new
+// item IDs in the same order as paths.
+func (s *Store) AddConverted(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	// 先整体验证，再改动内存：任一路径不合格都不落任何项。
+	resolved := make([]string, len(paths))
+	for i, p := range paths {
+		if p == "" {
+			return nil, fmt.Errorf("store: converted path %d is empty", i)
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, fmt.Errorf("store: normalizing path %q: %w", p, err)
+		}
+		if r, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+			abs = r
+		}
+		if !s.convertedPath(abs) {
+			return nil, fmt.Errorf("store: converted path %q is not inside %s", p, s.convertedDir())
+		}
+		fi, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("store: converted file %q: %w", p, err)
+		}
+		if !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("store: converted path %q is not a regular file", p)
+		}
+		resolved[i] = abs
+	}
+	now := time.Now()
+	old := slices.Clone(s.Items)
+	newItems := make([]Item, 0, len(resolved))
+	ids := make([]string, len(resolved))
+	for i, p := range resolved {
+		ids[i] = newID()
+		newItems = append(newItems, Item{
+			ID:        ids[i],
+			Kind:      KindFile,
+			Path:      p,
+			CreatedAt: now,
+			Converted: true,
+		})
+	}
+	s.Items = append(newItems, s.Items...)
+	if err := s.Save(); err != nil {
+		s.Items = old
+		return nil, err
+	}
+	return ids, nil
 }
 
 // AddText adds a text item to the front. Identical existing text is
@@ -607,11 +747,13 @@ func (s *Store) ensureImageFile(name string, png []byte, sum [32]byte) (created 
 }
 
 // Remove deletes the item with the given id and persists atomically
-// (memory rolls back on save failure). If the removed item was a managed
-// image whose file is no longer referenced by any remaining item, the
-// file is deleted after the save succeeds; deletion is only ever
-// attempted on paths inside <root>/images, and a cleanup failure is
-// returned as a visible error. Original user files are never deleted.
+// (memory rolls back on save failure). If the removed item owned a
+// managed file — a managed image inside <root>/images or a converted
+// file inside <root>/converted — that is no longer referenced by any
+// remaining item, the file is deleted after the save succeeds; deletion
+// is only ever attempted inside those managed directories, and a
+// cleanup failure is returned as a visible error. Original user files
+// are never deleted.
 func (s *Store) Remove(id string) error {
 	idx := slices.IndexFunc(s.Items, func(it Item) bool { return it.ID == id })
 	if idx < 0 {
@@ -627,9 +769,9 @@ func (s *Store) Remove(id string) error {
 		s.Items = old
 		return err
 	}
-	failed, err := s.deleteManagedImages([]Item{removed})
+	failed, err := s.deleteManagedFiles([]Item{removed})
 	if err != nil {
-		return fmt.Errorf("store: item removed, but deleting managed image %s failed: %w", failed, err)
+		return fmt.Errorf("store: item removed, but deleting managed file %s failed: %w", failed, err)
 	}
 	return nil
 }
@@ -672,9 +814,9 @@ func (s *Store) SetTextLimit(n int) {
 // RemoveMany removes the items with the given IDs and saves once. Unknown
 // IDs are ignored; nothing to remove => no write. Returns how many were
 // removed. Guarantees match Clear: on save failure memory is rolled back
-// and no file is deleted; afterwards only managed images no longer
-// referenced by any remaining item are deleted; files referenced by
-// KindFile items are never touched.
+// and no file is deleted; afterwards managed images and converted files
+// no longer referenced by any remaining item are deleted; files
+// referenced by plain KindFile items are never touched.
 func (s *Store) RemoveMany(ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -724,11 +866,11 @@ func (s *Store) HideFromTray(ids []string) (int, error) {
 // RemoveOlderThan removes every unpinned item added before cutoff and
 // saves once; pinned items are kept regardless of age. It returns how
 // many items it removed. Guarantees match Clear: on save failure memory
-// is rolled back and no file is deleted; afterwards only managed images
-// no longer referenced by any remaining item are deleted; files
-// referenced by KindFile items are never touched. Re-adding an existing
-// item refreshes its timestamp, so "added" means last surfaced: items
-// at the cutoff or newer are kept.
+// is rolled back and no file is deleted; afterwards managed images and
+// converted files no longer referenced by any remaining item are
+// deleted; files referenced by plain KindFile items are never touched.
+// Re-adding an existing item refreshes its timestamp, so "added" means
+// last surfaced: items at the cutoff or newer are kept.
 func (s *Store) RemoveOlderThan(cutoff time.Time) (int, error) {
 	return s.removeMatching(func(it Item) bool {
 		return !it.Pinned && it.CreatedAt.Before(cutoff)
@@ -738,10 +880,10 @@ func (s *Store) RemoveOlderThan(cutoff time.Time) (int, error) {
 // removeMatching drops every item match accepts and persists once.
 // Nothing matched => no write, (0, nil). On save failure memory is
 // rolled back and nothing is deleted. After the save succeeds, managed
-// image files the removed items referenced are deleted only when no
-// remaining item still references them. Returns how many items were
-// removed; a cleanup failure reports that count plus the first error,
-// worded with verb ("removed"/"cleared").
+// image and converted files the removed items owned are deleted only
+// when no remaining item still references them. Returns how many items
+// were removed; a cleanup failure reports that count plus the first
+// error, worded with verb ("removed"/"cleared").
 func (s *Store) removeMatching(match func(Item) bool, verb string) (int, error) {
 	old := s.Items
 	kept := make([]Item, 0, len(s.Items))
@@ -764,28 +906,44 @@ func (s *Store) removeMatching(match func(Item) bool, verb string) (int, error) 
 		s.Items = old
 		return 0, err
 	}
-	failed, err := s.deleteManagedImages(removed)
+	failed, err := s.deleteManagedFiles(removed)
 	if err != nil {
-		return len(removed), fmt.Errorf("store: items %s, but deleting managed image %s failed: %w", verb, failed, err)
+		return len(removed), fmt.Errorf("store: items %s, but deleting managed file %s failed: %w", verb, failed, err)
 	}
 	return len(removed), nil
 }
 
-// deleteManagedImages deletes the managed image file each item in removed
-// points at — KindImage items only, only paths inside <root>/images, each
+// managedFile reports whether removing item it should also delete its
+// file, and returns that file's path: KindImage items own their managed
+// file inside <root>/images, and KindFile items flagged Converted own
+// theirs inside <root>/converted. Everything else — plain KindFile
+// references in particular — is never deleted.
+func (s *Store) managedFile(it Item) string {
+	switch {
+	case it.Kind == KindImage && it.Path != "" && s.managedPath(it.Path):
+		return it.Path
+	case it.Kind == KindFile && it.Converted && it.Path != "" && s.convertedPath(it.Path):
+		return it.Path
+	}
+	return ""
+}
+
+// deleteManagedFiles deletes the managed file each item in removed owns
+// (see managedFile) — only paths inside the managed directories, each
 // distinct path once, and only when no remaining item still references
 // the same file (kept items, including pinned ones, always protect their
-// images). Returns the path of the first deletion error for callers to
+// files). Returns the path of the first deletion error for callers to
 // embed in their message; the other files are still removed.
-func (s *Store) deleteManagedImages(removed []Item) (string, error) {
+func (s *Store) deleteManagedFiles(removed []Item) (string, error) {
 	var firstErr error
 	var failedPath string
 	seen := map[string]bool{}
 	for _, it := range removed {
-		if it.Kind != KindImage || it.Path == "" || !s.managedPath(it.Path) {
+		p := s.managedFile(it)
+		if p == "" {
 			continue
 		}
-		p := filepath.Clean(it.Path)
+		p = filepath.Clean(p)
 		if seen[p] {
 			continue
 		}
@@ -801,13 +959,13 @@ func (s *Store) deleteManagedImages(removed []Item) (string, error) {
 }
 
 // Clear removes every unpinned item and persists atomically (memory
-// rolls back on save failure); pinned items and the managed images they
+// rolls back on save failure); pinned items and the managed files they
 // reference are kept. When everything is pinned or the store is empty
-// it is a no-op. After the save succeeds, managed image files the
-// cleared items referenced are deleted — only paths inside
-// <root>/images are ever touched, and a KindFile item's path is never
-// deleted even if it points there. Cleanup failures are reported while
-// still removing the rest.
+// it is a no-op. After the save succeeds, managed image and converted
+// files the cleared items owned are deleted — only paths inside
+// <root>/images or <root>/converted are ever touched, and a plain
+// KindFile item's path is never deleted even if it points there.
+// Cleanup failures are reported while still removing the rest.
 func (s *Store) Clear() error {
 	_, err := s.removeMatching(func(it Item) bool { return !it.Pinned }, "cleared")
 	return err
@@ -828,9 +986,10 @@ func (s *Store) Refresh() {
 
 // Save persists the current items to state.json atomically
 // (temp file + rename, 0600). Managed image items are written relative
-// to <root>/images (their file name) so reopening from a different
-// working directory resolves them identically; file items keep their
-// absolute paths. On failure the previous state.json is left untouched.
+// to <root>/images and converted items relative to <root>/converted
+// (their file names) so reopening from a different working directory
+// resolves them identically; file items keep their absolute paths.
+// On failure the previous state.json is left untouched.
 func (s *Store) Save() error {
 	if s.migrationBlocked != nil {
 		return fmt.Errorf("store: 迁移前无法保留恢复备份，已停止写入以免覆盖可恢复原件：%w", s.migrationBlocked)
@@ -861,13 +1020,16 @@ func (s *Store) Save() error {
 }
 
 // persistItems clones the item list for the on-disk format: managed
-// images become relative to <root>/images, everything else is written
-// as-is.
+// images become relative to <root>/images and converted files relative
+// to <root>/converted; everything else is written as-is.
 func (s *Store) persistItems() []Item {
 	out := slices.Clone(s.Items)
 	for i := range out {
 		it := &out[i]
-		if it.Kind == KindImage && it.Path != "" && s.managedPath(it.Path) {
+		switch {
+		case it.Kind == KindImage && it.Path != "" && s.managedPath(it.Path):
+			it.Path = filepath.Base(it.Path)
+		case it.Converted && it.Path != "" && s.convertedPath(it.Path):
 			it.Path = filepath.Base(it.Path)
 		}
 	}
@@ -877,15 +1039,31 @@ func (s *Store) persistItems() []Item {
 func (s *Store) statePath() string { return filepath.Join(s.Root, stateFileName) }
 func (s *Store) imagesDir() string { return filepath.Join(s.Root, imagesDirName) }
 
+// convertedDir is the private spelling of ConvertedDir.
+func (s *Store) convertedDir() string { return filepath.Join(s.Root, convertedDirName) }
+
 // managedPath reports whether p is inside <root>/images, so cleanup only
 // ever deletes files we created. Symlinked spellings are resolved first,
 // so the same directory or file reached through another path is judged
 // by where it actually lives.
 func (s *Store) managedPath(p string) bool {
+	return insideDir(s.imagesDir(), p)
+}
+
+// convertedPath reports whether p is inside <root>/converted, with the
+// same symlink-resolved semantics as managedPath: removal paths only
+// ever delete converted files we created.
+func (s *Store) convertedPath(p string) bool {
+	return insideDir(s.convertedDir(), p)
+}
+
+// insideDir reports whether p is inside dir, resolving symlinked
+// spellings of both first so the same directory or file reached through
+// another path is judged by where it actually lives.
+func insideDir(dir, p string) bool {
 	if p == "" {
 		return false
 	}
-	dir := s.imagesDir()
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolved
 	}

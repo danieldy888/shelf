@@ -2028,7 +2028,7 @@ func TestRemoveOlderThanImageCleanupError(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("removed count = %d, want 1", n)
 	}
-	if !strings.Contains(err.Error(), "deleting managed image") {
+	if !strings.Contains(err.Error(), "deleting managed file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(s.Items) != 0 {
@@ -2825,5 +2825,491 @@ func TestSetPinnedUnhideRollbackOnSaveFailure(t *testing.T) {
 	after, err := os.ReadFile(filepath.Join(root, stateFileName))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("state.json changed on failed SetPinned")
+	}
+}
+
+// convertedFile writes a file inside the store's converted directory and
+// returns its path — the shape AddConverted expects from the converter.
+func convertedFile(t *testing.T, s *Store, name, content string) string {
+	t.Helper()
+	p := filepath.Join(s.ConvertedDir(), name)
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatalf("write converted fixture: %v", err)
+	}
+	return p
+}
+
+// AddConverted 把 converted 目录里既有的文件逐个登记为 KindFile +
+// Converted 项，按给定顺序排到最前（paths[0] 成为 Items[0]），返回同序 ID；
+// 重开后顺序、Converted 标记与 Missing 状态都持久化。
+func TestAddConvertedOrderFlagsPersist(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("pre-existing"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	p1 := convertedFile(t, s, "a.pdf", "pdf-a")
+	p2 := convertedFile(t, s, "b.png", "png-b")
+
+	ids, err := s.AddConverted([]string{p1, p2})
+	if err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	if len(ids) != 2 || ids[0] == "" || ids[1] == "" || ids[0] == ids[1] {
+		t.Fatalf("bad ids: %v", ids)
+	}
+	if len(s.Items) != 3 {
+		t.Fatalf("items = %d, want 3", len(s.Items))
+	}
+	for i, want := range []string{p1, p2} {
+		it := s.Items[i]
+		if it.ID != ids[i] || it.Kind != KindFile || !it.Converted || it.Missing {
+			t.Fatalf("item %d = %+v, want converted file item", i, it)
+		}
+		if it.Path != want {
+			t.Fatalf("item %d path = %q, want %q", i, it.Path, want)
+		}
+	}
+	if s.Items[2].Text != "pre-existing" {
+		t.Fatalf("pre-existing item not pushed back: %+v", s.Items[2])
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if len(s2.Items) != 3 || !s2.Items[0].Converted || !s2.Items[1].Converted {
+		t.Fatalf("converted items not persisted: %+v", s2.Items)
+	}
+	if s2.Items[0].ID != ids[0] || s2.Items[0].Path != p1 || s2.Items[0].Missing {
+		t.Fatalf("first converted item after reopen: %+v", s2.Items[0])
+	}
+}
+
+// Open 按 0700 创建 converted 目录，ConvertedDir 指向它。
+func TestConvertedDirCreated(t *testing.T) {
+	s, root := newStore(t)
+	want := filepath.Join(realRoot(t, root), convertedDirName)
+	if s.ConvertedDir() != want {
+		t.Fatalf("ConvertedDir = %q, want %q", s.ConvertedDir(), want)
+	}
+	if p := filePerm(t, s.ConvertedDir()); p != 0o700 {
+		t.Fatalf("converted dir perm = %o, want 700", p)
+	}
+}
+
+// 不在 converted 目录内的路径——包括不存在的文件、普通用户文件、软链接
+// 指向目录外的文件、以及目录本身——一律整体拒绝：返回错误且 Items 不变。
+func TestAddConvertedRejectsOutsideAndMissing(t *testing.T) {
+	s, _ := newStore(t)
+	if err := s.AddText("keep"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "user.jpg")
+	if err := os.WriteFile(outside, []byte("u"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// converted 目录里指向外部文件的软链接同样必须被拒（真实目标在外）。
+	linkOut := filepath.Join(s.ConvertedDir(), "escape.pdf")
+	if err := os.Symlink(outside, linkOut); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(s.ConvertedDir(), "ghost.pdf")
+	imagesFile := filepath.Join(realRoot(t, s.Root), imagesDirName, "x.png")
+	if err := os.WriteFile(imagesFile, []byte("i"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, paths := range map[string][]string{
+		"outside":     {outside},
+		"missing":     {missing},
+		"symlink out": {linkOut},
+		"dir itself":  {s.ConvertedDir()},
+		"images dir":  {imagesFile},
+		"empty":       {""},
+		"mixed bad":   {convertedFile(t, s, "ok.pdf", "ok"), outside},
+	} {
+		if ids, err := s.AddConverted(paths); err == nil || ids != nil {
+			t.Fatalf("%s: AddConverted(%v) = ids %v, err %v", name, paths, ids, err)
+		}
+		if len(s.Items) != 1 || s.Items[0].Text != "keep" {
+			t.Fatalf("%s: Items changed on rejected add: %+v", name, s.Items)
+		}
+	}
+}
+
+// Save 失败（根目录只读）时 AddConverted 回滚内存：不新增项、不写盘，
+// 文件本身留给调用方处理（不替它删除）。
+func TestAddConvertedSaveFailureRollsBack(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddText("keep"); err != nil {
+		t.Fatalf("AddText: %v", err)
+	}
+	p := convertedFile(t, s, "out.pdf", "pdf")
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+
+	if ids, err := s.AddConverted([]string{p}); err == nil || ids != nil {
+		t.Fatalf("expected save failure, got ids %v err %v", ids, err)
+	}
+	if len(s.Items) != 1 || s.Items[0].Text != "keep" {
+		t.Fatalf("memory not rolled back: %+v", s.Items)
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("state.json changed on failed AddConverted")
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("converted file wrongly deleted on failed add: %v", err)
+	}
+}
+
+// Remove 删除被移除转换项的文件；其余条目与用户文件不受影响。
+func TestRemoveDeletesConvertedFile(t *testing.T) {
+	s, _ := newStore(t)
+	user := filepath.Join(t.TempDir(), "keep.txt")
+	if err := os.WriteFile(user, []byte("u"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{user}); err != nil {
+		t.Fatalf("AddFiles: %v", err)
+	}
+	p := convertedFile(t, s, "c.pdf", "pdf")
+	ids, err := s.AddConverted([]string{p})
+	if err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	if err := s.Remove(ids[0]); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("converted file still exists: %v", err)
+	}
+	if _, err := os.Stat(user); err != nil {
+		t.Fatalf("user file deleted: %v", err)
+	}
+	if len(s.Items) != 1 || s.Items[0].Path != user {
+		t.Fatalf("wrong items left: %+v", s.Items)
+	}
+}
+
+// 其他条目（如把同一文件当普通文件拖进来的 KindFile 项）仍引用转换
+// 产物时，移除转换项不删文件；引用消失后的下一次清理才删除。
+func TestRemoveConvertedKeepsReferencedFile(t *testing.T) {
+	s, _ := newStore(t)
+	p := convertedFile(t, s, "shared.pdf", "pdf")
+	ids, err := s.AddConverted([]string{p})
+	if err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	// 另一个条目引用同一文件（例如用户把产物拖回来形成的普通文件项；
+	// AddFiles 会同路径去重，所以直接注入一条独立引用项）。
+	ref := Item{ID: newID(), Kind: KindFile, Path: p, CreatedAt: time.Now()}
+	s.Items = append([]Item{ref}, s.Items...)
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := s.Remove(ids[0]); err != nil {
+		t.Fatalf("Remove converted: %v", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("still-referenced converted file deleted: %v", err)
+	}
+	if err := s.Remove(s.Items[0].ID); err != nil {
+		t.Fatalf("Remove file ref: %v", err)
+	}
+	// 文件引用本身不拥有文件：没人再拥有它时文件保留到 Open 的孤儿清理。
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("file ref wrongly deleted the file: %v", err)
+	}
+}
+
+// RemoveMany、RemoveOlderThan 与 Clear 走同一条 managed-file 清理路径：
+// 转换项的文件被删除，普通 KindFile 指向的文件（无论在哪）绝不删除，
+// pinned 的转换项在 Clear/RemoveOlderThan 下保留。
+func TestRemovalPathsDeleteConvertedFiles(t *testing.T) {
+	s, _ := newStore(t)
+	user := filepath.Join(t.TempDir(), "user.doc")
+	if err := os.WriteFile(user, []byte("u"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{user}); err != nil {
+		t.Fatalf("AddFiles: %v", err)
+	}
+	p1 := convertedFile(t, s, "m1.pdf", "1")
+	p2 := convertedFile(t, s, "m2.pdf", "2")
+	ids, err := s.AddConverted([]string{p1, p2})
+	if err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	if n, err := s.RemoveMany([]string{ids[0], "no-such-id"}); err != nil || n != 1 {
+		t.Fatalf("RemoveMany = %d, %v", n, err)
+	}
+	if _, err := os.Stat(p1); !os.IsNotExist(err) {
+		t.Fatalf("RemoveMany kept converted file: %v", err)
+	}
+
+	// RemoveOlderThan: 早于 cutoff 的未 pin 转换项被删文件。
+	old := convertedFile(t, s, "old.pdf", "old")
+	pin := convertedFile(t, s, "pin.pdf", "pin")
+	ids2, err := s.AddConverted([]string{old, pin})
+	if err != nil {
+		t.Fatalf("AddConverted 2: %v", err)
+	}
+	setAge(t, s, ids2[0], time.Now().Add(-time.Hour)) // old.pdf
+	setAge(t, s, ids2[1], time.Now().Add(-time.Hour)) // pin.pdf
+	setAge(t, s, ids[1], time.Now().Add(-time.Hour))  // m2.pdf
+	if err := s.SetPinned(ids2[1], true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if n, err := s.RemoveOlderThan(time.Now()); err != nil || n != 3 {
+		t.Fatalf("RemoveOlderThan = %d, %v", n, err)
+	}
+	// 未 pin 的用户文件项同样早于 cutoff：项被移除，文件绝不删除。
+	if _, err := os.Stat(user); err != nil {
+		t.Fatalf("RemoveOlderThan deleted user file: %v", err)
+	}
+	for _, p := range []string{p2, old} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("RemoveOlderThan kept converted file %s: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(pin); err != nil {
+		t.Fatalf("pinned converted file deleted: %v", err)
+	}
+
+	// Clear: 删除剩下的未 pin 转换文件，pinned 的留下，用户文件留下。
+	p3 := convertedFile(t, s, "clear.pdf", "3")
+	if _, err := s.AddConverted([]string{p3}); err != nil {
+		t.Fatalf("AddConverted 3: %v", err)
+	}
+	if err := s.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if _, err := os.Stat(p3); !os.IsNotExist(err) {
+		t.Fatalf("Clear kept converted file: %v", err)
+	}
+	if _, err := os.Stat(pin); err != nil {
+		t.Fatalf("Clear deleted pinned converted file: %v", err)
+	}
+	if _, err := os.Stat(user); err != nil {
+		t.Fatalf("Clear deleted user file: %v", err)
+	}
+	if len(s.Items) != 1 || !s.Items[0].Pinned || !s.Items[0].Converted {
+		t.Fatalf("items after Clear: %+v", s.Items)
+	}
+}
+
+// 普通 KindFile 项即使指向 converted 目录内部（用户手工拖入），移除时也
+// 绝不删文件——只有 Converted 标记的项才拥有文件。
+func TestRemoveFileItemInsideConvertedKeepsFile(t *testing.T) {
+	s, _ := newStore(t)
+	p := convertedFile(t, s, "dropped.pdf", "pdf")
+	if err := s.AddFiles([]string{p}); err != nil {
+		t.Fatalf("AddFiles: %v", err)
+	}
+	if err := s.Remove(s.Items[0].ID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("plain file item's file inside converted was deleted: %v", err)
+	}
+}
+
+// Open 只清理 converted 目录里无人引用的文件（转换中断的残留），被引用的
+// 文件、子目录及目录之外的一切都原样保留。
+func TestOpenCleansOrphanedConverted(t *testing.T) {
+	s, root := newStore(t)
+	kept := convertedFile(t, s, "kept.pdf", "k")
+	if _, err := s.AddConverted([]string{kept}); err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	orphan := filepath.Join(s.ConvertedDir(), "orphan.tmp")
+	if err := os.WriteFile(orphan, []byte("o"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(s.ConvertedDir(), "subdir")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	subFile := filepath.Join(sub, "inner.txt")
+	if err := os.WriteFile(subFile, []byte("i"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphaned converted file kept: %v", err)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("referenced converted file cleaned: %v", err)
+	}
+	if _, err := os.Stat(subFile); err != nil {
+		t.Fatalf("subdirectory contents touched: %v", err)
+	}
+}
+
+// 重开时文件已消失的转换项与其他 KindFile 一样保留为 Missing，不被丢弃。
+func TestConvertedMissingOnReopen(t *testing.T) {
+	s, root := newStore(t)
+	p := convertedFile(t, s, "gone.pdf", "g")
+	if _, err := s.AddConverted([]string{p}); err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if len(s2.Items) != 1 || !s2.Items[0].Missing || !s2.Items[0].Converted {
+		t.Fatalf("missing converted item not kept: %+v", s2.Items)
+	}
+}
+
+// 转换产物与受管图片一样只把文件名落盘：整个数据目录搬走（或经软链接
+// 打开）后重开仍解析到 moved-root 下的同一文件，而不是写死旧绝对路径。
+func TestConvertedPathsPersistRelative(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "data")
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	p := convertedFile(t, s, "rel.pdf", "rel")
+	if _, err := s.AddConverted([]string{p}); err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(realRoot(t, root), stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sf stateFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		t.Fatal(err)
+	}
+	if len(sf.Items) != 1 || !sf.Items[0].Converted {
+		t.Fatalf("persisted items: %+v", sf.Items)
+	}
+	if got := sf.Items[0].Path; got != "rel.pdf" || filepath.IsAbs(got) || got != filepath.Base(got) {
+		t.Fatalf("converted path not persisted relative: %q", got)
+	}
+
+	moved := filepath.Join(parent, "moved")
+	if err := os.Rename(realRoot(t, root), moved); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(moved)
+	if err != nil {
+		t.Fatalf("Open moved root: %v", err)
+	}
+	defer s2.Close()
+	if len(s2.Items) != 1 || s2.Items[0].Missing || !s2.Items[0].Converted {
+		t.Fatalf("converted item lost after moving root: %+v", s2.Items)
+	}
+	want := filepath.Join(realRoot(t, moved), convertedDirName, "rel.pdf")
+	if s2.Items[0].Path != want {
+		t.Fatalf("resolved path = %q, want %q", s2.Items[0].Path, want)
+	}
+	got, err := os.ReadFile(s2.Items[0].Path)
+	if err != nil || string(got) != "rel" {
+		t.Fatalf("resolved converted file unreadable: err=%v", err)
+	}
+}
+
+// 存量旧 state.json（converted 项的绝对路径写法）重开时统一到当前根的
+// converted 目录；指向外部的 converted 路径不会被删除。
+func TestConvertedAbsolutePathResolvesIntoCurrentRoot(t *testing.T) {
+	root := t.TempDir()
+	cdir := filepath.Join(realRoot(t, root), convertedDirName)
+	if err := os.MkdirAll(cdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(cdir, "abs.pdf")
+	if err := os.WriteFile(p, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "else.pdf")
+	if err := os.WriteFile(outside, []byte("e"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sf := stateFile{Version: stateVersion, Items: []Item{
+		{ID: "c1", Kind: KindFile, Path: p, Converted: true},
+		{ID: "c2", Kind: KindFile, Path: outside, Converted: true},
+	}}
+	data, _ := json.Marshal(sf)
+	if err := os.WriteFile(filepath.Join(root, stateFileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if len(s.Items) != 2 {
+		t.Fatalf("items: %+v", s.Items)
+	}
+	if s.Items[0].Path != p {
+		t.Fatalf("absolute converted path not unified: %q", s.Items[0].Path)
+	}
+	// Converted 标记但文件在目录外：不得删除。
+	if err := s.Remove("c2"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("outside file deleted for converted item: %v", err)
+	}
+}
+
+// converted 目录只读导致文件删不掉时：项已移除并落盘，错误如实上报，
+// 删不掉的文件原样保留。
+func TestRemoveConvertedCleanupError(t *testing.T) {
+	s, _ := newStore(t)
+	p1 := convertedFile(t, s, "e1.pdf", "1")
+	p2 := convertedFile(t, s, "e2.pdf", "2")
+	ids, err := s.AddConverted([]string{p1, p2})
+	if err != nil {
+		t.Fatalf("AddConverted: %v", err)
+	}
+	if err := os.Chmod(s.ConvertedDir(), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(s.ConvertedDir(), 0o755) })
+
+	if err := s.Remove(ids[0]); err == nil ||
+		!strings.Contains(err.Error(), "deleting managed file") {
+		t.Fatalf("expected cleanup error, got %v", err)
+	}
+	if len(s.Items) != 1 || s.Items[0].ID != ids[1] {
+		t.Fatalf("items: %+v", s.Items)
+	}
+	if _, err := os.Stat(p1); err != nil {
+		t.Fatalf("file gone despite failed deletion: %v", err)
 	}
 }

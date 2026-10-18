@@ -27,6 +27,19 @@ func (s *selection) only(id string) {
 	s.ids, s.anchor = map[string]bool{id: true}, id
 }
 
+// onlyAll selects exactly ids (a batch of new items), anchored at the
+// first; no ids clears the selection.
+func (s *selection) onlyAll(ids []string) {
+	if len(ids) == 0 {
+		s.clear()
+		return
+	}
+	s.ids, s.anchor = make(map[string]bool, len(ids)), ids[0]
+	for _, id := range ids {
+		s.ids[id] = true
+	}
+}
+
 // click applies a click on id with mods; items is the list in display order.
 func (s *selection) click(items []store.Item, id string, mods ui.Modifiers) {
 	switch {

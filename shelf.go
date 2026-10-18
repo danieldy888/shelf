@@ -38,6 +38,7 @@ type shelf struct {
 	settings                                   settings.Settings
 	modules                                    []module
 	np                                         *nowPlayingModule     // the peek player reads its state
+	conv                                       *converter            // image conversion jobs; nil until the app starts
 	clip                                       *clipboardModule      // nil while clipboard history is off
 	tab                                        int                   // panelTab: which list the expanded panel shows
 	tabAt                                      time.Time             // when the tab last switched; drives the pages' crossfade

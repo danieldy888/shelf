@@ -106,6 +106,7 @@ func (a *shelf) tileThumb(c *ui.Context, item store.Item) {
 		return
 	}
 	box.Children(func() {
+		defer formatBadge(c, item)
 		if thumb := a.thumbnail(item); thumb != nil {
 			im := ui.Image(c.Key("bmp"), thumb).Size(56, 56).Radius(10).Fit(ui.Cover)
 			if item.Kind == store.KindImage {
@@ -122,6 +123,25 @@ func (a *shelf) tileThumb(c *ui.Context, item store.Item) {
 			return
 		}
 		ui.Icon(c, fileSymbol).Size(40, 40).TextColor(ink3)
+	})
+}
+
+// formatBadge marks a converted picture's new format — 「JPG」, 「HEIC」,
+// 「PNG」 — at the thumbnail's bottom-left corner, so a converted copy reads
+// apart from its original. Documents carry their kind in their icon.
+func formatBadge(c *ui.Context, item store.Item) {
+	if !item.Converted || item.Missing {
+		return
+	}
+	ext := strings.ToUpper(strings.TrimPrefix(filepath.Ext(item.Path), "."))
+	switch ext {
+	case "JPG", "PNG", "HEIC":
+	default:
+		return
+	}
+	ui.Row(c.Key("format")).Absolute().Left(-4).Bottom(-4).Height(14).Padding(0, 4, 0, 4).Radius(4).
+		Center().Background(ui.Hex("#1C1C1E")).Border(1, ui.Hex("#000000")).Children(func() {
+		ui.Text(c, ext).SingleLine().FontSize(8.5).FontWeight(700).TextColor(ink)
 	})
 }
 

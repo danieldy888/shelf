@@ -71,6 +71,7 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 			a.report(err)
 		}
 	}
+	a.convertMenu(m, items)
 	m.Separator()
 	copyLabel := "复制文字"
 	if files {
