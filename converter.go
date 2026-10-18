@@ -247,6 +247,12 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 		return
 	}
 	dir := a.store.ConvertedDir()
+	// Outputs are written straight into converted/; never into whatever a
+	// symlink or stray file there points at.
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		a.report(fmt.Errorf("无法使用转换文件夹 %s", dir))
+		return
+	}
 	srcs := make([]string, len(items))
 	names := make([]string, len(items))
 	for i, it := range items {
@@ -264,7 +270,7 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	job.total.Store(int32(len(items)))
 	a.conv.job, a.conv.seen = job, false
 	convertWork(func() {
-		tasks := planConvert(dir, srcs, names, pdf, target)
+		tasks := planConvert(dir, srcs, names, pdf, target, job)
 		job.total.Store(int32(len(tasks)))
 		format := mac.FormatPNG
 		switch target {
@@ -312,8 +318,9 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 // planConvert lists a job's outputs with their reserved names: one per
 // source, one merged PDF, or for a PDF turned into images one per page
 // (「名 第 2 页.png」, just 「名.png」 for a one-page PDF). A PDF whose pages
-// cannot be counted becomes a failed task.
-func planConvert(dir string, srcs, names []string, pdf bool, target convertTarget) []convertTask {
+// cannot be counted becomes a failed task. Counting stops when the job is
+// cancelled.
+func planConvert(dir string, srcs, names []string, pdf bool, target convertTarget, job *convertJob) []convertTask {
 	taken := map[string]bool{}
 	var tasks []convertTask
 	switch {
@@ -329,6 +336,9 @@ func planConvert(dir string, srcs, names []string, pdf bool, target convertTarge
 		}
 	case pdf:
 		for i, src := range srcs {
+			if job.cancel.Load() {
+				break
+			}
 			n, err := pdfPageCount(src)
 			if err == nil && n < 1 {
 				err = fmt.Errorf("%s 没有页面", filepath.Base(src))
@@ -385,6 +395,9 @@ func wordFromPDF(src, dst string, job *convertJob) (noText bool, err error) {
 		if len(pages[i]) > 0 {
 			noText = false
 		}
+	}
+	if job.cancel.Load() {
+		return false, errConvertCanceled
 	}
 	return noText, writeDocxPages(dst, pages)
 }
