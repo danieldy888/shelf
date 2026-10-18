@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -126,17 +127,22 @@ func convertBaseName(item store.Item) string {
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
-// convertJob is one run of the converter. done/total and step are written
-// by the worker and read by the main thread's drawing, hence atomics.
+// convertJob is one run of the converter. total, done and the step flags
+// are written by the worker and read by the main thread's drawing, hence
+// atomics; target and unit never change.
 type convertJob struct {
 	target  convertTarget
-	total   int
 	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs)
+	total   atomic.Int32
 	done    atomic.Int32
 	ocr     atomic.Bool // the current step is text recognition
 	cancel  atomic.Bool
 	started time.Time
 }
+
+// errConvertCanceled stops a multi-page step when the user cancels; its
+// output is discarded, not reported as a failure.
+var errConvertCanceled = errors.New("canceled")
 
 // converter is the module that runs conversion jobs and shows the running
 // one in the activity strip. One job at a time.
@@ -169,8 +175,8 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 		return
 	}
 	m.seen = true
-	done := int(j.done.Load())
-	frac := float32(done) / float32(max(j.total, 1))
+	done, total := int(j.done.Load()), max(int(j.total.Load()), 1)
+	frac := float32(done) / float32(total)
 	title := "正在转成 " + strings.ToUpper(convertExt(j.target))
 	switch j.target {
 	case toJPEG:
@@ -180,9 +186,9 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 	case toMergedPDF:
 		title = "正在合并 PDF"
 	}
-	step := fmt.Sprintf("第 %d / %d %s", min(done+1, j.total), j.total, j.unit)
+	step := fmt.Sprintf("第 %d / %d %s", min(done+1, total), total, j.unit)
 	if j.ocr.Load() {
-		step = fmt.Sprintf("识别文字 %d / %d", min(done+1, j.total), j.total)
+		step = fmt.Sprintf("识别文字 %d / %d", min(done+1, total), total)
 	}
 	if j.cancel.Load() {
 		step = "正在取消…"
@@ -223,81 +229,57 @@ type convertOut struct {
 	noText bool // a Word output for which nothing was recognized
 }
 
+// convertTask is one output of a job: src converted to dst (page > 0:
+// render that page of the PDF src); err is a failure found while planning.
+type convertTask struct {
+	src, dst string
+	pdf      bool
+	page     int
+	err      error
+}
+
 // startConvert begins converting items — all images or all PDFs — to
-// target. Names are reserved here, on the main thread, so outputs of one
-// job never collide; a PDF turned into images gives one output per page
-// (「名 第 2 页.png」, or just 「名.png」 for a one-page PDF).
+// target. Everything that touches the files, counting PDF pages included,
+// runs on the worker so a large PDF never stalls the panel; outputs are
+// named there too, which is safe because one job runs at a time.
 func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	if a.conv == nil || a.conv.busy() || a.store == nil || len(items) == 0 {
 		return
 	}
 	dir := a.store.ConvertedDir()
-	taken := map[string]bool{}
-	type task struct {
-		src, dst string
-		pdf      bool
-		page     int   // > 0: render this page of the PDF src
-		err      error // the task failed before it ran (unreadable PDF)
+	srcs := make([]string, len(items))
+	names := make([]string, len(items))
+	for i, it := range items {
+		srcs[i], names[i] = it.Path, convertBaseName(it)
 	}
-	var tasks []task
+	pdf := isPDF(items[0])
 	unit := "张"
 	switch {
-	case target == toMergedPDF:
-		name := convertBaseName(items[0])
-		if len(items) > 1 {
-			name = fmt.Sprintf("%s 等 %d 张", name, len(items))
-		}
-		tasks = append(tasks, task{dst: uniquePath(dir, name, "pdf", taken)})
-	case isPDF(items[0]) && target == toWord:
+	case pdf && target == toWord:
 		unit = "个"
-		for _, it := range items {
-			tasks = append(tasks, task{src: it.Path, pdf: true, dst: uniquePath(dir, convertBaseName(it), "docx", taken)})
-		}
-	case isPDF(items[0]):
+	case pdf:
 		unit = "页"
-		for _, it := range items {
-			base := convertBaseName(it)
-			n, err := pdfPageCount(it.Path)
-			if err != nil || n < 1 {
-				if err == nil {
-					err = fmt.Errorf("%s 没有页面", filepath.Base(it.Path))
-				}
-				tasks = append(tasks, task{src: it.Path, pdf: true, dst: filepath.Join(dir, base), err: err})
-				continue
-			}
-			for p := 1; p <= n; p++ {
-				name := base
-				if n > 1 {
-					name = fmt.Sprintf("%s 第 %d 页", base, p)
-				}
-				tasks = append(tasks, task{src: it.Path, pdf: true, page: p, dst: uniquePath(dir, name, convertExt(target), taken)})
-			}
-		}
-	default:
-		for _, it := range items {
-			tasks = append(tasks, task{src: it.Path, dst: uniquePath(dir, convertBaseName(it), convertExt(target), taken)})
-		}
 	}
-	srcs := make([]string, len(items))
-	for i, it := range items {
-		srcs[i] = it.Path
-	}
-	job := &convertJob{target: target, total: len(tasks), unit: unit, started: time.Now()}
+	job := &convertJob{target: target, unit: unit, started: time.Now()}
+	job.total.Store(int32(len(items)))
 	a.conv.job, a.conv.seen = job, false
 	convertWork(func() {
+		tasks := planConvert(dir, srcs, names, pdf, target)
+		job.total.Store(int32(len(tasks)))
+		format := mac.FormatPNG
+		switch target {
+		case toJPEG:
+			format = mac.FormatJPEG
+		case toHEIC:
+			format = mac.FormatHEIC
+		}
 		var outs []convertOut
 		for _, t := range tasks {
 			if job.cancel.Load() {
 				break
 			}
+			job.ocr.Store(false)
 			out := convertOut{path: t.dst, err: t.err}
-			format := mac.FormatPNG
-			switch target {
-			case toJPEG:
-				format = mac.FormatJPEG
-			case toHEIC:
-				format = mac.FormatHEIC
-			}
 			switch {
 			case out.err != nil:
 			case target == toMergedPDF:
@@ -317,6 +299,9 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 			if out.err != nil && t.err == nil {
 				_ = os.Remove(t.dst)
 			}
+			if errors.Is(out.err, errConvertCanceled) {
+				break
+			}
 			outs = append(outs, out)
 			job.done.Add(1)
 		}
@@ -324,10 +309,55 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	})
 }
 
+// planConvert lists a job's outputs with their reserved names: one per
+// source, one merged PDF, or for a PDF turned into images one per page
+// (「名 第 2 页.png」, just 「名.png」 for a one-page PDF). A PDF whose pages
+// cannot be counted becomes a failed task.
+func planConvert(dir string, srcs, names []string, pdf bool, target convertTarget) []convertTask {
+	taken := map[string]bool{}
+	var tasks []convertTask
+	switch {
+	case target == toMergedPDF:
+		name := names[0]
+		if len(srcs) > 1 {
+			name = fmt.Sprintf("%s 等 %d 张", name, len(srcs))
+		}
+		return []convertTask{{dst: uniquePath(dir, name, "pdf", taken)}}
+	case pdf && target == toWord:
+		for i, src := range srcs {
+			tasks = append(tasks, convertTask{src: src, pdf: true, dst: uniquePath(dir, names[i], "docx", taken)})
+		}
+	case pdf:
+		for i, src := range srcs {
+			n, err := pdfPageCount(src)
+			if err == nil && n < 1 {
+				err = fmt.Errorf("%s 没有页面", filepath.Base(src))
+			}
+			if err != nil {
+				tasks = append(tasks, convertTask{src: src, pdf: true, dst: filepath.Join(dir, names[i]), err: err})
+				continue
+			}
+			for p := 1; p <= n; p++ {
+				name := names[i]
+				if n > 1 {
+					name = fmt.Sprintf("%s 第 %d 页", names[i], p)
+				}
+				tasks = append(tasks, convertTask{src: src, pdf: true, page: p, dst: uniquePath(dir, name, convertExt(target), taken)})
+			}
+		}
+	default:
+		for i, src := range srcs {
+			tasks = append(tasks, convertTask{src: src, dst: uniquePath(dir, names[i], convertExt(target), taken)})
+		}
+	}
+	return tasks
+}
+
 // wordFromPDF writes dst as a text-only Word document with one page per
 // page of the PDF src: the page's own text, or for a scanned page without
-// a text layer, the text recognized in its picture. It reports whether no
-// page had any text.
+// a text layer, the text recognized in its picture. Cancelling stops it
+// between pages with errConvertCanceled. It reports whether no page had
+// any text.
 func wordFromPDF(src, dst string, job *convertJob) (noText bool, err error) {
 	pages, err := pdfText(src)
 	if err != nil {
@@ -335,6 +365,9 @@ func wordFromPDF(src, dst string, job *convertJob) (noText bool, err error) {
 	}
 	noText = true
 	for i, lines := range pages {
+		if job.cancel.Load() {
+			return false, errConvertCanceled
+		}
 		if len(lines) == 0 {
 			job.ocr.Store(true)
 			tmp := filepath.Join(filepath.Dir(dst), fmt.Sprintf(".%s.page%d.png", filepath.Base(dst), i+1))
@@ -343,19 +376,26 @@ func wordFromPDF(src, dst string, job *convertJob) (noText bool, err error) {
 				lines, err = recognizeText(tmp)
 			}
 			os.Remove(tmp)
+			job.ocr.Store(false)
 			if err != nil {
 				return false, err
 			}
-			for j, l := range lines {
-				lines[j] = mac.NormalizeText(l)
-			}
-			pages[i] = lines
+			pages[i] = normalizeLines(lines)
 		}
 		if len(pages[i]) > 0 {
 			noText = false
 		}
 	}
 	return noText, writeDocxPages(dst, pages)
+}
+
+// normalizeLines maps recognized lines to ordinary characters (Vision can
+// return CJK compatibility forms such as 「⼯」 for 「工」).
+func normalizeLines(lines []string) []string {
+	for i, l := range lines {
+		lines[i] = mac.NormalizeText(l)
+	}
+	return lines
 }
 
 // wordFromImage writes dst as a Word document holding the text recognized
@@ -366,6 +406,7 @@ func wordFromImage(src, dst string) (noText bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	lines = normalizeLines(lines)
 	w, h, err := imageSize(src)
 	if err != nil {
 		return false, err
@@ -431,6 +472,8 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		a.toastStatus(fmt.Sprintf("%d 项成功，%d 项失败", len(paths), failed), time.Now().Add(4*time.Second), true)
 	case job.cancel.Load():
 		a.toastStatus(fmt.Sprintf("已取消 · 已完成 %d 项", len(paths)), time.Now().Add(3*time.Second), false)
+	case noText > 0 && noText == len(paths) && job.unit == "个":
+		a.toastStatus("没有找到文字，Word 文件是空白的", time.Now().Add(4*time.Second), false)
 	case noText > 0 && noText == len(paths):
 		a.toastStatus("没有识别到文字，只放入了图片", time.Now().Add(4*time.Second), false)
 	case len(paths) > 0:

@@ -451,6 +451,11 @@ func TestImagesToPDF(t *testing.T) {
 	if !bytes.HasPrefix(data, []byte("%PDF")) {
 		t.Fatalf("not a PDF: % x", data[:8])
 	}
+	// Completeness: the file must be a fully-formed PDF the moment
+	// ImagesToPDF returns — xref/trailer written before the rename.
+	if !bytes.HasSuffix(bytes.TrimSpace(data), []byte("%%EOF")) {
+		t.Fatal("PDF lacks EOF trailer (context closed after rename?)")
+	}
 	withPool(func() {
 		doc := pdfDocCreateWithURL(uintptr(cfURL(out)))
 		if doc == 0 {
@@ -576,9 +581,12 @@ func makeTestPDF(t *testing.T, path string, pages ...struct {
 		if ctx == 0 {
 			t.Fatalf("makeTestPDF: cannot create %s", path)
 		}
-		// Close writes the xref before release.
-		defer cgPDFCtxClose(ctx)
-		defer cfRelease(ctx)
+		// Close writes the xref before release; one defer so the order
+		// is explicit (two defers would release first, LIFO).
+		defer func() {
+			cgPDFCtxClose(ctx)
+			cfRelease(ctx)
+		}()
 		for _, pg := range pages {
 			box := NSRect{Size: NSSize{Width: pg.w, Height: pg.h}}
 			boxData := cfDataCreate(0, unsafe.Pointer(&box), int(unsafe.Sizeof(box)))
@@ -776,5 +784,106 @@ func TestPDFMissingSource(t *testing.T) {
 	}
 	if err := RenderPDFPage(missing, 1, filepath.Join(dir, "o.png"), FormatPNG); err == nil {
 		t.Fatal("expected RenderPDFPage error for missing file")
+	}
+}
+
+// writeRawPDF builds a one-page PDF with a valid xref table. pageExtra is
+// spliced into the page dictionary (e.g. "/Rotate 90" or "/CropBox […]"),
+// content is the page's drawing stream. Used because CGPDFContext offers
+// no page-dictionary keys beyond the boxes.
+func writeRawPDF(t *testing.T, path, pageExtra, content string) {
+	t.Helper()
+	var b bytes.Buffer
+	var offs []int64
+	obj := func(body string) {
+		offs = append(offs, int64(b.Len()))
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", len(offs), body)
+	}
+	b.WriteString("%PDF-1.4\n")
+	obj("<< /Type /Catalog /Pages 2 0 R >>")
+	obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+	obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] " +
+		pageExtra + " /Resources << >> /Contents 4 0 R >>")
+	obj(fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content))
+	xref := int64(b.Len())
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(offs)+1)
+	for _, o := range offs {
+		fmt.Fprintf(&b, "%010d 00000 n \n", o)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n",
+		len(offs)+1, xref)
+	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRenderPDFPageRotated renders a page carrying /Rotate 90: the output
+// must swap dimensions and the coloured corner must land rotated.
+func TestRenderPDFPageRotated(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "rot.pdf")
+	// Page space 300×200; a red 150×100 rect at the page's bottom-left.
+	// Rotate 90 (clockwise) shows that corner at the top-left of a
+	// 200×300 image.
+	content := "1 1 1 rg 0 0 300 200 re f 1 0 0 rg 0 0 150 100 re f"
+	writeRawPDF(t, src, "/Rotate 90", content)
+
+	out := filepath.Join(dir, "rot.png")
+	if err := RenderPDFPage(src, 1, out, FormatPNG); err != nil {
+		t.Fatal(err)
+	}
+	px, w, h := decodePixels(t, out)
+	if w != 400 || h != 600 {
+		t.Fatalf("rendered size = %dx%d, want 400x600 (swapped)", w, h)
+	}
+	if !nearRGBA(px, 0, 255, 0, 0, 0) {
+		t.Fatalf("top-left = % x, want red", px[:4])
+	}
+	if !nearRGBA(px, (w-1)*4, 255, 255, 255, 0) {
+		t.Fatalf("top-right = % x, want white", px[(w-1)*4:])
+	}
+	bl := (h - 1) * w * 4
+	if !nearRGBA(px, bl, 255, 255, 255, 0) {
+		t.Fatalf("bottom-left = % x, want white", px[bl:])
+	}
+}
+
+// TestRenderPDFPageCropBox renders a page whose CropBox is smaller than
+// its MediaBox: output must be the crop size and content outside the
+// crop must not appear.
+func TestRenderPDFPageCropBox(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "crop.pdf")
+	// MediaBox 300×200 all red; CropBox [50 50 250 150] (200×100) is
+	// filled white with a green 60×40 block at its bottom-left.
+	content := "1 0 0 rg 0 0 300 200 re f " +
+		"1 1 1 rg 50 50 200 100 re f " +
+		"0 1 0 rg 50 50 60 40 re f"
+	writeRawPDF(t, src, "/CropBox [50 50 250 150]", content)
+
+	out := filepath.Join(dir, "crop.png")
+	if err := RenderPDFPage(src, 1, out, FormatPNG); err != nil {
+		t.Fatal(err)
+	}
+	px, w, h := decodePixels(t, out)
+	if w != 400 || h != 200 {
+		t.Fatalf("rendered size = %dx%d, want 400x200 (crop box x2)", w, h)
+	}
+	bl := (h - 1) * w * 4 // crop-bottom-left in image = last row, first px
+	if !nearRGBA(px, bl, 0, 255, 0, 0) {
+		t.Fatalf("crop bottom-left = % x, want green", px[bl:])
+	}
+	if !nearRGBA(px, 0, 255, 255, 255, 0) {
+		t.Fatalf("top-left = % x, want white", px[:4])
+	}
+	tr := (w - 1) * 4
+	if !nearRGBA(px, tr, 255, 255, 255, 0) {
+		t.Fatalf("top-right = % x, want white (media-only red clipped)", px[tr:])
 	}
 }

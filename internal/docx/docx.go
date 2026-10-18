@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Picture is an embedded image. Data holds PNG or JPEG bytes and Ext
@@ -313,7 +314,7 @@ func appendParagraph(b *strings.Builder, text string) {
 		return
 	}
 	b.WriteString(`<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr><w:t xml:space="preserve">`)
-	escapeText(b, text)
+	appendEscapedText(b, text)
 	b.WriteString(`</w:t></w:r></w:p>`)
 }
 
@@ -348,12 +349,40 @@ func writeSectPr(b *strings.Builder) {
 		pageWidth, pageHeight, pageMargin, pageMargin, pageMargin, pageMargin)
 }
 
-// escapeText writes s to b with XML character escaping.
-func escapeText(b *strings.Builder, s string) {
-	if err := xml.EscapeText(b, []byte(s)); err != nil {
-		// strings.Builder never fails; the write is unconditional.
-		b.WriteString(s)
+// appendEscapedText writes s to b sanitized and XML-escaped. Runes that
+// are not legal XML 1.0 characters — controls below 0x20 other than
+// \t \n \r — are dropped; newline sequences (\r\n, \n, \r) become a
+// single space so a paragraph stays on one line; \t is kept. Invalid
+// UTF-8 decodes to U+FFFD, which is kept (Go's decoder also maps the
+// noncharacters U+FFFE/U+FFFF to U+FFFD rather than surfacing them).
+// The sanitized string is escaped with xml.EscapeText; raw text is
+// never written.
+func appendEscapedText(b *strings.Builder, s string) {
+	var clean strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		switch {
+		case r == '\n' || r == '\r':
+			if r == '\r' && i < len(s) && s[i] == '\n' {
+				i++ // \r\n is one line break
+			}
+			clean.WriteByte(' ')
+		case isXMLChar(r):
+			clean.WriteRune(r)
+		}
 	}
+	// strings.Builder never fails; the error return is unreachable.
+	_ = xml.EscapeText(b, []byte(clean.String()))
+}
+
+// isXMLChar reports whether r is a legal XML 1.0 Char:
+// #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF].
+// Callers handle \n and \r before calling, so only \t is kept below 0x20.
+func isXMLChar(r rune) bool {
+	return r == '\t' ||
+		r >= 0x20 && r <= 0xD7FF ||
+		r >= 0xE000 && r != 0xFFFE && r != 0xFFFF
 }
 
 // writeFileAtomic writes data to dst through a temp file in the same

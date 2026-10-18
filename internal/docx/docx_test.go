@@ -619,3 +619,49 @@ func TestWritePagesTextutilRoundTrip(t *testing.T) {
 		pos += i + len(want)
 	}
 }
+
+// TestWriteSanitizesIllegalRunes feeds paragraphs containing XML-1.0
+// illegal runes and invalid UTF-8 through Write and WritePages: the
+// result must stay well-formed XML and keep the visible text.
+func TestWriteSanitizesIllegalRunes(t *testing.T) {
+	paragraphs := []string{
+		"\x00a\x07b\x1fc�",
+		"a\x80b\xffc",
+		"line one\r\nline two\rtab\there",
+	}
+	// \x00 \x07 \x1f are dropped; U+FFFE decodes as RuneError and becomes
+	// U+FFFD like the other invalid bytes.
+	want := []string{"abc�", "a�b�c", "line one line two tab\there"}
+
+	dst := docPath(t)
+	if err := Write(dst, paragraphs, nil); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	parts := unzip(t, dst)
+	assertWellFormed(t, parts)
+	got := paragraphTexts(t, parts["word/document.xml"])
+	if len(got) != len(want) {
+		t.Fatalf("Write paragraphs = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Write paragraph %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	dst = docPath(t)
+	if err := WritePages(dst, [][]string{paragraphs}); err != nil {
+		t.Fatalf("WritePages: %v", err)
+	}
+	parts = unzip(t, dst)
+	assertWellFormed(t, parts)
+	got = paragraphTexts(t, parts["word/document.xml"])
+	if len(got) != len(want) {
+		t.Fatalf("WritePages paragraphs = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("WritePages paragraph %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

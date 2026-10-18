@@ -423,3 +423,65 @@ func TestConvertPDFToImagesPerPage(t *testing.T) {
 		t.Fatalf("a one-page PDF must keep its name: %v", got)
 	}
 }
+
+// Cancelling while a PDF is being read stops between its pages and keeps
+// no half-made document; outputs finished before it stay.
+func TestConvertPDFToWordCancelMidDocument(t *testing.T) {
+	f := fakeConverters(t)
+	f.pageText = [][]string{nil, nil, {"末页"}}
+	a, view, _ := convertShelf(t, "a.pdf", "b.pdf")
+	calls := 0
+	ocr := recognizeText
+	recognizeText = func(p string) ([]string, error) {
+		calls++
+		if calls == 3 { // first page of the second PDF
+			a.conv.job.cancel.Store(true)
+		}
+		return ocr(p)
+	}
+	selectAll(a)
+	view.Frame()
+	if err := view.RightClick("a.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("转换 2 个为", "Word（提取文字）"); err != nil {
+		t.Fatal(err)
+	}
+	if got := outputNames(a); !slices.Equal(got, []string{"a.docx"}) {
+		t.Fatalf("outputs = %v, want only the document finished before cancelling", got)
+	}
+	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 1 {
+		t.Fatalf("a cancelled document must leave nothing behind: %v", entries)
+	}
+	if !strings.HasPrefix(a.status, "已取消") {
+		t.Fatalf("status = %q", a.status)
+	}
+}
+
+// Recognized text comes out in ordinary characters, and a PDF without any
+// text does not claim a picture was put into its Word file.
+func TestConvertWordTextIsNormalized(t *testing.T) {
+	f := fakeConverters(t)
+	f.lines = []string{"⼯作经历"}
+	a, view, _ := convertShelf(t, "shot.png", "scan.pdf")
+	if err := view.RightClick("shot.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("转换为", "Word（识别文字）"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.docText) != 1 || !slices.Equal(f.docText[0], []string{"工作经历"}) {
+		t.Fatalf("image Word text = %v, want the compatibility form normalized", f.docText)
+	}
+	f.lines, f.pageText = nil, [][]string{nil}
+	view.Frame()
+	if err := view.RightClick("scan.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("转换为", "Word（提取文字）"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(a.status, "图片") {
+		t.Fatalf("a text-only PDF document must not mention a picture: %q", a.status)
+	}
+}

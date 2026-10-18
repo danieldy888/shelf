@@ -3313,3 +3313,89 @@ func TestRemoveConvertedCleanupError(t *testing.T) {
 		t.Fatalf("file gone despite failed deletion: %v", err)
 	}
 }
+
+// converted 目录本身是软链接（或普通占位文件）时，绝不跟随它：
+// Open 不在其目标里建目录、不清理目标目录内容，AddConverted 拒绝
+// 通过该软链接的路径，移除项时也不把目标目录里的文件当受管文件删。
+func TestConvertedDirSymlinkNeverManaged(t *testing.T) {
+	target := t.TempDir()
+	treasure := filepath.Join(target, "precious.pdf")
+	if err := os.WriteFile(treasure, []byte("t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 目标目录里再放一个“孤儿”，验证 Open 的孤儿清理绝不进入。
+	stray := filepath.Join(target, "stray.bin")
+	if err := os.WriteFile(stray, []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, imagesDirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, convertedDirName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	// 一条声称产物在（软链接拼出的）converted 里的旧状态。
+	throughLink := filepath.Join(link, "precious.pdf")
+	sf := stateFile{Version: stateVersion, Items: []Item{{
+		ID: "cv", Kind: KindFile, Path: throughLink, Converted: true,
+	}}}
+	data, _ := json.Marshal(sf)
+	if err := os.WriteFile(filepath.Join(root, stateFileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	// 孤儿清理未跟随软链接：目标目录一切原样。
+	for _, p := range []string{treasure, stray} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("cleanup followed symlinked converted dir: %s: %v", p, err)
+		}
+	}
+	// 软链接本身仍在。
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("converted symlink disturbed: %v", err)
+	}
+	// AddConverted 拒绝通过软链接目录的路径。
+	if ids, err := s.AddConverted([]string{throughLink}); err == nil || ids != nil {
+		t.Fatalf("AddConverted through symlinked dir = %v, %v", ids, err)
+	}
+	// 移除声称的转换项不删目标目录里的文件。
+	if err := s.Remove("cv"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(treasure); err != nil {
+		t.Fatalf("file inside symlinked dir treated as managed: %v", err)
+	}
+}
+
+// converted 位置是普通文件（不是目录）时同样降级：Open 成功、占位文件
+// 原样保留、AddConverted 拒绝、孤儿清理不运行。
+func TestConvertedDirOccupiedByFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, imagesDirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	occupier := filepath.Join(root, convertedDirName)
+	if err := os.WriteFile(occupier, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	if _, err := s.AddConverted([]string{filepath.Join(occupier, "x.pdf")}); err == nil {
+		t.Fatal("AddConverted accepted path under non-directory converted")
+	}
+	got, err := os.ReadFile(occupier)
+	if err != nil || string(got) != "mine" {
+		t.Fatalf("occupying file disturbed: %v", err)
+	}
+}

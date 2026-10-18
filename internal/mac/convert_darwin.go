@@ -72,6 +72,9 @@ var (
 	pdfDocGetNumPages   func(doc uintptr) int
 	pdfDocGetPage       func(doc uintptr, page int) uintptr
 	pdfPageGetBoxRect   func(page uintptr, box int32) NSRect
+	pdfPageGetRotation  func(page uintptr) int
+	pdfPageDrawingXform func(page uintptr, box int32, rect NSRect, rotate int32, preserveAspect bool) CGAffineTransform
+	cgCtxClipToRect     func(ctx uintptr, r NSRect)
 
 	// objc_msgSend variants for signatures that move values through the
 	// FP registers, which SyscallN cannot: numberWithDouble: takes a
@@ -155,6 +158,9 @@ func loadConvert() error {
 		purego.RegisterLibFunc(&pdfDocGetNumPages, libCG, "CGPDFDocumentGetNumberOfPages")
 		purego.RegisterLibFunc(&pdfDocGetPage, libCG, "CGPDFDocumentGetPage")
 		purego.RegisterLibFunc(&pdfPageGetBoxRect, libCG, "CGPDFPageGetBoxRect")
+		purego.RegisterLibFunc(&pdfPageGetRotation, libCG, "CGPDFPageGetRotationAngle")
+		purego.RegisterLibFunc(&pdfPageDrawingXform, libCG, "CGPDFPageGetDrawingTransform")
+		purego.RegisterLibFunc(&cgCtxClipToRect, libCG, "CGContextClipToRect")
 		purego.RegisterFunc(&msgDouble, msgSendAddr)
 		purego.RegisterFunc(&msgRetDouble, msgSendAddr)
 		purego.RegisterLibFunc(&cgPDFCtxClose, libCG, "CGPDFContextClose")
@@ -493,9 +499,13 @@ func ImagesToPDF(srcs []string, dst string) (err error) {
 			err = fmt.Errorf("mac: cannot create PDF %s", dst)
 			return
 		}
-		// CGPDFContextClose writes the xref/trailer before release.
-		defer cgPDFCtxClose(ctx)
-		defer cfRelease(ctx)
+		// CGPDFContextClose writes the xref/trailer; it must run BEFORE
+		// the release, so the pair is a single ordered defer — two
+		// defers would release first (LIFO).
+		defer func() {
+			cgPDFCtxClose(ctx)
+			cfRelease(ctx)
+		}()
 		for _, p := range srcs {
 			isrc, e := imageSource(p)
 			if e != nil {
@@ -810,9 +820,10 @@ func PDFText(src string) (pages [][]string, err error) {
 }
 
 // RenderPDFPage renders page (1-based) of the PDF at src to an image file
-// at dst in format, at scale 2 — the page's media box in points times 2
-// pixels (144 dpi) — on a white background, drawn upright. The write is
-// atomic like ConvertImage. Safe on any goroutine.
+// at dst in format, at scale 2 — the page's crop box in points (media box
+// when unset) times 2 pixels (144 dpi), honouring the page's /Rotate — on
+// a white background, drawn upright. The write is atomic like
+// ConvertImage. Safe on any goroutine.
 func RenderPDFPage(src string, page int, dst string, format ImageFormat) (err error) {
 	if err := loadConvert(); err != nil {
 		return err
@@ -844,9 +855,16 @@ func RenderPDFPage(src string, page int, dst string, format ImageFormat) (err er
 			err = fmt.Errorf("mac: page %d out of range", page)
 			return
 		}
-		box := pdfPageGetBoxRect(p, 0) // kCGPDFMediaBox
-		w := int(math.Ceil(box.Size.Width * 2))
-		h := int(math.Ceil(box.Size.Height * 2))
+		// kCGPDFCropBox (1) falls back to the media box when unset; the
+		// rendered size is the crop box after the page's /Rotate.
+		crop := pdfPageGetBoxRect(p, 1)
+		rot := pdfPageGetRotation(p)
+		dw, dh := crop.Size.Width, crop.Size.Height
+		if rot%180 != 0 {
+			dw, dh = dh, dw
+		}
+		w := int(math.Ceil(dw * 2))
+		h := int(math.Ceil(dh * 2))
 		if w <= 0 || h <= 0 {
 			err = fmt.Errorf("mac: bad page box for page %d", page)
 			return
@@ -863,16 +881,20 @@ func RenderPDFPage(src string, page int, dst string, format ImageFormat) (err er
 			return
 		}
 		defer cfRelease(ctx)
-		// White background, then draw the page: PDF space is y-up like
-		// Quartz, so no flip is needed — scale points to the 2× pixels.
 		cgCtxSetFill(ctx, 1, 1, 1, 1)
 		cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: float64(w), Height: float64(h)}})
-		cgCtxConcatCTM(ctx, CGAffineTransform{
-			A:  2,
-			D:  2,
-			Tx: -box.Origin.X * 2,
-			Ty: -box.Origin.Y * 2,
-		})
+		// GetDrawingTransform fits the crop box into the target rect —
+		// shrinking and centering but never upscaling — and applies the
+		// page's /Rotate when rotate is 0. Passing the rotated crop size
+		// in points yields the scale-1 upright mapping; the ×2 pixel
+		// scale is concatenated in front of it.
+		target := NSRect{Size: NSSize{Width: dw, Height: dh}}
+		xform := pdfPageDrawingXform(p, 1, target, 0, false)
+		cgCtxConcatCTM(ctx, CGAffineTransform{A: 2, D: 2})
+		cgCtxConcatCTM(ctx, xform)
+		// Clip to the crop box (in page space, post-transform) so content
+		// bleeding outside it can't paint over the white margin.
+		cgCtxClipToRect(ctx, crop)
 		cgCtxDrawPDFPage(ctx, p)
 		img := cgBitmapCreateImage(ctx)
 		if img == 0 {

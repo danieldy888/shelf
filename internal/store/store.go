@@ -134,14 +134,19 @@ func DefaultRoot() (string, error) {
 // Open creates root/images and root/converted (0700) if needed, takes an
 // exclusive advisory lock on <root>/.lock, and loads state.json. A
 // second process opening the same directory gets ErrLocked and must
-// exit; distinct data directories lock independently. Missing state
-// starts empty; corrupt or wrong-version state returns an error (lock
-// released) and is never overwritten. File/image items whose paths are
-// genuinely nonexistent are dropped; items whose paths exist but cannot
-// be statted (e.g. permission errors) are kept with Missing=true.
-// Leftover files inside <root>/converted that no loaded item references
-// (e.g. from a conversion interrupted before AddConverted) are deleted
-// best-effort; nothing outside <root>/converted is ever touched.
+// exit; distinct data directories lock independently. When the
+// converted path already exists as a symlink or any non-directory entry
+// it is left untouched and everything converted-related is disabled for
+// the session (AddConverted refuses, cleanup skips it) rather than
+// following into a foreign directory. Missing state starts empty;
+// corrupt or wrong-version state returns an error (lock released) and
+// is never overwritten. File/image items whose paths are genuinely
+// nonexistent are dropped; items whose paths exist but cannot be
+// statted (e.g. permission errors) are kept with Missing=true.
+// Leftover files inside a real <root>/converted that no loaded item
+// references (e.g. from a conversion interrupted before AddConverted)
+// are deleted best-effort; nothing outside <root>/converted is ever
+// touched.
 func Open(root string) (*Store, error) {
 	if root == "" {
 		return nil, fmt.Errorf("store: empty root path")
@@ -160,8 +165,20 @@ func Open(root string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(root, imagesDirName), 0o700); err != nil {
 		return nil, fmt.Errorf("store: creating data directories: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, convertedDirName), 0o700); err != nil {
-		return nil, fmt.Errorf("store: creating data directories: %w", err)
+	// converted 位置若已是软链接或其它非目录条目，绝不跟随（不在其
+	// 目标里建目录，也不删其中的文件）：convertedPath、AddConverted
+	// 与孤儿清理随之全部拒绝，转换功能降级但仓库其它部分不受影响。
+	fi, lerr := os.Lstat(filepath.Join(root, convertedDirName))
+	switch {
+	case lerr == nil && !fi.IsDir():
+		// 保持原样：软链接或占位文件绝不跟随、绝不改动。
+	case lerr == nil:
+		// 已是真实目录。
+	default:
+		// 不存在（或无法判定）时交给 MkdirAll 创建/报告错误。
+		if err := os.MkdirAll(filepath.Join(root, convertedDirName), 0o700); err != nil {
+			return nil, fmt.Errorf("store: creating data directories: %w", err)
+		}
 	}
 	lock, err := lockRoot(root)
 	if err != nil {
@@ -300,20 +317,28 @@ func (s *Store) resolveConvertedPath(stored string) string {
 	return filepath.Join(s.convertedDir(), filepath.Base(stored))
 }
 
-// cleanOrphanedConverted deletes files inside <root>/converted that no
-// item references — leftovers from a conversion interrupted between
+// cleanOrphanedConverted deletes unreferenced direct children of
+// <root>/converted — leftovers from a conversion interrupted between
 // writing the file and AddConverted. It runs on Open only, is
-// best-effort (errors are ignored; a future Open retries), and never
-// touches anything outside <root>/converted: subdirectories and their
-// contents are left alone.
+// best-effort (errors are ignored; a future Open retries), and only
+// ever unlinks entries inside a real <root>/converted: if converted is
+// a symlink (or anything but a real directory) cleanup is skipped so a
+// foreign directory's contents are never touched. Only entries that
+// lstat as regular files or symlinks are removed — symlinks are
+// unlinked themselves, never followed — and directories or special
+// files are left alone.
 func (s *Store) cleanOrphanedConverted() {
+	if !s.convertedDirReal() {
+		return
+	}
 	dir := s.convertedDir()
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, ent := range ents {
-		if ent.IsDir() {
+		fi, err := ent.Info() // lstat 语义：软链接按链接本身判定。
+		if err != nil || (!fi.Mode().IsRegular() && fi.Mode()&os.ModeSymlink == 0) {
 			continue
 		}
 		p := filepath.Join(dir, ent.Name())
@@ -1050,11 +1075,23 @@ func (s *Store) managedPath(p string) bool {
 	return insideDir(s.imagesDir(), p)
 }
 
-// convertedPath reports whether p is inside <root>/converted, with the
-// same symlink-resolved semantics as managedPath: removal paths only
-// ever delete converted files we created.
+// convertedPath reports whether p is inside a real <root>/converted,
+// with the same symlink-resolved semantics as managedPath: removal
+// paths only ever delete converted files we created. When the converted
+// path itself is a symlink or anything but a real directory it reports
+// false for every input, so nothing through it is ever treated as
+// managed.
 func (s *Store) convertedPath(p string) bool {
-	return insideDir(s.convertedDir(), p)
+	return s.convertedDirReal() && insideDir(s.convertedDir(), p)
+}
+
+// convertedDirReal reports whether <root>/converted lstats as a real
+// directory. A symlink (or any other entry) there is never followed:
+// AddConverted, cleanup and orphan removal all refuse to operate inside
+// it rather than risk touching a foreign directory's files.
+func (s *Store) convertedDirReal() bool {
+	fi, err := os.Lstat(s.convertedDir())
+	return err == nil && fi.IsDir()
 }
 
 // insideDir reports whether p is inside dir, resolving symlinked
