@@ -1,0 +1,22 @@
+{
+  "user_id": "user-abc",
+  "account_id": "acct-abc",
+  "email": "dev@example.com",
+  "plan_type": "plus",
+  "rate_limit": {
+    "primary_window": {
+      "used_percent": 37,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 7200,
+      "reset_at": 1800000000
+    },
+    "secondary_window": {
+      "used_percent": 12,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 345600,
+      "reset_at": 1800604800
+    }
+  },
+  "credits": null,
+  "additional_rate_limits": []
+}

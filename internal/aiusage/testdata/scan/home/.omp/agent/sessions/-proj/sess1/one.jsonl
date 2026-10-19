@@ -1,0 +1,8 @@
+{"type":"title","v":1,"title":"demo"}
+{"type":"session","version":3,"id":"01a090e5-a1fd-70a0-a816-005e6a3265fb","timestamp":"2026-10-19T10:00:00.000Z","cwd":"/tmp/proj"}
+{"type":"model_change","id":"6f10d269","timestamp":"2026-10-19T10:00:00.100Z","model":"devin/swe-2"}
+{"type":"message","id":"aa000001","parentId":"6f10d269","timestamp":"2026-10-19T10:00:01.000Z","message":{"role":"assistant","provider":"devin","model":"swe-2","content":[{"type":"text","text":"hi"}],"usage":{"input":1000,"output":200,"cacheRead":600,"cacheWrite":0,"totalTokens":1800,"cost":{"input":0.001,"output":0.002,"cacheRead":0.0005,"cacheWrite":0,"total":0.0035}},"timestamp":1792404001000}}
+not a json line at all
+{"type":"message","id":"aa000002","parentId":"aa000001","timestamp":"2026-10-19T10:00:02.000Z","message":{"role":"assistant","provider":"devin","model":"swe-2","usage":{"input":2000,"output":300,"cacheRead":100,"cacheWrite":50,"totalTokens":2450},"timestamp":1792404002000}}
+{"type":"message","id":"aa000003","timestamp":"2026-10-19T10:00:03.000Z","message":{"role":"user","usage":{"input":9,"output":9},"timestamp":1792404003000}}
+{"type":"message","id":"aa000004","timestamp":"2026-10-19T10:00:04.000Z","message":{"role":"assistant","timestamp":1792404004000}}

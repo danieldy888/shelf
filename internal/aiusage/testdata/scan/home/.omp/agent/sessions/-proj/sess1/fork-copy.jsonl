@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"01a0f0f0-2222-3333-4444-555555555555","timestamp":"2026-10-19T10:05:00.000Z","cwd":"/tmp/proj"}
+{"type":"message","id":"aa000001","parentId":"6f10d269","timestamp":"2026-10-19T10:00:01.000Z","message":{"role":"assistant","provider":"devin","model":"swe-2","content":[{"type":"text","text":"hi"}],"usage":{"input":1000,"output":200,"cacheRead":600,"cacheWrite":0,"totalTokens":1800,"cost":{"input":0.001,"output":0.002,"cacheRead":0.0005,"cacheWrite":0,"total":0.0035}},"timestamp":1792404001000}}
