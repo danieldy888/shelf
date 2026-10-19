@@ -67,7 +67,8 @@ func (a *shelf) isLeaving(it store.Item) bool {
 
 // flushLeaving removes the leaving items dropped before cutoff, as the
 // tray's 移除 would: a clipboard capture stays in the clipboard history.
-// Quitting passes a cutoff past every drop.
+// If saving fails the store rolls back; those items stay hidden and are
+// tried again a grace later. Quitting passes a cutoff past every drop.
 func (a *shelf) flushLeaving(cutoff time.Time) {
 	if len(a.leaving) == 0 || a.store == nil {
 		return
@@ -83,8 +84,19 @@ func (a *shelf) flushLeaving(cutoff time.Time) {
 			delete(a.leaving, id)
 		}
 	}
-	if len(gone) > 0 {
-		a.removeFrom(gone, tabTray)
+	if len(gone) == 0 {
+		return
+	}
+	a.removeFrom(gone, tabTray)
+	retry := map[string]bool{}
+	for _, it := range gone {
+		retry[it.ID] = true
+	}
+	now := time.Now()
+	for _, it := range a.store.Items {
+		if retry[it.ID] && !it.OffTray {
+			a.leaving[it.ID] = now
+		}
 	}
 }
 

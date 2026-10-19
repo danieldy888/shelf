@@ -44,7 +44,7 @@ const defaultClipboardLimit = 30
 
 // Default is what a fresh install uses.
 func Default() Settings {
-	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, AutoCheckUpdates: true}
+	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, AutoCheckUpdates: true, RemoveAfterDrag: false}
 }
 
 // Save replaces dir/settings.json with s, atomically.

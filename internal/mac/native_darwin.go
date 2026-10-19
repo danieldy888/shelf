@@ -13,7 +13,9 @@
 // optional drag guard in drag_guard.go, which macOS hands out solely to a
 // process trusted for Accessibility and which stays inactive otherwise. Call
 // Init once on the main thread; every exported function must be called on
-// the main thread (the parent's event loop already is).
+// the main thread (the parent's event loop already is), except the image,
+// PDF and text-recognition functions of convert_darwin.go, which are safe
+// on any goroutine.
 package mac
 
 import (

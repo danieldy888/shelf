@@ -102,3 +102,31 @@ func TestRemoveAfterDragKeepsHistoryAndReAdds(t *testing.T) {
 		t.Fatalf("tray = %v, the re-added file must survive the flush", got)
 	}
 }
+
+// When saving fails the removal is not lost: the item stays off the tray
+// and is removed on the next try a grace later.
+func TestRemoveAfterDragRetriesAFailedSave(t *testing.T) {
+	a, _, _ := convertShelf(t, "a.txt")
+	a.settings.RemoveAfterDrag = true
+	file := a.store.Items[0]
+	dropOut(a, file.ID)
+	if err := os.Chmod(a.store.Root, 0o500); err != nil { // state.json cannot be replaced
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(a.store.Root, 0o700) })
+	a.flushLeaving(time.Now().Add(time.Second))
+	if len(a.store.Items) != 1 || len(trayIDs(a)) != 0 {
+		t.Fatalf("after a failed save: store %d items, tray %v; want kept but hidden", len(a.store.Items), trayIDs(a))
+	}
+	if err := os.Chmod(a.store.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.flushLeaving(time.Now().Add(-leaveGrace))
+	if len(a.store.Items) != 1 {
+		t.Fatal("the retry must wait for another grace")
+	}
+	a.flushLeaving(time.Now().Add(time.Second))
+	if len(a.store.Items) != 0 {
+		t.Fatalf("the retry must remove the item: %v", a.store.Items)
+	}
+}

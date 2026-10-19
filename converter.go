@@ -315,10 +315,16 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	}
 	var roots []string
 	if target == toZip {
+		// Finder-like: 「报告.pdf.zip」, 「my.project 等 3 项.zip」 — a
+		// file keeps its extension in the archive's name.
 		roots = zipRoots(items)
 		names[0] = roots[0]
 		if len(items) > 1 {
-			names[0] = fmt.Sprintf("%s 等 %d 项", convertBaseName(items[0]), len(items))
+			first := filepath.Base(items[0].Path)
+			if items[0].Kind == store.KindImage {
+				first = convertBaseName(items[0])
+			}
+			names[0] = fmt.Sprintf("%s 等 %d 项", first, len(items))
 		}
 	}
 	pdf := isPDF(items[0]) && target != toZip

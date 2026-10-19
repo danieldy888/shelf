@@ -666,3 +666,32 @@ func TestZipCancelLeavesNothing(t *testing.T) {
 		t.Fatalf("a cancelled archive must leave nothing behind: %v", entries)
 	}
 }
+
+// A file that cannot be read halfway through fails the archive and
+// leaves no partial zip behind.
+func TestZipFailureLeavesNothing(t *testing.T) {
+	fakeConverters(t)
+	a, _, _ := convertShelf(t)
+	folder := filepath.Join(t.TempDir(), "资料")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(folder, n), []byte(n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(folder, "b.txt"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.AddFiles([]string{folder}); err != nil {
+		t.Fatal(err)
+	}
+	a.startConvert(slices.Clone(a.store.Items), toZip)
+	if !a.statusErr || !strings.Contains(a.status, "压缩失败") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	}
+	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
+		t.Fatalf("a failed archive must leave nothing behind: %v", entries)
+	}
+}
