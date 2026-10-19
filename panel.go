@@ -209,11 +209,21 @@ func (a *shelf) view(c *ui.Context) {
 		openK = zone.AnimateTo("open", openTarget, ui.Animation{Duration: panelAnimation, Ease: ui.EaseOut})
 		peekK = zone.AnimateTo("peek", peekTarget, ui.Animation{Duration: peekAnimation, Ease: ui.EaseOut})
 	}
-	_, over := ui.DataDragOver(zone, opts)
+	// Shelf's own drag-out never lands back on the shelf: the drop would
+	// add a second item pointing at the same file. Without a target the
+	// drag ends as if cancelled — nothing is added, the panel stays open
+	// and 拖出后从托盘移除 does not fire.
+	accepts := !a.ownDrag
+	var over bool
+	if accepts {
+		_, over = ui.DataDragOver(zone, opts)
+	}
 	if idle {
 		// 空闲态收到内容只入库不展开：那时窗口本就不显示，也无从接受拖放。
-		if drop, ok := ui.DropData(zone, opts); ok {
-			a.receive(drop.Data)
+		if accepts {
+			if drop, ok := ui.DropData(zone, opts); ok {
+				a.receive(drop.Data)
+			}
 		}
 		return
 	}
@@ -295,6 +305,9 @@ func (a *shelf) view(c *ui.Context) {
 			})
 		})
 	})
+	if !accepts {
+		return
+	}
 	if drop, ok := ui.DropData(zone, opts); ok {
 		a.receive(drop.Data)
 		if !a.visible {

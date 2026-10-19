@@ -50,6 +50,9 @@ func (a *shelf) itemTile(c *ui.Context, item store.Item) {
 			// 本应用发起的拖出会话：拖拽监视据此抑制摇晃召唤与篮子。
 			a.ownDrag = true
 			a.takeServiceOwnership()
+			if a.win != nil {
+				a.win.Invalidate() // 下一帧撤掉自身的放入目标
+			}
 			a.dragOutIDs = a.dragOutIDs[:0]
 			for _, it := range a.dragItems(item) {
 				a.dragOutIDs = append(a.dragOutIDs, it.ID)
@@ -171,6 +174,9 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 		row.DragDataFrom(func() transfer.Data {
 			a.ownDrag = true
 			a.takeServiceOwnership()
+			if a.win != nil {
+				a.win.Invalidate() // 下一帧撤掉自身的放入目标
+			}
 			a.dragOutIDs = nil // 剪贴板页是历史：拖出不移除
 			return a.dragOut(item)
 		}, transfer.DragOptions{Operations: transfer.Copy, Done: a.completed})
