@@ -193,10 +193,13 @@ func zipDocx(documentXML string, pic *Picture) ([]byte, error) {
 	if err := add("word/document.xml", documentXML); err != nil {
 		return nil, err
 	}
+	if err := add("word/settings.xml", settingsXML); err != nil {
+		return nil, err
+	}
+	if err := add("word/_rels/document.xml.rels", documentRelsXML(pic)); err != nil {
+		return nil, err
+	}
 	if pic != nil {
-		if err := add("word/_rels/document.xml.rels", documentRelsXML(mediaName)); err != nil {
-			return nil, err
-		}
 		if err := addRaw("word/media/"+mediaName, pic.Data); err != nil {
 			return nil, err
 		}
@@ -214,6 +217,7 @@ func contentTypesXML(pic *Picture) string {
 		`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
 		`<Default Extension="xml" ContentType="application/xml"/>`
 	const overrides = `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+		`<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>` +
 		`<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>` +
 		`<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>` +
 		`</Types>`
@@ -233,13 +237,22 @@ const rootRelsXML = `<Relationships xmlns="http://schemas.openxmlformats.org/pac
 	`<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>` +
 	`</Relationships>`
 
-// documentRelsXML binds rId1, referenced by the drawing's a:blip, to
-// the media file.
-func documentRelsXML(mediaName string) string {
-	return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-		fmt.Sprintf(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/%s"/>`, mediaName) +
+// documentRelsXML binds the settings part and, with a picture, rId1 —
+// referenced by the drawing's a:blip — to the media file.
+func documentRelsXML(pic *Picture) string {
+	var image string
+	if pic != nil {
+		image = fmt.Sprintf(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/%s"/>`, pic.mediaName())
+	}
+	return `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + image +
+		`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>` +
 		`</Relationships>`
 }
+
+// settingsXML sets the default tab stop (half an inch, Word's own):
+// without it Pages gives every tab zero width.
+const settingsXML = `<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+	`<w:defaultTabStop w:val="720"/></w:settings>`
 
 // corePropsXML stamps the file as produced by Shelf.
 func corePropsXML(now time.Time) string {
@@ -306,16 +319,26 @@ func pagesDocumentXML(pages [][]string) string {
 }
 
 // appendParagraph writes one w:p holding text; an empty text produces
-// an empty paragraph. The East Asian font hint keeps Chinese readable
-// in Word.
+// an empty paragraph. A tab becomes <w:tab/> (inside w:t Word and Pages
+// do not treat it as one). The East Asian font hint keeps Chinese
+// readable in Word.
 func appendParagraph(b *strings.Builder, text string) {
 	if text == "" {
 		b.WriteString(`<w:p/>`)
 		return
 	}
-	b.WriteString(`<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr><w:t xml:space="preserve">`)
-	appendEscapedText(b, text)
-	b.WriteString(`</w:t></w:r></w:p>`)
+	b.WriteString(`<w:p><w:r><w:rPr><w:rFonts w:eastAsia="PingFang SC"/></w:rPr>`)
+	for i, seg := range strings.Split(text, "\t") {
+		if i > 0 {
+			b.WriteString(`<w:tab/>`)
+		}
+		if seg != "" {
+			b.WriteString(`<w:t xml:space="preserve">`)
+			appendEscapedText(b, seg)
+			b.WriteString(`</w:t>`)
+		}
+	}
+	b.WriteString(`</w:r></w:p>`)
 }
 
 // appendPageBreak writes the paragraph that ends the current page.
@@ -352,7 +375,8 @@ func writeSectPr(b *strings.Builder) {
 // appendEscapedText writes s to b sanitized and XML-escaped. Runes that
 // are not legal XML 1.0 characters — controls below 0x20 other than
 // \t \n \r — are dropped; newline sequences (\r\n, \n, \r) become a
-// single space so a paragraph stays on one line; \t is kept. Invalid
+// single space so a paragraph stays on one line. (appendParagraph has
+// already turned tabs into <w:tab/>.) Invalid
 // UTF-8 decodes to U+FFFD, which is kept (Go's decoder also maps the
 // noncharacters U+FFFE/U+FFFF to U+FFFD rather than surfacing them).
 // The sanitized string is escaped with xml.EscapeText; raw text is

@@ -887,3 +887,76 @@ func TestRenderPDFPageCropBox(t *testing.T) {
 		t.Fatalf("top-right = % x, want white (media-only red clipped)", px[tr:])
 	}
 }
+
+// redOverBlue writes a w×h image (red top half, blue bottom half) to
+// path as uti with the given EXIF orientation.
+func redOverBlue(t *testing.T, path string, w, h int, uti string, orientation int) {
+	t.Helper()
+	img := renderFixture(t, w, h, func(ctx uintptr) {
+		cgCtxSetFill(ctx, 1, 0, 0, 1)
+		cgCtxFillRect(ctx, NSRect{Origin: NSPoint{Y: float64(h / 2)}, Size: NSSize{Width: float64(w), Height: float64(h / 2)}})
+		cgCtxSetFill(ctx, 0, 0, 1, 1)
+		cgCtxFillRect(ctx, NSRect{Size: NSSize{Width: float64(w), Height: float64(h / 2)}})
+	})
+	defer cfRelease(img)
+	writeEncoded(t, path, img, uti, orientation)
+}
+
+// TestThumbnailReadsHEICUpright: Go cannot decode HEIC, so the tray's
+// thumbnails for it come from ImageIO — scaled to the cap and upright.
+func TestThumbnailReadsHEICUpright(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "rot6.heic")
+	// Stored 400×200 red over blue; orientation 6 shows it 200×400 with
+	// blue on the left.
+	redOverBlue(t, src, 400, 200, "public.heic", 6)
+	thumb, err := Thumbnail(src, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := thumb.Bounds(); b.Dx() != 40 || b.Dy() != 80 {
+		t.Fatalf("thumbnail = %v, want 40×80 (upright, longer side 80)", b)
+	}
+	left, right := thumb.RGBAAt(5, 40), thumb.RGBAAt(34, 40)
+	if left.B < 150 || left.R > 100 || right.R < 150 || right.B > 100 {
+		t.Fatalf("thumbnail not upright: left %v right %v", left, right)
+	}
+}
+
+// TestResizeImageCapsTheLongerSideNeverEnlarges covers both sides of
+// the cap: a large picture shrinks to it, upright, and a small one keeps
+// its own size.
+func TestResizeImageCapsTheLongerSideNeverEnlarges(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.jpg")
+	redOverBlue(t, big, 1200, 600, "public.jpeg", 6)
+	out := filepath.Join(dir, "small.jpg")
+	if err := ResizeImage(big, out, FormatJPEG, 300); err != nil {
+		t.Fatal(err)
+	}
+	if o := orientationOf(t, out); o > 1 {
+		t.Fatalf("output still carries orientation %d", o)
+	}
+	px, w, h := decodePixels(t, out)
+	if w != 150 || h != 300 {
+		t.Fatalf("resized = %dx%d, want 150x300", w, h)
+	}
+	if mid := (h/2*w + 5) * 4; px[mid+2] < 150 || px[mid] > 100 {
+		t.Fatalf("resized left edge = % x, want blue (upright)", px[mid:mid+4])
+	}
+
+	tiny := filepath.Join(dir, "tiny.png")
+	redOverBlue(t, tiny, 64, 32, "public.png", 0)
+	same := filepath.Join(dir, "same.png")
+	if err := ResizeImage(tiny, same, FormatPNG, 300); err != nil {
+		t.Fatal(err)
+	}
+	if _, w, h := decodePixels(t, same); w != 64 || h != 32 {
+		t.Fatalf("small image became %dx%d, want its own 64x32", w, h)
+	}
+}

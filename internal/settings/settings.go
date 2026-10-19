@@ -33,6 +33,9 @@ type Settings struct {
 	// AutoCheckUpdates checks the GitHub release feed for a newer version
 	// in the background; it is the app's only network access.
 	AutoCheckUpdates bool `json:"autoCheckUpdates"`
+	// RemoveAfterDrag takes an item off the tray once it was dragged out
+	// and dropped; pinned items stay.
+	RemoveAfterDrag bool `json:"removeAfterDrag"`
 }
 
 // defaultClipboardLimit is the clipboard text history cap a fresh

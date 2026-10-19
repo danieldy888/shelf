@@ -3,7 +3,9 @@
 package main
 
 import (
+	"archive/zip"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,19 +34,24 @@ type convertFakes struct {
 	pageText [][]string
 	rendered []int
 	docPages [][][]string
+	// Resizing: the longer-side caps and formats asked for, and the
+	// pixel size every image reports.
+	resized []int
+	size    [2]int
 }
 
 func fakeConverters(t *testing.T) *convertFakes {
 	t.Helper()
 	f := &convertFakes{}
 	oImage, oToPDF, oOCR, oSize := convertImage, imagesToPDF, recognizeText, imageSize
-	oCount, oText, oRender := pdfPageCount, pdfText, renderPDFPage
+	oCount, oText, oRender, oResize := pdfPageCount, pdfText, renderPDFPage, resizeImage
 	oDocx, oPages, oWork, oDispatch := writeDocx, writeDocxPages, convertWork, convertDispatch
 	t.Cleanup(func() {
 		convertImage, imagesToPDF, recognizeText, imageSize = oImage, oToPDF, oOCR, oSize
-		pdfPageCount, pdfText, renderPDFPage = oCount, oText, oRender
+		pdfPageCount, pdfText, renderPDFPage, resizeImage = oCount, oText, oRender, oResize
 		writeDocx, writeDocxPages, convertWork, convertDispatch = oDocx, oPages, oWork, oDispatch
 	})
+	f.size = [2]int{40, 20}
 	convertImage = func(src, dst string, format mac.ImageFormat) error {
 		if f.onConver != nil {
 			f.onConver()
@@ -60,7 +67,12 @@ func fakeConverters(t *testing.T) *convertFakes {
 		return os.WriteFile(dst, []byte("%PDF"), 0o600)
 	}
 	recognizeText = func(string) ([]string, error) { return slices.Clone(f.lines), nil }
-	imageSize = func(string) (int, int, error) { return 40, 20, nil }
+	imageSize = func(string) (int, int, error) { return f.size[0], f.size[1], nil }
+	resizeImage = func(src, dst string, format mac.ImageFormat, px int) error {
+		f.resized = append(f.resized, px)
+		f.formats = append(f.formats, format)
+		return os.WriteFile(dst, []byte("s"), 0o600)
+	}
 	pdfPageCount = func(string) (int, error) { return f.pages, nil }
 	pdfText = func(string) ([][]string, error) {
 		out := make([][]string, len(f.pageText))
@@ -483,5 +495,174 @@ func TestConvertWordTextIsNormalized(t *testing.T) {
 	}
 	if strings.Contains(a.status, "图片") {
 		t.Fatalf("a text-only PDF document must not mention a picture: %q", a.status)
+	}
+}
+
+// Resizing offers only the sizes that would make the pictures smaller,
+// keeps JPEG/PNG/HEIC as they are (other formats become JPEG), and
+// reports how much smaller the files got.
+func TestResizeImages(t *testing.T) {
+	f := fakeConverters(t)
+	f.size = [2]int{2000, 1000}
+	a, view, paths := convertShelf(t, "a.png", "b.webp")
+	selectAll(a)
+	view.Frame()
+	if err := view.RightClick("a.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("缩小 2 张图片", "大（长边 2560 像素）"); err == nil && len(f.resized) > 0 {
+		t.Fatal("a size larger than every picture must not run")
+	}
+	view.CloseMenu()
+	if err := view.RightClick("a.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("缩小 2 张图片", "中（长边 1600 像素）"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.resized, []int{1600, 1600}) || !slices.Equal(f.formats, []mac.ImageFormat{mac.FormatPNG, mac.FormatJPEG}) {
+		t.Fatalf("resized %v as %v, want 1600 px as PNG then JPEG", f.resized, f.formats)
+	}
+	if got := outputNames(a); !slices.Equal(got, []string{"a 1600px.png", "b 1600px.jpg"}) {
+		t.Fatalf("outputs = %v", got)
+	}
+	// The originals are one byte each ("x"), the outputs one byte too.
+	if a.status != "已缩小 2 张 · 2 字节 → 2 字节" {
+		t.Fatalf("status = %q", a.status)
+	}
+	for _, p := range paths {
+		if b, err := os.ReadFile(p); err != nil || string(b) != "x" {
+			t.Fatalf("original %s touched: %q %v", p, b, err)
+		}
+	}
+
+	f.size = [2]int{640, 480}
+	view.Frame()
+	if err := view.RightClick("a.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("缩小 2 张图片", "小（长边 800 像素）"); err == nil && len(f.resized) > 2 {
+		t.Fatal("pictures already within every size must not be resized")
+	}
+}
+
+// readZip lists an archive's entries: name → contents (a link's target),
+// with the mode of each.
+func readZip(t *testing.T, p string) (map[string]string, map[string]os.FileMode) {
+	t.Helper()
+	zr, err := zip.OpenReader(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	files, modes := map[string]string{}, map[string]os.FileMode{}
+	for _, zf := range zr.File {
+		rc, err := zf.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[zf.Name], modes[zf.Name] = string(b), zf.Mode()
+	}
+	return files, modes
+}
+
+// Zipping a folder and files together keeps the folder's structure,
+// stores links as links, leaves .DS_Store out, renames a clashing name
+// instead of overwriting it, and selects the archive.
+func TestZipFilesAndFolders(t *testing.T) {
+	fakeConverters(t)
+	a, view, _ := convertShelf(t, "报告.pdf")
+	project := filepath.Join(t.TempDir(), "项目")
+	other := filepath.Join(t.TempDir(), "报告.pdf")
+	for p, body := range map[string]string{
+		filepath.Join(project, "说明.txt"):         "说明",
+		filepath.Join(project, "src", "main.go"): "package main",
+		filepath.Join(project, ".DS_Store"):      "finder",
+		filepath.Join(project, "src", "run.sh"):  "#!/bin/sh",
+		other:                                    "另一份",
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(project, "src", "run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("说明.txt", filepath.Join(project, "链接")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.AddFiles([]string{other, project}); err != nil {
+		t.Fatal(err)
+	}
+	selectAll(a)
+	view.Frame()
+	if err := view.RightClick("项目"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("压缩 3 项为 zip"); err != nil {
+		t.Fatal(err)
+	}
+	if got := outputNames(a); !slices.Equal(got, []string{"项目 等 3 项.zip"}) {
+		t.Fatalf("outputs = %v", got)
+	}
+	if a.selection.count() != 1 || !a.selection.has(a.store.Items[0].ID) {
+		t.Fatal("the archive must be selected")
+	}
+	if !strings.HasPrefix(a.status, "已压缩") {
+		t.Fatalf("status = %q", a.status)
+	}
+	files, modes := readZip(t, a.store.Items[0].Path)
+	want := map[string]string{
+		"项目/":            "",
+		"项目/说明.txt":      "说明",
+		"项目/src/":        "",
+		"项目/src/main.go": "package main",
+		"项目/src/run.sh":  "#!/bin/sh",
+		"项目/链接":          "说明.txt",
+		"报告.pdf":         "另一份",
+		"报告 2.pdf":       "x",
+	}
+	if len(files) != len(want) {
+		t.Fatalf("entries = %v, want %v", files, want)
+	}
+	for name, body := range want {
+		if got, ok := files[name]; !ok || got != body {
+			t.Fatalf("entry %q = %q (present %v), want %q; all: %v", name, got, ok, body, files)
+		}
+	}
+	if modes["项目/链接"]&os.ModeSymlink == 0 {
+		t.Fatal("a link must be stored as a link")
+	}
+	if modes["项目/src/run.sh"].Perm() != 0o755 {
+		t.Fatalf("run.sh mode = %v, want executable", modes["项目/src/run.sh"])
+	}
+	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 1 {
+		t.Fatalf("only the archive may be left in converted/: %v", entries)
+	}
+}
+
+// Cancelling a zip leaves no partial archive behind.
+func TestZipCancelLeavesNothing(t *testing.T) {
+	fakeConverters(t)
+	a, _, _ := convertShelf(t, "a.txt", "b.txt")
+	items := slices.Clone(a.store.Items)
+	convertWork = func(fn func()) {
+		a.conv.job.cancel.Store(true)
+		fn()
+	}
+	a.startConvert(items, toZip)
+	if len(outputNames(a)) != 0 {
+		t.Fatalf("a cancelled archive must not reach the tray: %v", outputNames(a))
+	}
+	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
+		t.Fatalf("a cancelled archive must leave nothing behind: %v", entries)
 	}
 }

@@ -254,10 +254,13 @@ func (a *shelf) removeExcludedApp(bundleID string) {
 // clipboard page keeps it and only its own 移除/清空 truly deletes —
 // while every other item is deleted outright. On the clipboard page all
 // of them are deleted.
-func (a *shelf) remove(items []store.Item) {
+func (a *shelf) remove(items []store.Item) { a.removeFrom(items, a.tab) }
+
+// removeFrom is remove as done from page tab.
+func (a *shelf) removeFrom(items []store.Item, tab int) {
 	var hide, del []string
 	for _, it := range items {
-		if a.tab == tabTray && it.Source == store.SourceClipboard {
+		if tab == tabTray && it.Source == store.SourceClipboard {
 			hide = append(hide, it.ID)
 		} else {
 			del = append(del, it.ID)
@@ -316,17 +319,29 @@ func (a *shelf) toggleQuickLook() {
 	a.quickLook(paths)
 }
 
-// dragOut is what dragging item carries: every selected item when item is
-// part of a multi-item selection, otherwise item alone.
-func (a *shelf) dragOut(item store.Item) transfer.Data {
+// dragItems is what dragging item carries: every selected item still on
+// disk when item is part of a multi-item selection, otherwise item alone.
+func (a *shelf) dragItems(item store.Item) []store.Item {
 	if !a.selection.has(item.ID) || a.selection.count() < 2 {
-		return a.dragData(item)
+		return []store.Item{item}
+	}
+	var items []store.Item
+	for _, it := range a.selection.chosen(a.visibleItems()) {
+		if !it.Missing {
+			items = append(items, it)
+		}
+	}
+	return items
+}
+
+// dragOut is the transfer for dragging item (see dragItems).
+func (a *shelf) dragOut(item store.Item) transfer.Data {
+	items := a.dragItems(item)
+	if len(items) == 1 {
+		return a.dragData(items[0])
 	}
 	var all []transfer.Item
-	for _, it := range a.selection.chosen(a.visibleItems()) {
-		if it.Missing {
-			continue
-		}
+	for _, it := range items {
 		all = append(all, a.dragData(it).Items()...)
 	}
 	if len(all) == 0 {

@@ -142,7 +142,7 @@ func orientImage(src *image.NRGBA, o int) *image.NRGBA {
 	return dst
 }
 
-// decodeThumb 解码图片文件、按最长边 80 降采样，并按 JPEG EXIF
+// decodeThumb 解码图片文件、按最长边 thumbPx 降采样，并按 JPEG EXIF
 // Orientation 把缩略图摆正；失败返回 nil。
 // 尺寸检查通过后才完整解码；后台降采样，不把原图常驻 GPU；
 // 方向修正作用在降采样后的小图上，不生成全尺寸方向副本。
@@ -169,11 +169,11 @@ func decodeThumb(path string) *image.NRGBA {
 	}
 	w, h := cfg.Width, cfg.Height
 	if w >= h {
-		h = max(1, h*80/w)
-		w = 80
+		h = max(1, h*thumbPx/w)
+		w = thumbPx
 	} else {
-		w = max(1, w*80/h)
-		h = 80
+		w = max(1, w*thumbPx/h)
+		h = thumbPx
 	}
 	thumb := image.NewNRGBA(image.Rect(0, 0, w, h))
 	draw.ApproxBiLinear.Scale(thumb, thumb.Bounds(), img, img.Bounds(), draw.Src, nil)

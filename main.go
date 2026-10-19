@@ -86,6 +86,7 @@ func main() {
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
+		a.flushLeaving(time.Now().Add(time.Second)) // dragged-out items leave for good
 		a.store.Close()
 	})
 	mygo.App.WhenReady(func() {
@@ -146,7 +147,7 @@ func (a *shelf) ready(show bool) {
 	a.np = &nowPlayingModule{host: a}
 	a.modules = append(a.modules, a.np)
 	a.conv = &converter{host: a}
-	a.modules = append(a.modules, a.conv)
+	a.modules = append(a.modules, a.conv, &leavingModule{host: a})
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。

@@ -103,8 +103,8 @@ func paragraphTexts(t *testing.T, documentXML []byte) []string {
 }
 
 // paragraphInfos parses document.xml into per-paragraph records, in
-// order; runs inside a paragraph are concatenated and a
-// <w:br w:type="page"/> inside a run sets pageBreak.
+// order; runs inside a paragraph are concatenated, <w:tab/> reads as a
+// tab and a <w:br w:type="page"/> inside a run sets pageBreak.
 func paragraphInfos(t *testing.T, documentXML []byte) []paraInfo {
 	t.Helper()
 	const wNS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -136,6 +136,8 @@ func paragraphInfos(t *testing.T, documentXML []byte) []paraInfo {
 				}
 			case e.Name.Space == wNS && e.Name.Local == "t":
 				inT = true
+			case inP && e.Name.Space == wNS && e.Name.Local == "tab":
+				text.WriteByte('\t')
 			}
 		case xml.EndElement:
 			switch {
@@ -148,7 +150,9 @@ func paragraphInfos(t *testing.T, documentXML []byte) []paraInfo {
 			}
 		case xml.CharData:
 			if inP && inT {
-				text.Write(e)
+				// A raw tab inside w:t is not a tab to Word or Pages
+				// (Pages drops it); only <w:tab/> is.
+				text.Write(bytes.ReplaceAll(e, []byte("\t"), nil))
 			}
 		}
 	}
@@ -297,9 +301,6 @@ func TestWriteTextParagraphs(t *testing.T) {
 		if strings.HasPrefix(name, "word/media/") {
 			t.Errorf("text-only document contains media part %s", name)
 		}
-	}
-	if _, ok := parts["word/_rels/document.xml.rels"]; ok {
-		t.Error("text-only document should not need document.xml.rels")
 	}
 }
 
@@ -524,8 +525,52 @@ func TestWritePagesBreakPositions(t *testing.T) {
 			t.Errorf("text-only document contains media part %s", name)
 		}
 	}
-	if _, ok := parts["word/_rels/document.xml.rels"]; ok {
-		t.Error("WritePages document should not need document.xml.rels")
+}
+
+// Tabs need a default tab stop: without one Pages draws every tab with
+// zero width, so 「Tab\there」 reads 「Tabhere」. Both writers must link
+// a settings part that defines it.
+func TestTabsHaveADefaultTabStop(t *testing.T) {
+	for name, write := range map[string]func(string) error{
+		"Write":      func(dst string) error { return Write(dst, []string{"a\tb"}, nil) },
+		"WritePages": func(dst string) error { return WritePages(dst, [][]string{{"a\tb"}}) },
+	} {
+		dst := docPath(t)
+		if err := write(dst); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		parts := unzip(t, dst)
+		assertWellFormed(t, parts)
+		var rels struct {
+			Rels []struct {
+				Type   string `xml:"Type,attr"`
+				Target string `xml:"Target,attr"`
+			} `xml:"Relationship"`
+		}
+		if err := xml.Unmarshal(parts["word/_rels/document.xml.rels"], &rels); err != nil {
+			t.Fatalf("%s: document.xml.rels: %v", name, err)
+		}
+		target := ""
+		for _, r := range rels.Rels {
+			if strings.HasSuffix(r.Type, "/relationships/settings") {
+				target = r.Target
+			}
+		}
+		settings, ok := parts["word/"+target]
+		if target == "" || !ok {
+			t.Fatalf("%s: no settings part linked from the document (%v)", name, keys(parts))
+		}
+		var s struct {
+			Stop struct {
+				Val int `xml:"val,attr"`
+			} `xml:"defaultTabStop"`
+		}
+		if err := xml.Unmarshal(settings, &s); err != nil || s.Stop.Val <= 0 {
+			t.Fatalf("%s: default tab stop = %d (%v), want > 0", name, s.Stop.Val, err)
+		}
+		if !bytes.Contains(parts["[Content_Types].xml"], []byte(`PartName="/word/`+target+`"`)) {
+			t.Fatalf("%s: the settings part has no content type", name)
+		}
 	}
 }
 

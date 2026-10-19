@@ -289,7 +289,10 @@ func goBytes(data id) []byte {
 	return append([]byte(nil), unsafe.Slice(*(**byte)(unsafe.Pointer(&p)), n)...)
 }
 
-var poolPushFn, poolPopFn uintptr
+var (
+	poolPushFn, poolPopFn uintptr
+	poolOnce              sync.Once
+)
 
 // withPool runs fn inside an autorelease pool on the calling thread, as
 // internal/darwin does: the pool belongs to the thread that pushed it.
@@ -305,17 +308,20 @@ func withPool(fn func()) {
 // Init opens the Objective-C runtime and the frameworks this package uses.
 // Call it once on the main thread before the other functions; they call it
 // lazily themselves too, so calling Init first only surfaces the error
-// early. It installs no monitors, event taps or observers and requests no
-// permissions.
+// early. Safe from any goroutine: the conversion and thumbnail workers
+// reach it through withPool. It installs no monitors, event taps or
+// observers and requests no permissions.
 func Init() error {
 	load()
-	if loadErr == nil {
-		poolPushFn, _ = purego.Dlsym(libObjC, "objc_autoreleasePoolPush")
-		poolPopFn, _ = purego.Dlsym(libObjC, "objc_autoreleasePoolPop")
-		if poolPushFn == 0 || poolPopFn == 0 {
-			loadErr = errors.New("mac: autorelease pool entry points missing")
+	poolOnce.Do(func() {
+		if loadErr == nil {
+			poolPushFn, _ = purego.Dlsym(libObjC, "objc_autoreleasePoolPush")
+			poolPopFn, _ = purego.Dlsym(libObjC, "objc_autoreleasePoolPop")
+			if poolPushFn == 0 || poolPopFn == 0 {
+				loadErr = errors.New("mac: autorelease pool entry points missing")
+			}
 		}
-	}
+	})
 	return loadErr
 }
 

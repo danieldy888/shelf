@@ -5,9 +5,11 @@ package mac
 import (
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -90,6 +92,7 @@ var (
 	kImgPropDPIHeight   id
 	kThumbWithTransform id
 	kThumbCreateAlways  id
+	kThumbMaxPixelSize  id
 	kDstLossyQuality    id
 	kPDFCtxMediaBox     id
 
@@ -176,6 +179,7 @@ func loadConvert() error {
 			"kCGImagePropertyDPIHeight":                    &kImgPropDPIHeight,
 			"kCGImageSourceCreateThumbnailWithTransform":   &kThumbWithTransform,
 			"kCGImageSourceCreateThumbnailFromImageAlways": &kThumbCreateAlways,
+			"kCGImageSourceThumbnailMaxPixelSize":          &kThumbMaxPixelSize,
 			"kCGImageDestinationLossyCompressionQuality":   &kDstLossyQuality,
 			"kCGPDFContextMediaBox":                        &kPDFCtxMediaBox,
 		} {
@@ -377,6 +381,19 @@ func atomicTemp(dir string) (path string, err error) {
 	return p, err
 }
 
+// formatUTI is the ImageIO type identifier format encodes as.
+func formatUTI(format ImageFormat) (id, error) {
+	switch format {
+	case FormatJPEG:
+		return utiJPEG, nil
+	case FormatPNG:
+		return utiPNG, nil
+	case FormatHEIC:
+		return utiHEIC, nil
+	}
+	return 0, fmt.Errorf("mac: unknown image format %d", int(format))
+}
+
 // ConvertImage writes src — any format ImageIO reads — to dst in format.
 // The output's pixels are the visually upright image: any EXIF orientation
 // is baked into the bitmap and the result carries no orientation flag.
@@ -386,16 +403,9 @@ func ConvertImage(src, dst string, format ImageFormat) (err error) {
 	if err := loadConvert(); err != nil {
 		return err
 	}
-	var uti id
-	switch format {
-	case FormatJPEG:
-		uti = utiJPEG
-	case FormatPNG:
-		uti = utiPNG
-	case FormatHEIC:
-		uti = utiHEIC
-	default:
-		return fmt.Errorf("mac: unknown image format %d", int(format))
+	uti, err := formatUTI(format)
+	if err != nil {
+		return err
 	}
 
 	withPool(func() {
@@ -684,6 +694,99 @@ func ImageSize(src string) (w, h int, err error) {
 		}
 	})
 	return w, h, err
+}
+
+// scaledImage returns the source's first image upright and scaled so its
+// longer side is at most maxPx; a smaller image keeps its size. Caller
+// CFReleases it; 0 when the source cannot be decoded.
+func scaledImage(src uintptr, maxPx int) uintptr {
+	opts := newDict(kThumbWithTransform, nsBool(true), kThumbCreateAlways, nsBool(true),
+		kThumbMaxPixelSize, nsFloat(float64(maxPx)))
+	return imgSrcCreateThumbAt(src, 0, uintptr(opts))
+}
+
+// Thumbnail decodes src — any format ImageIO reads, HEIC and TIFF
+// included — upright, with its longer side at most maxPx, as
+// premultiplied RGBA. Safe on any goroutine.
+func Thumbnail(src string, maxPx int) (thumb *image.RGBA, err error) {
+	if maxPx < 1 {
+		return nil, fmt.Errorf("mac: bad thumbnail size %d", maxPx)
+	}
+	if err := loadConvert(); err != nil {
+		return nil, err
+	}
+	withPool(func() {
+		isrc, e := imageSource(src)
+		if e != nil {
+			err = e
+			return
+		}
+		defer cfRelease(isrc)
+		img := scaledImage(isrc, maxPx)
+		if img == 0 {
+			err = fmt.Errorf("mac: cannot decode image %s", src)
+			return
+		}
+		defer cfRelease(img)
+		w, h := cgImgGetWidth(img), cgImgGetHeight(img)
+		if w <= 0 || h <= 0 {
+			err = fmt.Errorf("mac: empty image %s", src)
+			return
+		}
+		space := cgColorSpaceDeviceRGB()
+		if space == 0 {
+			err = errors.New("mac: no RGB color space")
+			return
+		}
+		defer cfRelease(space)
+		out := image.NewRGBA(image.Rect(0, 0, w, h))
+		// kCGImageAlphaPremultipliedLast (1) | kCGBitmapByteOrder32Big
+		// (4<<12): byte order R, G, B, A — image.RGBA's layout. The
+		// context draws into out.Pix and is released before returning.
+		ctx := cgBitmapCreate(unsafe.Pointer(&out.Pix[0]), w, h, 8, out.Stride, space, uint32(1|4<<12))
+		if ctx == 0 {
+			err = fmt.Errorf("mac: cannot draw image %s", src)
+			return
+		}
+		cgCtxDrawImage(ctx, NSRect{Size: NSSize{Width: float64(w), Height: float64(h)}}, img)
+		cfRelease(ctx)
+		runtime.KeepAlive(out.Pix)
+		thumb = out
+	})
+	return thumb, err
+}
+
+// ResizeImage writes src to dst in format, upright and scaled so its
+// longer side is at most maxPx; a smaller image is re-encoded at its own
+// size, never enlarged. Atomic like ConvertImage; src is never modified.
+// Safe on any goroutine.
+func ResizeImage(src, dst string, format ImageFormat, maxPx int) (err error) {
+	if maxPx < 1 {
+		return fmt.Errorf("mac: bad size %d", maxPx)
+	}
+	if err := loadConvert(); err != nil {
+		return err
+	}
+	uti, err := formatUTI(format)
+	if err != nil {
+		return err
+	}
+	withPool(func() {
+		isrc, e := imageSource(src)
+		if e != nil {
+			err = e
+			return
+		}
+		defer cfRelease(isrc)
+		img := scaledImage(isrc, maxPx)
+		if img == 0 {
+			err = fmt.Errorf("mac: cannot decode image %s", src)
+			return
+		}
+		defer cfRelease(img)
+		err = encodeCGImage(img, uti, format, dst)
+	})
+	return err
 }
 
 // --- PDF reading and rendering -----------------------------------------

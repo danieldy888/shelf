@@ -440,8 +440,8 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 	})
 }
 
-// settingsTraySection: 自动清理旧内容 and 刘海显示正在播放 — the same
-// setters as the tray's 自动清理 submenu and 正在播放 item.
+// settingsTraySection: 自动清理旧内容, 拖出后从托盘移除 and 刘海显示正在
+// 播放 — the same setters as the tray's 自动清理 submenu and 正在播放 item.
 func (a *shelf) settingsTraySection(c *ui.Context) {
 	settingsSection(c, "托盘", a.settingsBroken, func() {
 		days := max(0, a.settings.RetentionDays)
@@ -457,6 +457,9 @@ func (a *shelf) settingsTraySection(c *ui.Context) {
 			}
 		})
 		settingsSep(c, "retention")
+		settingsToggleCap(c, "dragout", "拖出后从托盘移除", "置顶的项目会保留", setInk3,
+			a.settings.RemoveAfterDrag, a.setRemoveAfterDrag)
+		settingsSep(c, "dragout")
 		settingsToggle(c, "np", "刘海显示正在播放", a.settings.IslandNowPlaying, func(on bool) {
 			a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = on })
 		})

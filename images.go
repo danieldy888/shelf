@@ -20,6 +20,13 @@ import (
 // maxConcurrentThumbs 限制同时在后台解码的缩略图数，避免多张大图同时解码。
 const maxConcurrentThumbs = 2
 
+// thumbPx is a thumbnail's longer side in pixels.
+const thumbPx = 80
+
+// goDecodable are the picture extensions decodeThumb reads with Go's
+// decoders; every other picture in imageExts goes through ImageIO.
+var goDecodable = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".bmp": true}
+
 func (a *shelf) thumbnail(item store.Item) *ui.Bitmap {
 	if item.Kind == store.KindText || item.Missing {
 		return nil
@@ -40,8 +47,16 @@ func (a *shelf) thumbnail(item store.Item) *ui.Bitmap {
 	go func() {
 		var b *ui.Bitmap
 		ext := strings.ToLower(filepath.Ext(item.Path))
-		if item.Kind == store.KindImage || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".bmp" {
+		picture := item.Kind == store.KindImage || imageExts[ext]
+		if goDecodable[ext] || item.Kind == store.KindImage {
 			if img := decodeThumb(item.Path); img != nil {
+				b = ui.NewBitmap(img)
+			}
+		}
+		// HEIC, TIFF, AVIF and pictures too large for decodeThumb: ImageIO
+		// decodes them downscaled and upright.
+		if b == nil && picture {
+			if img, err := mac.Thumbnail(item.Path, thumbPx); err == nil {
 				b = ui.NewBitmap(img)
 			}
 		}

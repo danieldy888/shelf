@@ -82,6 +82,11 @@ type shelf struct {
 	thumbPending                               map[string]bool
 	thumbDiscard                               map[string]bool
 	thumbActive                                int
+
+	// 拖出后从托盘移除：当前拖出会话从托盘带走的项目（剪贴板页为 nil），
+	// 以及已拖出、等待最终移除的托盘项目及其放下时刻。
+	dragOutIDs []string
+	leaving    map[string]time.Time
 }
 
 func (a *shelf) toggle() {
@@ -203,11 +208,14 @@ func (a *shelf) notice(msg string) {
 }
 func (a *shelf) completed(r transfer.Result) {
 	a.ownDrag = false
+	ids := a.dragOutIDs
+	a.dragOutIDs = nil
 	if r.Err != nil {
 		a.report(r.Err)
 		return
 	}
 	if !r.Canceled && r.Operation != transfer.None {
+		a.leaveTray(ids, time.Now())
 		a.hide(hidePassive)
 	}
 }

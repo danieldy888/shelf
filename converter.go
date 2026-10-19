@@ -36,9 +36,27 @@ const (
 	toPDF       // one PDF per image
 	toWord      // recognized text + the picture, one .docx per image
 	toMergedPDF // every image a page of one PDF
+	toZip       // every file and folder in one .zip
+	toLarge     // each image's longer side at most 2560 px
+	toMedium    // … 1600 px
+	toSmall     // … 800 px
 )
 
-// convertExt is the output file extension of a target.
+// resizePx is the longer-side cap of a resize target, 0 for the others.
+func resizePx(t convertTarget) int {
+	switch t {
+	case toLarge:
+		return 2560
+	case toMedium:
+		return 1600
+	case toSmall:
+		return 800
+	}
+	return 0
+}
+
+// convertExt is the output file extension of a target. A resized image
+// keeps its format (resizeExt), so resize targets have none here.
 func convertExt(t convertTarget) string {
 	switch t {
 	case toJPEG:
@@ -49,9 +67,33 @@ func convertExt(t convertTarget) string {
 		return "png"
 	case toWord:
 		return "docx"
+	case toZip:
+		return "zip"
 	default:
 		return "pdf"
 	}
+}
+
+// resizeExt is a resized image's extension: JPEG, PNG and HEIC keep
+// their format, everything else (WebP, TIFF…, which ImageIO cannot
+// always write) becomes JPEG.
+func resizeExt(item store.Item) string {
+	switch f := imageFormatOf(item); f {
+	case "jpg", "png", "heic":
+		return f
+	}
+	return "jpg"
+}
+
+// extFormat is the encoder for an output extension.
+func extFormat(ext string) mac.ImageFormat {
+	switch ext {
+	case "jpg":
+		return mac.FormatJPEG
+	case "heic":
+		return mac.FormatHEIC
+	}
+	return mac.FormatPNG
 }
 
 // convertShowAfter keeps instant conversions (a format change takes a few
@@ -61,6 +103,7 @@ const convertShowAfter = 250 * time.Millisecond
 // Seams: tests run jobs synchronously against fakes.
 var (
 	convertImage    = mac.ConvertImage
+	resizeImage     = mac.ResizeImage
 	imagesToPDF     = mac.ImagesToPDF
 	recognizeText   = mac.RecognizeText
 	imageSize       = mac.ImageSize
@@ -132,7 +175,7 @@ func convertBaseName(item store.Item) string {
 // atomics; target and unit never change.
 type convertJob struct {
 	target  convertTarget
-	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs)
+	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs), 个文件 (archive entries)
 	total   atomic.Int32
 	done    atomic.Int32
 	ocr     atomic.Bool // the current step is text recognition
@@ -185,6 +228,10 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 		title = "正在转成 Word"
 	case toMergedPDF:
 		title = "正在合并 PDF"
+	case toZip:
+		title = "正在压缩为 zip"
+	case toLarge, toMedium, toSmall:
+		title = "正在缩小图片"
 	}
 	step := fmt.Sprintf("第 %d / %d %s", min(done+1, total), total, j.unit)
 	if j.ocr.Load() {
@@ -224,9 +271,10 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 
 // convertOut is one finished output (or failure) of a job.
 type convertOut struct {
-	path   string
-	err    error
-	noText bool // a Word output for which nothing was recognized
+	path          string
+	err           error
+	noText        bool  // a Word output for which nothing was recognized
+	before, after int64 // a resized image's source and output sizes
 }
 
 // convertTask is one output of a job: src converted to dst (page > 0:
@@ -238,10 +286,11 @@ type convertTask struct {
 	err      error
 }
 
-// startConvert begins converting items — all images or all PDFs — to
-// target. Everything that touches the files, counting PDF pages included,
-// runs on the worker so a large PDF never stalls the panel; outputs are
-// named there too, which is safe because one job runs at a time.
+// startConvert begins converting items — all images or all PDFs, or for
+// toZip any files, folders and pictures — to target. Everything that
+// touches the files, counting PDF pages included, runs on the worker so
+// a large PDF never stalls the panel; outputs are named there too, which
+// is safe because one job runs at a time.
 func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	if a.conv == nil || a.conv.busy() || a.store == nil || len(items) == 0 {
 		return
@@ -255,12 +304,28 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	}
 	srcs := make([]string, len(items))
 	names := make([]string, len(items))
+	exts := make([]string, len(items))
+	px := resizePx(target)
 	for i, it := range items {
-		srcs[i], names[i] = it.Path, convertBaseName(it)
+		srcs[i], names[i], exts[i] = it.Path, convertBaseName(it), convertExt(target)
+		if px > 0 {
+			names[i] = fmt.Sprintf("%s %dpx", names[i], px)
+			exts[i] = resizeExt(it)
+		}
 	}
-	pdf := isPDF(items[0])
+	var roots []string
+	if target == toZip {
+		roots = zipRoots(items)
+		names[0] = roots[0]
+		if len(items) > 1 {
+			names[0] = fmt.Sprintf("%s 等 %d 项", convertBaseName(items[0]), len(items))
+		}
+	}
+	pdf := isPDF(items[0]) && target != toZip
 	unit := "张"
 	switch {
+	case target == toZip:
+		unit = "个文件"
 	case pdf && target == toWord:
 		unit = "个"
 	case pdf:
@@ -270,8 +335,10 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	job.total.Store(int32(len(items)))
 	a.conv.job, a.conv.seen = job, false
 	convertWork(func() {
-		tasks := planConvert(dir, srcs, names, pdf, target, job)
-		job.total.Store(int32(len(tasks)))
+		tasks := planConvert(dir, srcs, names, exts, pdf, target, job)
+		if target != toZip {
+			job.total.Store(int32(len(tasks)))
+		}
 		format := mac.FormatPNG
 		switch target {
 		case toJPEG:
@@ -288,6 +355,8 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 			out := convertOut{path: t.dst, err: t.err}
 			switch {
 			case out.err != nil:
+			case target == toZip:
+				out.err = writeZip(t.dst, srcs, roots, job)
 			case target == toMergedPDF:
 				out.err = imagesToPDF(srcs, t.dst)
 			case t.pdf && target == toWord:
@@ -299,6 +368,9 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 			case target == toWord:
 				job.ocr.Store(true)
 				out.noText, out.err = wordFromImage(t.src, t.dst)
+			case px > 0:
+				out.err = resizeImage(t.src, t.dst, extFormat(strings.TrimPrefix(filepath.Ext(t.dst), ".")), px)
+				out.before, out.after = fileSize(t.src), fileSize(t.dst)
 			default:
 				out.err = convertImage(t.src, t.dst, format)
 			}
@@ -309,21 +381,75 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 				break
 			}
 			outs = append(outs, out)
-			job.done.Add(1)
+			if target != toZip { // the archive counts its own entries
+				job.done.Add(1)
+			}
 		}
 		convertDispatch(func() { a.finishConvert(job, outs) })
 	})
 }
 
+// fileSize is p's size in bytes, 0 when it cannot be read.
+func fileSize(p string) int64 {
+	fi, err := os.Stat(p)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// formatBytes renders a size the way Finder does (decimal units): 「812 KB」,
+// 「4.2 MB」.
+func formatBytes(n int64) string {
+	switch {
+	case n >= 1e9:
+		return fmt.Sprintf("%.1f GB", float64(n)/1e9)
+	case n >= 1e6:
+		return fmt.Sprintf("%.1f MB", float64(n)/1e6)
+	case n >= 1e3:
+		return fmt.Sprintf("%.0f KB", float64(n)/1e3)
+	}
+	return fmt.Sprintf("%d 字节", n)
+}
+
+// zipRoots names each item at an archive's root: a file or folder by its
+// own name, a screenshot by its title as a .png; a name already taken
+// becomes 「名 2.ext」.
+func zipRoots(items []store.Item) []string {
+	roots := make([]string, len(items))
+	taken := map[string]bool{}
+	for i, it := range items {
+		name := filepath.Base(it.Path)
+		if it.Kind == store.KindImage {
+			name = convertBaseName(it) + ".png"
+		}
+		stem, ext := name, filepath.Ext(name)
+		if ext != name {
+			stem = strings.TrimSuffix(name, ext)
+		} else {
+			ext = ""
+		}
+		candidate := name
+		for n := 2; taken[strings.ToLower(candidate)]; n++ {
+			candidate = fmt.Sprintf("%s %d%s", stem, n, ext)
+		}
+		taken[strings.ToLower(candidate)] = true
+		roots[i] = candidate
+	}
+	return roots
+}
+
 // planConvert lists a job's outputs with their reserved names: one per
-// source, one merged PDF, or for a PDF turned into images one per page
-// (「名 第 2 页.png」, just 「名.png」 for a one-page PDF). A PDF whose pages
-// cannot be counted becomes a failed task. Counting stops when the job is
-// cancelled.
-func planConvert(dir string, srcs, names []string, pdf bool, target convertTarget, job *convertJob) []convertTask {
+// source (named names[i].exts[i]), one merged PDF or archive, or for a
+// PDF turned into images one per page (「名 第 2 页.png」, just 「名.png」
+// for a one-page PDF). A PDF whose pages cannot be counted becomes a
+// failed task. Counting stops when the job is cancelled.
+func planConvert(dir string, srcs, names, exts []string, pdf bool, target convertTarget, job *convertJob) []convertTask {
 	taken := map[string]bool{}
 	var tasks []convertTask
 	switch {
+	case target == toZip:
+		return []convertTask{{dst: uniquePath(dir, names[0], "zip", taken)}}
 	case target == toMergedPDF:
 		name := names[0]
 		if len(srcs) > 1 {
@@ -357,7 +483,7 @@ func planConvert(dir string, srcs, names []string, pdf bool, target convertTarge
 		}
 	default:
 		for i, src := range srcs {
-			tasks = append(tasks, convertTask{src: src, dst: uniquePath(dir, names[i], convertExt(target), taken)})
+			tasks = append(tasks, convertTask{src: src, dst: uniquePath(dir, names[i], exts[i], taken)})
 		}
 	}
 	return tasks
@@ -478,9 +604,13 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		}
 		a.selection.onlyAll(ids)
 	}
+	verb := "转换"
+	if job.target == toZip {
+		verb = "压缩"
+	}
 	switch {
 	case len(paths) == 0 && failed > 0:
-		a.report(fmt.Errorf("转换失败：%v", firstErr))
+		a.report(fmt.Errorf("%s失败：%v", verb, firstErr))
 	case failed > 0:
 		a.toastStatus(fmt.Sprintf("%d 项成功，%d 项失败", len(paths), failed), time.Now().Add(4*time.Second), true)
 	case job.cancel.Load():
@@ -489,6 +619,14 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		a.toastStatus("没有找到文字，Word 文件是空白的", time.Now().Add(4*time.Second), false)
 	case noText > 0 && noText == len(paths):
 		a.toastStatus("没有识别到文字，只放入了图片", time.Now().Add(4*time.Second), false)
+	case job.target == toZip:
+		a.toastStatus(fmt.Sprintf("已压缩 · %s · 已选中，可直接拖出", formatBytes(fileSize(paths[0]))), time.Now().Add(3*time.Second), false)
+	case resizePx(job.target) > 0:
+		var before, after int64
+		for _, o := range outs {
+			before, after = before+o.before, after+o.after
+		}
+		a.toastStatus(fmt.Sprintf("已缩小 %d 张 · %s → %s", len(paths), formatBytes(before), formatBytes(after)), time.Now().Add(4*time.Second), false)
 	case len(paths) > 0:
 		a.toastStatus(fmt.Sprintf("已转换 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), false)
 	}
@@ -518,28 +656,35 @@ func uniquePath(dir, name, ext string, taken map[string]bool) string {
 	}
 }
 
-// convertMenu adds the conversion group to an item menu when every target
-// is an image, or every target is a PDF — a mixed selection is never half
-// converted. Images: 「转换为 ▸」 (「转换 N 张为 ▸」) JPEG / HEIC / PNG / PDF /
-// Word, the format every target already has greyed as 「当前格式」, and for
-// several 「合并为一个 PDF」. PDFs: 「转换为 ▸」 (「转换 N 个为 ▸」) Word, PNG,
-// JPEG. Everything is disabled while a job runs.
+// convertMenu adds the conversion group to an item menu. Every target an
+// image, or every target a PDF — a mixed selection is never half
+// converted: images get 「转换为 ▸」 (「转换 N 张为 ▸」) JPEG / HEIC / PNG /
+// PDF / Word, the format every target already has greyed as 「当前格式」,
+// for several 「合并为一个 PDF」, and 「缩小图片 ▸」 by longer side, a size
+// no target exceeds greyed; PDFs get 「转换为 ▸」 (「转换 N 个为 ▸」) Word,
+// PNG, JPEG. Any files, folders and pictures still on disk get 「压缩为
+// zip」. Everything is disabled while a job runs.
 func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 	if a.conv == nil || a.store == nil || len(items) == 0 {
 		return
 	}
-	allImages, allPDFs := true, true
+	allImages, allPDFs, allFiles := true, true, true
 	for _, it := range items {
 		allImages = allImages && convertible(it)
 		allPDFs = allPDFs && isPDF(it)
+		allFiles = allFiles && !it.Missing && (it.Kind == store.KindFile || it.Kind == store.KindImage)
+	}
+	if !allFiles {
+		return
 	}
 	busy := a.conv.busy()
-	if allPDFs {
+	m.Separator()
+	switch {
+	case allPDFs:
 		label := "转换为"
 		if len(items) > 1 {
 			label = fmt.Sprintf("转换 %d 个为", len(items))
 		}
-		m.Separator()
 		m.Submenu(label, func(sm *ui.Menu) {
 			if sm.Item("Word（提取文字）").Disabled(busy).Chosen() {
 				a.startConvert(items, toWord)
@@ -552,11 +697,20 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 				a.startConvert(items, toJPEG)
 			}
 		}).Disabled(busy)
-		return
+	case allImages:
+		a.imageConvertMenu(m, items, busy)
 	}
-	if !allImages {
-		return
+	label := "压缩为 zip"
+	if len(items) > 1 {
+		label = fmt.Sprintf("压缩 %d 项为 zip", len(items))
 	}
+	if m.Item(label).Disabled(busy).Chosen() {
+		a.startConvert(items, toZip)
+	}
+}
+
+// imageConvertMenu is convertMenu's group for pictures.
+func (a *shelf) imageConvertMenu(m *ui.Menu, items []store.Item, busy bool) {
 	current := imageFormatOf(items[0])
 	for _, it := range items[1:] {
 		if imageFormatOf(it) != current {
@@ -567,7 +721,6 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 	if len(items) > 1 {
 		label = fmt.Sprintf("转换 %d 张为", len(items))
 	}
-	m.Separator()
 	m.Submenu(label, func(sm *ui.Menu) {
 		for _, f := range []struct {
 			t     convertTarget
@@ -594,4 +747,28 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 			a.startConvert(items, toMergedPDF)
 		}
 	}
+	// The longest side among the targets: a size it does not exceed would
+	// only re-encode, so that choice is greyed.
+	longest := 0
+	for _, it := range items {
+		if w, h, err := imageSize(it.Path); err == nil {
+			longest = max(longest, w, h)
+		}
+	}
+	label = "缩小图片"
+	if len(items) > 1 {
+		label = fmt.Sprintf("缩小 %d 张图片", len(items))
+	}
+	m.Submenu(label, func(sm *ui.Menu) {
+		for _, f := range []struct {
+			t     convertTarget
+			label string
+		}{{toLarge, "大"}, {toMedium, "中"}, {toSmall, "小"}} {
+			px := resizePx(f.t)
+			l := fmt.Sprintf("%s（长边 %d 像素）", f.label, px)
+			if sm.Item(l).Disabled(busy || longest <= px).Chosen() {
+				a.startConvert(items, f.t)
+			}
+		}
+	}).Disabled(busy || longest <= resizePx(toSmall))
 }

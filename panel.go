@@ -835,7 +835,7 @@ func (a *shelf) itemsFor(tab int) []store.Item {
 		}
 		// 托盘页的移除对剪贴板收录只做到「不在托盘显示」：标了 OffTray 的
 		// 项目仍留在剪贴板页，托盘不再列出。
-		if tab == tabTray && it.OffTray {
+		if tab == tabTray && (it.OffTray || a.isLeaving(it)) {
 			continue
 		}
 		// 设计决定：剪贴板收录的文字只属于剪贴板标签；托盘放文件、
