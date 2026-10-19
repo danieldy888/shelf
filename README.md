@@ -43,7 +43,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 **A shelf in the notch**
 - Drag files, folders, images or text toward the notch — it shows "release to drop" (松开放入), and the shelf opens as you let go.
 - Files show as thumbnails. Drag one or several (⌘/⇧ to select) straight into any app.
-- Press Space for Quick Look; right-click to open, reveal in Finder, AirDrop, copy, pin or remove.
+- Press Space for Quick Look; right-click to open, reveal in Finder, AirDrop, copy, pin or remove — pictures get an extra "复制图片" (Copy Image) entry that copies the image itself.
 - Other ways in: shake the pointer while dragging to summon a drop basket beside the cursor, or use Services → "添加到 Shelf" (Add to Shelf) in Finder and other apps.
 
 **Clipboard history**
@@ -110,6 +110,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Put something in | Drag it toward the notch and let go; or shake the pointer while dragging and drop on the basket |
 | Take something out | Drag it from the shelf into any app; ⌘/⇧-click to take several at once |
 | Copy text back | Click a text item, then paste with `⌘V` |
+| Copy image data | Select one picture and press `⌘C`, or right-click it → 复制图片 (Copy Image) — the clipboard gets PNG data, not the path |
 | Search what you copied | Press `⌃⌥V`, type, pick with ↑/↓, press ⏎ |
 | Switch lists | Click 托盘 (Tray), 剪贴板 (Clipboard) — or AI 用量 when enabled — at the top of the shelf |
 | Control music | Hover the notch while music plays, or use the card at the top of the open shelf |
@@ -155,7 +156,7 @@ MIT — see [LICENSE](LICENSE).
 **刘海里的托盘**
 - 把文件、文件夹、图片或文字往刘海拖，刘海会提示「松开放入」，一松手托盘就打开。
 - 文件以缩略图显示（iPhone 拍的 HEIC 照片也有预览），可以一次拖出一个或多个（按住 ⌘ 或 ⇧ 多选），直接拖进任何应用；也可以在设置里让拖出去的东西自动离开托盘。
-- 按空格快速查看；右键可以打开、在 Finder 中显示、隔空投送、复制、置顶或移除。
+- 按空格快速查看；右键可以打开、在 Finder 中显示、隔空投送、复制（图片多一项「复制图片」，复制图片数据本身）、置顶或移除。
 - 图片和 PDF 可以直接转换：右键图片 →「转换为」JPEG、HEIC、PNG、PDF，或识别图里的文字生成 Word，多张还能合并成一个 PDF；大图可以一键缩小；右键 PDF 可以提取文字生成 Word，或每页存成一张图片。文件和文件夹可以压缩成 zip。全部在本机完成，原文件不动，做好的文件放在托盘最前面。
 - 还有别的放法：拖着东西时左右晃动指针，光标旁会出现一个暂存篮；也可以在 Finder 或其他应用里右键 →「服务」→「添加到 Shelf」。
 
@@ -223,6 +224,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 放东西进来 | 拖着它靠近刘海松开；或拖拽时左右晃动指针，放进暂存篮 |
 | 拿东西出去 | 从托盘拖到任意应用；按住 `⌘` 或 `⇧` 可以一次拖多个 |
 | 把文字复制回来 | 单击文字项，再在任意地方 `⌘V` 粘贴 |
+| 复制图片数据 | 选中一张图片后按 `⌘C`，或右键图片 →「复制图片」，再在目标应用 `⌘V` 粘贴（复制的是图片，不是路径） |
 | 搜索复制过的内容 | 按 `⌃⌥V`，输入关键词，`↑`/`↓` 选择，回车 |
 | 切换列表 | 点刘海左侧的托盘、剪贴板图标——开了 AI 用量时还有第三个 |
 | 控制音乐 | 放音乐时把鼠标移到刘海上，或用打开后上方的播放条 |

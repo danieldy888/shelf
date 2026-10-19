@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -50,6 +52,8 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 	items := a.targets(item)
 	paths, texts := usable(items)
 	files := len(paths) > 0
+	// 复制图片只支持单张：截图/剪贴板图片或磁盘上的图片文件。
+	image := len(items) == 1 && convertible(items[0])
 	if m.Item("打开").Disabled(!files).Chosen() {
 		for _, p := range paths {
 			if err := mygo.Shell.OpenPath(p); err != nil {
@@ -83,6 +87,10 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 			lines = paths
 		}
 		a.copyText(strings.Join(lines, "\n"))
+	}
+	// 图片多一种复制方式：把图片数据放进剪贴板，而不是路径。
+	if m.Item("复制图片").Disabled(!image).Chosen() {
+		a.copyItem(items[0])
 	}
 	// 置顶：作用于右键的行（或多选的全部）；全部已置顶时改为取消置顶。
 	pinned := len(items) > 0
@@ -157,11 +165,11 @@ func (a *shelf) copyText(text string) bool {
 // copyItem puts one item on the clipboard as ⌘C on it would: text as text,
 // an image as PNG. It reports whether it copied; a failure is reported.
 func (a *shelf) copyItem(item store.Item) bool {
-	switch item.Kind {
-	case store.KindText:
+	switch {
+	case item.Kind == store.KindText:
 		return a.copyText(item.Text)
-	case store.KindImage:
-		png, err := os.ReadFile(item.Path)
+	case convertible(item):
+		png, err := itemPNG(item)
 		if err != nil {
 			a.report(err)
 			return false
@@ -176,6 +184,43 @@ func (a *shelf) copyItem(item store.Item) bool {
 	}
 	a.report(errors.New("这一项不能复制到剪贴板"))
 	return false
+}
+
+// copyTrayImage is ⌘C on the tray page: exactly one selected picture goes
+// on the clipboard as PNG. Text and plain files keep the tray's existing
+// single-click/⌘C behavior (text copies on click; files drag out).
+func (a *shelf) copyTrayImage() {
+	items := a.selection.chosen(a.visibleItems())
+	if len(items) == 1 && convertible(items[0]) {
+		a.copyItem(items[0])
+	}
+}
+
+// pngSignature is the 8-byte PNG file header.
+var pngSignature = []byte("\x89PNG\r\n\x1a\n")
+
+// itemPNG returns the item's picture as PNG bytes. Managed screenshots are
+// PNG already, and so are PNG files; every other image format ImageIO can
+// read is re-encoded once, so the clipboard always carries PNG data.
+func itemPNG(item store.Item) ([]byte, error) {
+	b, err := os.ReadFile(item.Path)
+	if err != nil {
+		return nil, err
+	}
+	if item.Kind == store.KindImage || bytes.HasPrefix(b, pngSignature) {
+		return b, nil
+	}
+	tmp, err := os.CreateTemp("", "shelf-copy-*.png")
+	if err != nil {
+		return nil, err
+	}
+	name := tmp.Name()
+	tmp.Close()
+	defer os.Remove(name)
+	if err := mac.ConvertImage(item.Path, name, mac.FormatPNG); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(name)
 }
 
 // setPinned pins or unpins every target; each item is saved on its own
@@ -336,6 +381,13 @@ func (a *shelf) dragItems(item store.Item) []store.Item {
 
 // dragOut is the transfer for dragging item (see dragItems).
 func (a *shelf) dragOut(item store.Item) transfer.Data {
+	// Sweep the scratch folder once per drag, before any readable name is
+	// minted for this session: cleaning inside dragData would let a later
+	// item delete the URL just offered to a sibling item, or a receiver
+	// read a link a previous drag left fresh.
+	if a.dataDir != "" {
+		cleanStaleDragOuts(filepath.Join(a.dataDir, dragOutDir), time.Now().Add(-dragOutLife))
+	}
 	items := a.dragItems(item)
 	if len(items) == 1 {
 		return a.dragData(items[0])

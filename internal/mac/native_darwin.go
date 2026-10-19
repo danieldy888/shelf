@@ -132,7 +132,13 @@ const (
 	collectionStationary          = 1 << 4
 	collectionIgnoresCycle        = 1 << 6
 	collectionFullScreenAuxiliary = 1 << 8
-	notchCollectionBehavior       = collectionCanJoinAllSpaces | collectionTransient | collectionStationary | collectionIgnoresCycle | collectionFullScreenAuxiliary
+	// AppKit allows at most one of Managed, Transient and Stationary. The
+	// overlay must be Stationary: that is what keeps it out of the Exposé
+	// / Show Desktop sweep. Adding Transient ("hidden by exposé", the
+	// default implied by a non-normal window level) alongside it made
+	// WindowServer sweep the overlay to the bottom edge on Show Desktop
+	// even though the documented Stationary bit was set.
+	notchCollectionBehavior = collectionCanJoinAllSpaces | collectionStationary | collectionIgnoresCycle | collectionFullScreenAuxiliary
 )
 
 // load opens the frameworks once, mirroring internal/darwin's load(); it

@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -334,7 +336,13 @@ func (a *shelf) dragData(item store.Item) transfer.Data {
 		a.report(fmt.Errorf("文件已移动或无法读取：%w", err))
 		return transfer.Data{}
 	}
-	files, err := transfer.FileData(item.Path)
+	path := item.Path
+	if item.Kind == store.KindImage {
+		// 托管截图以内容哈希命名（<sha>.png）；拖出时用托盘里显示的可读
+		// 名字，原文件保持不变。
+		path = a.dragOutPath(item)
+	}
+	files, err := transfer.FileData(path)
 	if err != nil {
 		a.report(err)
 		return transfer.Data{}
@@ -360,4 +368,106 @@ func (a *shelf) dragData(item store.Item) transfer.Data {
 	}
 	reps = append(reps, transfer.Bytes(transfer.PNG, png))
 	return transfer.New(transfer.NewItem(reps...))
+}
+
+// dragOutDir is the scratch folder under the data directory that holds
+// readable-name links for dragged-out pictures.
+const dragOutDir = "drag-out"
+
+// dragOutLife is how long a drag-out link stays before the next drag
+// clears it: long past any receiver's read, short enough not to pile up.
+const dragOutLife = time.Hour
+
+// dragOutName is the file name a dragged-out picture is offered under: the
+// name the tray shows, with the screenshot time's colons written as dots,
+// the way macOS names screenshots (「截图 10-19 20.07.41.png」).
+func dragOutName(item store.Item) string {
+	name := strings.ReplaceAll(itemTitle(item), ":", ".")
+	if !strings.HasSuffix(strings.ToLower(name), ".png") {
+		name += ".png"
+	}
+	return name
+}
+
+// dragOutPath materialises a readable file name for item in
+// <dataDir>/drag-out: a copy with its own inode and mtime — never a hard
+// link, which shares the managed file's mtime and would make every link
+// older than dragOutLife look stale at once, and a Chtimes fix-up would
+// bump the managed original. Files older than dragOutLife are cleared
+// once per drag by dragOut. Every failure falls back to the managed
+// path — a drag must still work.
+func (a *shelf) dragOutPath(item store.Item) string {
+	if a.dataDir == "" {
+		return item.Path
+	}
+	dir := filepath.Join(a.dataDir, dragOutDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return item.Path
+	}
+	name := dragOutName(item)
+	candidate := filepath.Join(dir, name)
+	// Dragging the same picture again reuses its copy instead of piling
+	// up " 2" names. Content identity, not inode identity — the copy is a
+	// separate file from the managed original.
+	if sameBytes(candidate, item.Path) {
+		return candidate
+	}
+	dst := uniquePath(dir, strings.TrimSuffix(name, ".png"), "png", map[string]bool{})
+	if err := copyFile(item.Path, dst); err != nil {
+		return item.Path
+	}
+	return dst
+}
+
+// sameBytes reports whether both paths hold the same bytes: the scratch
+// copy of the same screenshot, but never a different one.
+func sameBytes(a, b string) bool {
+	ab, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	bb, err := os.ReadFile(b)
+	return err == nil && bytes.Equal(ab, bb)
+}
+
+// cleanStaleDragOuts removes drag-out files last modified before the
+// cutoff; anything newer may belong to a drag still in flight.
+func cleanStaleDragOuts(dir string, before time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || !info.ModTime().Before(before) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
+// copyFile copies src to a new dst with its own inode and a fresh mtime,
+// which is exactly what keeps the drag-out cleanup from treating the
+// readable name as old. A partial copy is removed so a later drag never
+// offers a truncated file.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(dst)
+		return err
+	}
+	return nil
 }

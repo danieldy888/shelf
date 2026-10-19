@@ -182,6 +182,10 @@ func (a *shelf) view(c *ui.Context) {
 			a.copyClipSelection()
 		}
 	}
+	// 托盘页选中一张图片时，⌘C 复制图片数据（文件项保持原有行为）。
+	if a.visible && a.tab == pageTray {
+		c.OnShortcut(ui.Cmd, ui.KeyC, a.copyTrayImage)
+	}
 	c.SetTheme(panelTheme)
 	// 常驻窗口是 Transparent 的：mygo 根元素默认画满主题背景，必须改成
 	// 全透明，否则整个窗口会一直盖着一块主题色灰板。
@@ -620,7 +624,7 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 		if note := a.updateStatus(); note != "" {
 			a.updatePill(c, note)
 		}
-		if over || a.dragging {
+		if over || (a.dragging && !a.ownDrag) {
 			a.pill(c, "drop", "松开放入", false)
 		}
 	})
@@ -721,7 +725,7 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool
 			ui.Box(c.Key("peek-notch")).Height(notchH)
 			band := ui.Row(c.Key("peek-band")).FillWidth().Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(6)
 			band.Children(func() {
-				if over || a.dragging {
+				if over || (a.dragging && !a.ownDrag) {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
 					ui.Text(c, "松开放入").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
 				} else {

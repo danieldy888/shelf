@@ -120,8 +120,39 @@ func TestNotchOverlaySitsAtScreenTop(t *testing.T) {
 		if behavior&collectionStationary == 0 {
 			return fmt.Errorf("overlay collectionBehavior=0x%x missing stationary; Mission Control would pull it away", behavior)
 		}
+		if behavior&collectionTransient != 0 {
+			return fmt.Errorf("overlay collectionBehavior=0x%x mixes Transient with Stationary; WindowServer sweeps it away on Show Desktop", behavior)
+		}
 		return nil
 	})
+}
+
+// AppKit allows at most one of Managed, Transient and Stationary. Setting
+// Transient alongside Stationary made WindowServer sweep the notch overlay
+// to the bottom edge on Show Desktop on macOS 27, while NSWindow's own frame
+// kept reporting the top edge — no move notification could restore it.
+// Stationary alone keeps the shell in place and leaves the other behaviors
+// the shelf relies on intact.
+func TestNotchCollectionBehaviorKeepsStationaryOnly(t *testing.T) {
+	const collectionManaged = 1 << 2
+	if notchCollectionBehavior&collectionStationary == 0 {
+		t.Fatal("notchCollectionBehavior lost Stationary; Show Desktop would move the overlay")
+	}
+	if notchCollectionBehavior&collectionTransient != 0 {
+		t.Fatal("notchCollectionBehavior still combines Transient with Stationary")
+	}
+	if notchCollectionBehavior&collectionManaged != 0 {
+		t.Fatal("notchCollectionBehavior must not be Managed: Mission Control would take it")
+	}
+	for name, bit := range map[string]uint{
+		"CanJoinAllSpaces":    collectionCanJoinAllSpaces,
+		"IgnoresCycle":        collectionIgnoresCycle,
+		"FullScreenAuxiliary": collectionFullScreenAuxiliary,
+	} {
+		if notchCollectionBehavior&bit == 0 {
+			t.Fatalf("notchCollectionBehavior lost %s", name)
+		}
+	}
 }
 
 // The constrainFrameRect:toScreen: override used to land on the shared

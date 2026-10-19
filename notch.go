@@ -120,7 +120,7 @@ func (a *shelf) peekSize() (w, h float32) {
 		return a.playerSize()
 	}
 	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
-	if a.dragging {
+	if a.dragging && !a.ownDrag {
 		return baseW + dropPillExtraW, baseH + dropPillBody
 	}
 	return baseW + 40, baseH + peekBody
