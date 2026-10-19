@@ -3,6 +3,21 @@ Shelf — Third-party notices
 Dependency source versions are pinned in go.mod. Upstream license texts follow.
 
 ========================================================================
+Trademarks
+========================================================================
+The AI 用量 page shows two service marks inside its quota rings, scaled
+only, to identify the service a card reports on:
+
+- The OpenAI "Blossom" logo is a trademark of OpenAI (source:
+  https://openai.com/brand/ — openai-logos.zip, OAI_OpenAI-Blossom_White.svg).
+- The Claude "Spark" logo is a trademark of Anthropic (source:
+  https://anthropic.com/press-kit — Claude Spark - Clay.svg).
+
+Shelf is not affiliated with, sponsored, or endorsed by OpenAI or
+Anthropic; the marks are used only to identify the corresponding service.
+
+
+========================================================================
 github.com/egoist/mygo v0.5.5
 ========================================================================
 MIT License

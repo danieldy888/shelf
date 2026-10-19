@@ -270,12 +270,16 @@ func (a *shelf) settingsView(c *ui.Context) {
 
 // settingsSection renders one group: an 11pt semibold heading over a
 // rounded card (white 5% fill, 0.5pt edge) holding the group's rows.
-// disabled greys and locks the whole card.
-func settingsSection(c *ui.Context, title string, disabled bool, fn func()) {
+// disabled greys and locks the whole card. foot, when not empty, is the
+// System Settings-style note under the card, aligned with the row text.
+func settingsSection(c *ui.Context, title, foot string, disabled bool, fn func()) {
 	ui.Column(c.Key("sec-" + title)).FillWidth().Children(func() {
 		ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3).Padding(0, 0, 6, 4)
 		ui.Column(c.Key("card")).Radius(10).Background(setCard).Border(0.5, setCardEdge).
 			Disabled(disabled).FillWidth().Children(fn)
+		if foot != "" {
+			ui.Text(c, foot).FontSize(11).TextColor(setInk3).Padding(6, 12, 0, 12)
+		}
 	})
 }
 
@@ -353,7 +357,7 @@ func choiceSegments(current int, choices []int, format func(int) string) (labels
 // Only 自动检查更新 lives in settings.json; the login item and the drag
 // guard stay editable while the file is broken.
 func (a *shelf) settingsGeneralSection(c *ui.Context) {
-	settingsSection(c, "通用", false, func() {
+	settingsSection(c, "通用", "", false, func() {
 		loginCap, capColor := "", setInk3
 		if a.loginErr != "" {
 			loginCap, capColor = a.loginErr, settingsTheme.Danger
@@ -401,7 +405,7 @@ func (a *shelf) applyOpenAtLogin(on bool) {
 // settingsClipboardSection: 记录复制的内容, the 保留条数 segments and the
 // 排除的应用 list, all through the same setters the tray menu uses.
 func (a *shelf) settingsClipboardSection(c *ui.Context) {
-	settingsSection(c, "剪贴板", a.settingsBroken, func() {
+	settingsSection(c, "剪贴板", "", a.settingsBroken, func() {
 		settingsToggle(c, "clip", "记录复制的内容", a.settings.ClipboardHistory, a.setClipboardHistory)
 		settingsSep(c, "clip")
 		limit := a.settings.ClipboardLimit
@@ -441,63 +445,102 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 	})
 }
 
-// settingsAIUsageSection is the AI 用量 group (mock frame 4): the master
-// switch with its privacy caption, then the two chip rows choosing the
-// quota and local-usage sources. Everything goes through applySettings.
+// settingsAIUsageSection is the AI 用量 group (design/usage-fix-v2.png):
+// a single-line master switch, then a two-column table — header cells
+// 「套餐额度」「本机用量」 (64pt wide, centred, 11pt semibold ink3), then
+// one row per tool with a 16pt checkbox under each header (omp has no
+// quota cell: 「—」, not clickable). Turning the master off dims and
+// locks the whole table (~40% opaque) while the checkbox states stay.
+// The privacy note lives under the card, as System Settings does. Every
+// change still goes through applySettings.
 func (a *shelf) settingsAIUsageSection(c *ui.Context) {
-	// chip is one source pill: a small toggle button, accent-tinted while
-	// on (mock's .ck/.ck.on). Its accessible label prefixes the row so the
-	// two rows' same-named chips stay distinct.
-	chip := func(key, text, label string, on bool, apply func(*settings.Settings, bool)) {
-		b := ui.ButtonBase(c.Key("chip-"+key)).Radius(7).Padding(3, 8, 3, 8).Label(label)
+	// col is one of the table's two right columns: 64pt wide, centred.
+	col := func(key string, fn func()) {
+		ui.Box(c.Key("c-" + key)).Width(64).Center().TextAlign(ui.Center).Children(fn)
+	}
+	// check is one 16pt source checkbox: accent fill + white tick while
+	// on, a 1pt white-28% outline while off (mock's .ck). Its accessible
+	// label prefixes the column so same-named cells stay distinct.
+	check := func(key, label string, on bool, apply func(*settings.Settings, bool)) {
+		b := ui.CheckboxBase(c.Key("ck-"+key), &on).Size(16, 16).Radius(4).Label(label)
 		if on {
-			b.Background(ui.RGBA(10, 132, 255, 0.24))
+			b.Background(settingsTheme.Accent)
 		} else {
-			b.Background(ui.RGBA(255, 255, 255, 0.08))
+			b.Border(1, ui.RGBA(255, 255, 255, 0.28))
 		}
-		b.Children(func() {
-			tc := setInk2
+		b.DrawOver(func(p *ui.Painter, r ui.Rect) {
 			if on {
-				tc = setInk
+				var tick ui.Path
+				tick.MoveTo(r.X+r.W*0.22, r.Y+r.H*0.52).LineTo(r.X+r.W*0.42, r.Y+r.H*0.71).LineTo(r.X+r.W*0.78, r.Y+r.H*0.31)
+				p.StrokePath(&tick, 1.8, ui.RGB(255, 255, 255))
 			}
-			ui.Text(c, text).SingleLine().FontSize(11).FontWeight(600).TextColor(tc)
 		})
-		if b.Clicked() {
-			a.setAIUsage(func(s *settings.Settings) { apply(s, !on) })
+		if b.Changed() {
+			a.setAIUsage(func(s *settings.Settings) { apply(s, on) })
 		}
 	}
-	settingsSection(c, "AI 用量", a.settingsBroken, func() {
-		settingsToggleCap(c, "aiusage", "在刘海里显示 AI 用量",
-			"查看 Codex、Claude Code 的套餐剩余额度和这台电脑的 token 用量。会读取本机这些工具已保存的登录信息，只用来向它们的官方地址查询额度，不发给其他任何地方。",
-			setInk3, a.settings.AIUsage.Enabled,
-			func(on bool) { a.setAIUsage(func(s *settings.Settings) { s.AIUsage.Enabled = on }) })
-		settingsSep(c, "aiusage")
-		settingsRow(c, "quota", "套餐额度", func() {
-			ui.Row(c.Key("quota-cks")).Gap(6).Children(func() {
-				chip("quota-codex", "Codex", "套餐额度 Codex", a.settings.AIUsage.QuotaCodex,
-					func(s *settings.Settings, on bool) { s.AIUsage.QuotaCodex = on })
-				chip("quota-claude", "Claude Code", "套餐额度 Claude Code", a.settings.AIUsage.QuotaClaude,
-					func(s *settings.Settings, on bool) { s.AIUsage.QuotaClaude = on })
+	// toolRow is one tool line: the name on the left, then the quota and
+	// local cells — check boxes, or dash for omp's nonexistent quota.
+	toolRow := func(key, name, qKey, lKey string, quota, local bool, qApply, lApply func(*settings.Settings, bool)) {
+		ui.Row(c.Key("row-"+key)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).FillWidth().Children(func() {
+			ui.Text(c, name).SingleLine().FontSize(13).TextColor(setInk).Grow(1).MinWidth(0)
+			col("quota-"+key, func() {
+				if qApply == nil {
+					ui.Text(c, "—").SingleLine().FontSize(12).TextColor(setInk3)
+					return
+				}
+				check(qKey, "套餐额度 "+name, quota, qApply)
+			})
+			col("local-"+key, func() {
+				check(lKey, "本机用量 "+name, local, lApply)
 			})
 		})
-		settingsSep(c, "quota")
-		settingsRow(c, "local", "本机用量", func() {
-			ui.Row(c.Key("local-cks")).Gap(6).Children(func() {
-				chip("local-omp", "omp", "本机用量 omp", a.settings.AIUsage.LocalOmp,
-					func(s *settings.Settings, on bool) { s.AIUsage.LocalOmp = on })
-				chip("local-claude", "Claude Code", "本机用量 Claude Code", a.settings.AIUsage.LocalClaude,
-					func(s *settings.Settings, on bool) { s.AIUsage.LocalClaude = on })
-				chip("local-codex", "Codex", "本机用量 Codex", a.settings.AIUsage.LocalCodex,
+	}
+	settingsSection(c, "AI 用量",
+		"会读取本机这些工具已保存的登录信息，只用来向它们的官方地址查询额度，不发给其他任何地方。",
+		a.settingsBroken, func() {
+			settingsToggle(c, "aiusage", "在刘海里显示 AI 用量", a.settings.AIUsage.Enabled,
+				func(on bool) { a.setAIUsage(func(s *settings.Settings) { s.AIUsage.Enabled = on }) })
+			settingsSep(c, "aiusage")
+			// Disabled alone already halves the table's opacity; ×0.8 lands
+			// on the mock's ~40% while every widget stays unclickable.
+			table := ui.Column(c.Key("aiusage-table")).Disabled(!a.settings.AIUsage.Enabled).FillWidth()
+			if !a.settings.AIUsage.Enabled {
+				table.Opacity(0.8)
+			}
+			table.Children(func() {
+				ui.Row(c.Key("aiusage-head")).AlignItems(ui.Center).Gap(10).MinHeight(26).Padding(0, 12).FillWidth().Children(func() {
+					ui.Box(c.Key("hd-pad")).Grow(1)
+					col("hd-quota", func() {
+						ui.Text(c, "套餐额度").SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3)
+					})
+					col("hd-local", func() {
+						ui.Text(c, "本机用量").SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3)
+					})
+				})
+				settingsSep(c, "head")
+				toolRow("codex", "Codex", "q-codex", "l-codex",
+					a.settings.AIUsage.QuotaCodex, a.settings.AIUsage.LocalCodex,
+					func(s *settings.Settings, on bool) { s.AIUsage.QuotaCodex = on },
 					func(s *settings.Settings, on bool) { s.AIUsage.LocalCodex = on })
+				settingsSep(c, "codex")
+				toolRow("claude", "Claude Code", "q-claude", "l-claude",
+					a.settings.AIUsage.QuotaClaude, a.settings.AIUsage.LocalClaude,
+					func(s *settings.Settings, on bool) { s.AIUsage.QuotaClaude = on },
+					func(s *settings.Settings, on bool) { s.AIUsage.LocalClaude = on })
+				settingsSep(c, "claude")
+				toolRow("omp", "omp", "q-omp", "l-omp",
+					false, a.settings.AIUsage.LocalOmp,
+					nil,
+					func(s *settings.Settings, on bool) { s.AIUsage.LocalOmp = on })
 			})
 		})
-	})
 }
 
 // settingsTraySection: 自动清理旧内容, 拖出后从托盘移除 and 刘海显示正在
 // 播放 — the same setters as the tray's 自动清理 submenu and 正在播放 item.
 func (a *shelf) settingsTraySection(c *ui.Context) {
-	settingsSection(c, "托盘", a.settingsBroken, func() {
+	settingsSection(c, "托盘", "", a.settingsBroken, func() {
 		days := max(0, a.settings.RetentionDays)
 		labels, values, selected := choiceSegments(days, retentionChoices, func(n int) string {
 			if n <= 0 {
@@ -523,7 +566,7 @@ func (a *shelf) settingsTraySection(c *ui.Context) {
 // settingsShortcutsSection lists the global shortcuts read-only; they are
 // compiled in (config.go), not preferences.
 func (a *shelf) settingsShortcutsSection(c *ui.Context) {
-	settingsSection(c, "快捷键", false, func() {
+	settingsSection(c, "快捷键", "", false, func() {
 		settingsRow(c, "sc-tray", "显示 / 收起", func() {
 			ui.Text(c, shortcutHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})

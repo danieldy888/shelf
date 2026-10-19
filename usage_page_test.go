@@ -11,6 +11,7 @@ import (
 	"context"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -493,12 +494,17 @@ func TestUsagePerSourceSettings(t *testing.T) {
 }
 
 // The settings group writes through applySettings: the running copy and
-// settings.json change together.
+// settings.json change together. The layout is design/usage-fix-v2.png's
+// table: one-line master switch, a header row naming the two columns,
+// one row per tool with a checkbox per column (omp's quota cell is a
+// plain 「—」), and the privacy note under the card.
 func TestUsageSettingsSection(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, view := newSettingsShelf(t)
-	if !view.HasText("AI 用量") {
-		t.Fatalf("AI 用量 section missing; texts=%v", view.Texts())
+	for _, want := range []string{"AI 用量", "在刘海里显示 AI 用量", "套餐额度", "本机用量", "Codex", "Claude Code", "omp", "—", "不发给其他任何地方"} {
+		if !view.HasText(want) {
+			t.Fatalf("AI 用量 group missing %q; texts=%v", want, view.Texts())
+		}
 	}
 	clickVisible(t, view, "在刘海里显示 AI 用量")
 	if !a.settings.AIUsage.Enabled {
@@ -510,11 +516,93 @@ func TestUsageSettingsSection(t *testing.T) {
 	}
 	clickVisible(t, view, "套餐额度 Claude Code")
 	if a.settings.AIUsage.QuotaClaude {
-		t.Fatal("the Claude quota chip did not turn off")
+		t.Fatal("the Claude quota checkbox did not turn off")
 	}
 	clickVisible(t, view, "本机用量 omp")
 	if a.settings.AIUsage.LocalOmp {
-		t.Fatal("the omp local chip did not turn off")
+		t.Fatal("the omp local checkbox did not turn off")
+	}
+}
+
+// With the master off the source table is locked: clicks reach the boxes
+// but flip nothing, while the saved checkbox states stay as they were —
+// the mock's dimmed, non-interactive state.
+func TestUsageSettingsTableLockedWhileOff(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	a, view := newSettingsShelf(t) // AIUsage.Enabled defaults to false
+	before := a.settings.AIUsage
+	clickVisible(t, view, "套餐额度 Codex")
+	clickVisible(t, view, "本机用量 Claude Code")
+	if a.settings.AIUsage != before {
+		t.Fatalf("locked table answered clicks: %+v", a.settings.AIUsage)
+	}
+	// The master still flips while the table is locked.
+	clickVisible(t, view, "在刘海里显示 AI 用量")
+	if !a.settings.AIUsage.Enabled {
+		t.Fatal("master switch must work while the table is locked")
+	}
+	// With the table unlocked the checkboxes apply again: omp's local
+	// checkbox flips to off and the change is saved.
+	clickVisible(t, view, "本机用量 omp")
+	if a.settings.AIUsage.LocalOmp {
+		t.Fatal("unlocked table must answer checkbox clicks")
+	}
+	saved, err := settings.Load(a.dataDir)
+	if err != nil || !saved.AIUsage.Enabled || saved.AIUsage.LocalOmp {
+		t.Fatalf("saved state wrong: %v %+v", err, saved.AIUsage)
+	}
+}
+
+// The card's logo sits on the ring's centre: render one quotaRing, find
+// the logo's ink pixels by colour and check their centroid is the circle
+// centre — (32, 32) inside the 64pt box at the view's origin.
+func TestQuotaRingLogoCentred(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool aiusage.Tool
+		// match reports whether an 8-bit pixel is logo ink
+		match func(r, g, b uint32) bool
+	}{
+		{"codex", aiusage.ToolCodex, func(r, g, b uint32) bool {
+			// white Blossom ink, under the #FFF of the pace ticks
+			return r+g+b > 640 && min(min(r, g), b) < 253
+		}},
+		{"claude", aiusage.ToolClaude, func(r, g, b uint32) bool {
+			// #D97757 spark ink: g<140 and b>50 keep the #FF9F0A ring
+			// (g=159, b=10) and the white ticks out.
+			return r > 170 && g > 80 && g < 140 && b > 50 && b < 130
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newUsageFixture(t, true)
+			now := *fx.now
+			view := ui.NewTester(func(c *ui.Context) {
+				fx.f.quotaRing(c, tc.tool, okQuota(tc.tool, "Plus", now), false)
+			}, 64, 64)
+			view.Frame()
+			img := view.Image()
+			b := img.Bounds()
+			var sx, sy, n float64
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				for x := b.Min.X; x < b.Max.X; x++ {
+					r, g, bl, _ := img.At(x, y).RGBA()
+					r, g, bl = r>>8, g>>8, bl>>8
+					if tc.match(r, g, bl) {
+						sx += float64(x - b.Min.X)
+						sy += float64(y - b.Min.Y)
+						n++
+					}
+				}
+			}
+			if n == 0 {
+				t.Fatalf("no %s logo pixels found", tc.name)
+			}
+			cx, cy := sx/n, sy/n
+			if math.Abs(cx-32) > 1.5 || math.Abs(cy-32) > 1.5 {
+				t.Fatalf("%s logo centroid (%.1f, %.1f) is not the ring centre (32, 32); %d ink px",
+					tc.name, cx, cy, int(n))
+			}
+		})
 	}
 }
 
