@@ -338,6 +338,7 @@ func (a *shelf) removeFrom(items []store.Item, id pageID) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+	a.syncCopyKey()
 }
 
 // quickLook previews paths in the system Quick Look panel.

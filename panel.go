@@ -170,6 +170,8 @@ func (a *shelf) view(c *ui.Context) {
 	// A page that got switched off (or a stale id) must not stay current:
 	// fold back to the tray before anything reads a.tab.
 	a.normalizeTab()
+	// Selection may change while building this frame.
+	defer a.syncCopyKey()
 	if c.Shortcut(0, ui.KeyEscape) {
 		a.escape()
 	}
@@ -847,6 +849,7 @@ func (a *shelf) setTab(id pageID) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+	a.syncCopyKey()
 }
 
 // moveClipSelection moves the clipboard tab's selection by delta rows

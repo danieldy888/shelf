@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,10 +25,11 @@ import (
 )
 
 type fakeQuotaFetch struct {
-	calls       int
-	q           aiusage.Quota
-	qs          []aiusage.Quota
-	cancelledAt int // calls index at which ctx was already cancelled
+	calls             int
+	q                 aiusage.Quota
+	qs                []aiusage.Quota
+	cancelledAt       int  // calls index at which ctx was already cancelled
+	answerAfterCancel bool // a server answer already received before cancellation
 }
 
 func (f *fakeQuotaFetch) fetch(ctx context.Context) aiusage.Quota {
@@ -41,6 +43,9 @@ func (f *fakeQuotaFetch) fetch(ctx context.Context) aiusage.Quota {
 	f.calls++
 	if ctx.Err() != nil {
 		f.cancelledAt = f.calls
+		if !f.answerAfterCancel {
+			return aiusage.Quota{Status: aiusage.QuotaFailed, Err: ctx.Err().Error()}
+		}
 	}
 	return q
 }
@@ -253,6 +258,44 @@ func TestUsageRefreshButtonForcesWithinLimits(t *testing.T) {
 	fx.view.Click("刷新")
 	if fx.claude.calls != 3 {
 		t.Fatalf("claude refetch at 5 minutes expected, calls=%d", fx.claude.calls)
+	}
+}
+
+// A refresh click the limits hold back says when the next look is due
+// instead of doing nothing visible (PLAN.md 验收反馈).
+func TestUsageRefreshClickSaysWhenHeldBack(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	*fx.now = fx.now.Add(10 * time.Second)
+	fx.view.Click("刷新")
+	if fx.codex.calls != 1 || fx.claude.calls != 1 {
+		t.Fatalf("inside the minimum gaps nothing may be asked: %d %d", fx.codex.calls, fx.claude.calls)
+	}
+	if !strings.Contains(fx.a.status, "刚查过") || !strings.Contains(fx.a.status, "50 秒") {
+		t.Fatalf("status = %q, want 刚查过，50 秒后可再刷新", fx.a.status)
+	}
+}
+
+// The refresh status stays visible even when old data is already present.
+func TestUsageRefreshClickShowsProgress(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now) // inline seams: both answered, data on screen
+	flush := stubUsageSeams(t, true)
+	*fx.now = fx.now.Add(5 * time.Minute)
+	fx.view.Click("刷新")
+	if fx.a.status != "正在刷新…" {
+		t.Fatalf("a click must show progress, status=%q", fx.a.status)
+	}
+	flush()
+	fx.f.tick(*fx.now)
+	if _, count := fx.f.moduleTitle(); count == "正在更新…" {
+		t.Fatal("finished work must settle back to the data stamp")
 	}
 }
 
@@ -719,36 +762,140 @@ func TestUsageDisableCancelsWork(t *testing.T) {
 	}
 }
 
-// Hiding then reopening inside the throttle window must not refetch: the
-// attempt timestamp survives the cancelled generation.
-func TestUsageReopenKeepsQuotaThrottle(t *testing.T) {
+// Hiding while a fetch is in flight cancels it; a cancelled attempt must
+// allow a new Codex fetch, but cannot bypass Claude's five-minute floor.
+func TestUsageReopenRefetchesAfterCancelledAttempt(t *testing.T) {
 	fx := newUsageFixture(t, true)
 	flush := stubUsageSeams(t, true)
+	fx.codex.q = aiusage.Quota{Status: aiusage.QuotaFailed}
+	fx.claude.q = aiusage.Quota{Status: aiusage.QuotaFailed}
 	fx.view.Click("AI 用量")
 	fx.f.tick(*fx.now)
 
 	fx.a.hide(hideExplicit)
 	flush()
-	if fx.claude.calls != 1 {
-		t.Fatalf("first fetch ran %d times", fx.claude.calls)
+	if !fx.f.quota[0].attemptAt.IsZero() {
+		t.Fatal("cancelled Codex work must allow an immediate retry")
 	}
+	if fx.f.quota[1].attemptAt.IsZero() {
+		t.Fatal("cancelled Claude work must retain the five-minute floor")
+	}
+	if fx.f.quota[1].latest.FetchedAt.IsZero() {
+		t.Fatal("Claude must show its result instead of remaining on 正在查询…")
+	}
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
 
 	*fx.now = fx.now.Add(2 * time.Minute) // inside both 5m intervals
 	fx.a.visible = true
 	fx.a.setTab(pageUsage)
 	fx.f.tick(*fx.now)
 	flush()
-	if fx.codex.calls != 1 || fx.claude.calls != 1 {
-		t.Fatalf("reopen re-fetched inside the interval: %d %d", fx.codex.calls, fx.claude.calls)
+	if fx.codex.calls != 2 || fx.claude.calls != 1 {
+		t.Fatalf("reopen must retry Codex but respect Claude cadence: %d %d", fx.codex.calls, fx.claude.calls)
 	}
-	// The discarded first results never published.
-	if !fx.f.quota[0].latest.FetchedAt.IsZero() || !fx.f.quota[1].latest.FetchedAt.IsZero() {
-		t.Fatal("discarded results must not become latest")
+	fx.view.Frame()
+	if fx.view.HasText("正在查询…") {
+		t.Fatal("the refetched answer must replace 正在查询…")
+	}
+	if !fx.view.HasText("95%") {
+		t.Fatalf("the card must show the new numbers; texts=%v", fx.view.Texts())
 	}
 }
 
-// A 429 landing after the panel hid is discarded as UI data, but its
-// RetryAfter still backs the endpoint off.
+// A cancelled refresh keeps the previous answer: hiding mid-refresh must
+// not turn shown quota into QuotaFailed/「网络不通」 (acceptance review).
+func TestUsageCancelledRefreshKeepsPriorAnswer(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	flush()
+	good := fx.f.quota[1].latest
+	if good.Status != aiusage.QuotaOK {
+		t.Fatal("first look must publish the good answer")
+	}
+
+	*fx.now = fx.now.Add(6 * time.Minute) // past both five-minute floors
+	fx.f.requestRefresh()
+	if !fx.f.quota[1].busy {
+		t.Fatal("the manual refresh must start a Claude fetch")
+	}
+
+	fx.a.hide(hideExplicit) // cancel in flight; the fetch dies with ctx
+	flush()
+	if got := fx.f.quota[1].latest; got != good {
+		t.Fatalf("cancelled refresh must keep the previous answer, got %+v", got)
+	}
+	if fx.f.offline() {
+		t.Fatal("a cancelled refresh must not report 网络不通")
+	}
+
+	fx.a.visible = true
+	fx.a.setTab(pageUsage)
+	fx.f.tick(*fx.now)
+	flush()
+	fx.view.Frame()
+	if !fx.view.HasText("95%") {
+		t.Fatalf("reopening must still show the kept answer; texts=%v", fx.view.Texts())
+	}
+	if fx.claude.calls != 2 {
+		t.Fatalf("the floor holds: calls=%d, want 2", fx.claude.calls)
+	}
+}
+
+// A fetch that answered before the panel hid still publishes: the page
+// shows the real result when it comes back instead of a stale
+// 「正在查询…」, and the interval keeps the endpoint from being asked again.
+func TestUsageRetiredAnswerStillPublishes(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	var work, mainQ []func()
+	origWork, origMain := goWork, dispatchMain
+	goWork = func(fn func()) { work = append(work, fn) }
+	dispatchMain = func(fn func()) { mainQ = append(mainQ, fn) }
+	t.Cleanup(func() { goWork, dispatchMain = origWork, origMain })
+
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	for _, fn := range work { // the fetches answer, the dispatches queue
+		fn()
+	}
+	work = nil
+	fx.a.hide(hideExplicit) // retires the generation before the answers land
+	for _, fn := range mainQ {
+		fn()
+	}
+	mainQ = nil
+	for _, tool := range quotaTools() {
+		st := &fx.f.quota[quotaIndex(tool)]
+		if st.latest.FetchedAt.IsZero() {
+			t.Fatalf("%v: an answered fetch must publish even when retired", tool)
+		}
+		if st.busy {
+			t.Fatalf("%v: a retired answer must not leave the card busy", tool)
+		}
+	}
+
+	*fx.now = fx.now.Add(2 * time.Minute)
+	fx.a.visible = true
+	fx.a.setTab(pageUsage)
+	fx.f.tick(*fx.now)
+	if fx.codex.calls != 1 || fx.claude.calls != 1 {
+		t.Fatalf("a published answer must keep the interval: %d %d", fx.codex.calls, fx.claude.calls)
+	}
+	fx.view.Frame()
+	if fx.view.HasText("正在查询…") {
+		t.Fatal("reopened card shows 正在查询… although the fetch answered")
+	}
+	if !fx.view.HasText("95%") {
+		t.Fatalf("reopened card must show the recorded numbers; texts=%v", fx.view.Texts())
+	}
+}
+
+// A late 429 must still back the endpoint off after the panel hides.
 func TestUsageLate429KeepsBackoff(t *testing.T) {
 	fx := newUsageFixture(t, true)
 	flush := stubUsageSeams(t, true)
@@ -756,6 +903,7 @@ func TestUsageLate429KeepsBackoff(t *testing.T) {
 		Tool: aiusage.ToolClaude, Status: aiusage.QuotaRateLimited,
 		FetchedAt: *fx.now, RetryAfter: 5 * time.Minute,
 	}
+	fx.claude.answerAfterCancel = true
 	fx.view.Click("AI 用量")
 	fx.f.tick(*fx.now)
 	fx.a.hide(hideExplicit)

@@ -313,6 +313,43 @@ func (a *shelf) holdKeys() {
 		// Without Space, Quick Look stays available from the context menu.
 		a.spaceHeld = registerKey("Space", a.toggleQuickLook) == nil
 	}
+	a.syncCopyKey()
+}
+
+// ShowInactive does not give the overlay keyboard focus. Hold ⌘C like
+// Space only while a selected tray picture can actually be copied.
+const copyKey = "Cmd+C"
+
+// wantsCopyKey reports whether the tray would act on ⌘C right now: the
+// panel is open with its keys, on the tray page, and exactly one selected
+// item is a picture. Pure; unit-tested.
+func (a *shelf) wantsCopyKey() bool {
+	if !a.visible || !a.keysAreOurs() || a.tab != pageTray || a.selection.count() != 1 || a.store == nil {
+		return false
+	}
+	for _, item := range a.store.Items {
+		if a.selection.has(item.ID) {
+			return !item.OffTray && !a.isLeaving(item) && convertible(item)
+		}
+	}
+	return false
+}
+
+// syncCopyKey follows selection changes without reclaiming keys released
+// by an outside click. Headless views have no native key to acquire.
+func (a *shelf) syncCopyKey() {
+	if a.win == nil {
+		return // headless test shelf: no app to register with
+	}
+	switch want := a.wantsCopyKey() && (a.escHeld || a.spaceHeld); {
+	case want && !a.cmdCHeld:
+		if registerKey(copyKey, a.copyTrayImage) == nil {
+			a.cmdCHeld = true
+		}
+	case !want && a.cmdCHeld:
+		unregisterKey(copyKey)
+		a.cmdCHeld = false
+	}
 }
 
 // keysAreOurs reports whether the shelf may hold the global Esc and Space:
@@ -330,6 +367,10 @@ func (a *shelf) releaseKeys() {
 	if a.spaceHeld {
 		unregisterKey("Space")
 		a.spaceHeld = false
+	}
+	if a.cmdCHeld {
+		unregisterKey(copyKey)
+		a.cmdCHeld = false
 	}
 }
 

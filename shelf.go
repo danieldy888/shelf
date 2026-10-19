@@ -68,7 +68,7 @@ type shelf struct {
 	updateProgress                             float64 // download progress while installing
 	updateNext                                 time.Time
 	guard                                      dragGuard
-	escHeld, spaceHeld                         bool
+	escHeld, spaceHeld, cmdCHeld               bool
 	selection                                  selection
 	stopMouseObservation, stopDragObservation  func()
 	leftSince                                  time.Time

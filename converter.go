@@ -640,6 +640,7 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+	a.syncCopyKey()
 }
 
 // uniquePath is dir/name.ext, or 「name 2.ext」, 「name 3.ext」… when that

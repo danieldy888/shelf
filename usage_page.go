@@ -170,16 +170,15 @@ func (f *usageFeature) leastWindow() (five, week *aiusage.Window, ok bool) {
 	return nil, week, ok
 }
 
-// moduleTitle is the module bar's left side: the page name, then how long
-// ago data last arrived (plus 「· 网络不通」 while a quota source is down
-// and stale data shows).
+// moduleTitle shows the data age, or progress while any source is busy.
 func (f *usageFeature) moduleTitle() (title, count string) {
 	title = "AI 用量"
 	at := f.lastUpdatedAt()
+	busy := f.quota[0].busy || f.quota[1].busy || f.localBusy
+	if busy {
+		return title, "正在更新…"
+	}
 	if at.IsZero() {
-		if f.quota[0].busy || f.quota[1].busy || f.localBusy {
-			return title, "正在更新…"
-		}
 		return title, ""
 	}
 	count = usageAgo(at, f.deps.now()) + "更新"
@@ -982,6 +981,15 @@ func usageAgo(t, now time.Time) string {
 	default:
 		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
 	}
+}
+
+// usageWait renders how long a held-back refresh must wait: whole seconds
+// under a minute, whole minutes (rounded up) above it.
+func usageWait(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d 秒", max(1, int(math.Ceil(d.Seconds()))))
+	}
+	return fmt.Sprintf("约 %d 分钟", int(math.Ceil(d.Minutes())))
 }
 
 // usageReset is the card's reset time: 「4:25 后重置」 under a day, else

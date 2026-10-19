@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -62,19 +63,14 @@ type usageScanner interface {
 	Summary(r aiusage.Range, now time.Time) aiusage.Summary
 }
 
-// usageQuotaState is one tool's latest fetch: latest is the last answer
-// whatever its Status, good the last answer that produced windows (shown
-// dimmed as stale data when the latest attempt failed). Throttling lives
-// in attemptAt and retryTill, both set the moment a request is dispatched
-// or an answer is processed — before generation checks — so cancelling the
-// UI work (hide/disable) never silently re-opens the endpoint. retryTill
-// is the server-sent RetryAfter deadline, the only extra hold-back on top
-// of the page's own refresh intervals.
+// usageQuotaState keeps the latest answer and the last usable windows.
+// attemptAt enforces each provider's cadence; retryTill is server backoff.
 type usageQuotaState struct {
 	latest, good aiusage.Quota
 	attemptAt    time.Time // when the last request was dispatched
 	retryTill    time.Time
 	busy         bool
+	generation   int // distinguishes dispatches when fake-clock times tie
 }
 
 // usageFeature is the AI 用量 page: the panelPage whose ear icon and stage
@@ -99,9 +95,8 @@ type usageFeature struct {
 	wasVisible bool
 	hoverTool  aiusage.Tool // the quota card under the pointer this frame
 
-	// workGen/workCancel retire background work: workCtx is cancelled when
-	// the feature is disabled, hidden or the page left, and workGen rejects
-	// results that land after that. Both are main-thread only.
+	// workGen/workCancel retire local scans and cancel in-flight fetches.
+	// Completed quota answers remain useful after a page change.
 	workGen    int
 	workCtx    context.Context
 	workCancel context.CancelFunc
@@ -237,18 +232,16 @@ func (f *usageFeature) ensureFresh(now time.Time) {
 	}
 }
 
-// requestRefresh is the module-bar button: the local summary rebuilds at
-// once and each enabled quota tool refetches, but never sooner than its
-// minimum gap (usageQuotaManual, five minutes for Claude Code) or a server
-// RetryAfter said.
+// requestRefresh rebuilds local usage and asks each enabled quota source
+// within its minimum gap and RetryAfter. Every click gets a status toast,
+// even when a fast local scan leaves no visibly busy frame.
 func (f *usageFeature) requestRefresh() {
 	if !f.enabled() {
 		return
 	}
 	now := f.deps.now()
-	if f.localOn() && !f.localBusy {
-		f.startLocal(now)
-	}
+	started := false
+	var wait time.Duration
 	for _, t := range quotaTools() {
 		if !f.quotaOn(t) {
 			continue
@@ -258,16 +251,45 @@ func (f *usageFeature) requestRefresh() {
 			minGap = usageQuotaInterval // Claude 429s below a 5-minute pace
 		}
 		st := &f.quota[quotaIndex(t)]
-		if st.busy || now.Before(st.retryTill) || now.Sub(st.attemptAt) < minGap {
+		if st.busy {
+			started = true
+			continue
+		}
+		due := st.attemptAt.Add(minGap)
+		if st.retryTill.After(due) {
+			due = st.retryTill
+		}
+		if now.Before(due) {
+			if d := due.Sub(now); wait == 0 || d < wait {
+				wait = d
+			}
 			continue
 		}
 		f.startQuota(t)
+		started = true
+	}
+	if f.localOn() {
+		if !f.localBusy {
+			f.startLocal(now)
+		}
+		started = true
+	}
+	// A held-back quota source is what makes a click look dead when the
+	// local scan is instant: say when it may be asked again.
+	switch {
+	case wait > 0:
+		f.host.toastStatus("刚查过，"+usageWait(wait)+"后可再刷新", time.Time{}, false)
+	case started:
+		f.host.toastStatus("正在刷新…", time.Time{}, false)
+	default:
+		f.host.toastStatus("没有可刷新的来源", time.Time{}, false)
 	}
 }
 
 // startQuota begins one fetch for tool on a worker goroutine, under the
 // feature's work context so hiding the panel or disabling the page stops
-// it; a result from a retired generation is dropped in gotQuota.
+// it; a result from a retired generation still reaches gotQuota, which
+// records it without touching the busy flag.
 func (f *usageFeature) startQuota(tool aiusage.Tool) {
 	st := &f.quota[quotaIndex(tool)]
 	if st.busy {
@@ -281,43 +303,64 @@ func (f *usageFeature) startQuota(tool aiusage.Tool) {
 		return
 	}
 	st.busy = true
-	st.attemptAt = f.deps.now()
+	attempted := f.deps.now()
+	st.attemptAt = attempted
 	f.invalidate()
 	gen := f.workGen
+	st.generation = gen
 	base := f.workContext()
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(base, usageQuotaTimeout)
 		q := fetch(ctx)
+		// Our own retirement (hide, page switch, disable) cancels ctx; the
+		// timeout belongs to the request. Only the former means the fetch
+		// says nothing about the endpoint.
+		aborted := errors.Is(ctx.Err(), context.Canceled)
 		cancel()
 		q.Tool = tool
-		dispatchMain(func() { f.gotQuota(q, gen) })
+		dispatchMain(func() { f.gotQuota(q, gen, attempted, aborted) })
 	})
 }
 
-// gotQuota records a fetch outcome (main thread): a good answer replaces
-// the shown data, a bad one keeps the last good numbers as stale data.
-// A result from before the last stopWork — or one arriving while the
-// feature is disabled or the page hidden — is dropped, but its server-sent
-// RetryAfter still applies: dropping the backoff would let a retired 429
-// reopen the endpoint on the next tick. retryTill is counted from when
-// the response arrived (FetchedAt); the usageQuotaInterval gap is checked
-// against attemptAt, set at dispatch, so neither a discarded answer nor a
-// cleared busy flag re-opens the throttle.
-func (f *usageFeature) gotQuota(q aiusage.Quota, gen int) {
+// gotQuota retains completed answers even after a page change, so reopening
+// never shows an unanswered card for a request that already finished.
+// Cancelled Codex work may be retried immediately. Claude attempts still
+// retain their five-minute floor because cancellation cannot prove that the
+// server never received the request, but the failed outcome of a cancelled
+// fetch never replaces a previous answer (that would fake 网络不通); a first
+// look still publishes it so the card cannot sit on 正在查询…. Server
+// RetryAfter always survives.
+func (f *usageFeature) gotQuota(q aiusage.Quota, gen int, attempted time.Time, aborted bool) {
 	st := &f.quota[quotaIndex(q.Tool)]
 	if q.RetryAfter > 0 {
 		at := q.FetchedAt
 		if at.IsZero() {
 			at = f.deps.now()
 		}
-		st.retryTill = at.Add(q.RetryAfter)
+		if until := at.Add(q.RetryAfter); until.After(st.retryTill) {
+			st.retryTill = until
+		}
 	}
-	if gen != f.workGen || !f.enabled() || !f.usageVisible() {
-		return // retired by stopWork or a page/settings change while in flight
+	if aborted && q.Status == aiusage.QuotaFailed && q.RetryAfter <= 0 {
+		if st.generation == gen && st.attemptAt.Equal(attempted) {
+			st.busy = false
+			if q.Tool == aiusage.ToolCodex {
+				st.attemptAt = time.Time{}
+			}
+		}
+		if q.Tool == aiusage.ToolCodex || !st.latest.FetchedAt.IsZero() {
+			f.invalidate()
+			return
+		}
 	}
-	st.busy = false
 	if q.FetchedAt.IsZero() {
 		q.FetchedAt = f.deps.now()
+	}
+	if st.generation == gen && st.attemptAt.Equal(attempted) {
+		st.busy = false // this answer belongs to the attempt still in flight
+	}
+	if q.FetchedAt.Before(st.latest.FetchedAt) {
+		return
 	}
 	st.latest = q
 	if q.Status == aiusage.QuotaOK && (q.FiveHour != nil || q.Weekly != nil) {

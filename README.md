@@ -58,6 +58,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 **AI usage** (optional, off by default)
 - Enable it in Settings → AI 用量 and the shelf gains a third page: subscription quota for Codex and Claude Code — a double ring per card, outer weekly, inner 5-hour — plus this Mac's token usage for omp, Claude Code and Codex, as a stacked chart over 今天 / 7 天 / 30 天 / 全部.
 - Quota checks read the login info those tools already saved on this Mac and send it only to the tools' own endpoints (chatgpt.com, api.anthropic.com) — never anywhere else, and never to sign in or refresh a login.
+- Refresh always shows progress or the wait until the next quota check. Claude Code checks stay at least five minutes apart, and server retry delays still apply.
 
 **Quiet by design**
 - One shortcut, `⌃⌥Space`, opens or closes it; clicking anywhere else tucks it away.
@@ -172,6 +173,7 @@ MIT — see [LICENSE](LICENSE).
 **AI 用量**（可选，默认关闭）
 - 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，刘海会多出第三页：Codex、Claude Code 的套餐剩余额度（每张卡内外双圈：外圈每周、内圈 5 小时），以及这台电脑上 omp、Claude Code、Codex 的 token 用量（堆叠柱图，按 今天 / 7 天 / 30 天 / 全部 切换；额度卡和本机来源都可以在设置里单独关掉）。
 - 查额度时会读取这些工具保存在本机的登录信息，只用它向工具自己的官方地址（chatgpt.com、api.anthropic.com）查询，不会发给任何其他地方，也不会替你登录或刷新登录。
+- 点刷新会显示进度或下次可查的等待时间；Claude Code 查询至少间隔 5 分钟，也会遵守服务端的重试等待时间。
 
 **安静、不打扰**
 - 一个快捷键 `⌃⌥Space` 打开或收起；点别处就自动缩回刘海。

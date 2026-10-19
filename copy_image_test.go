@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/settings"
@@ -173,6 +174,137 @@ func TestCopyImageDisabledForMultipleSelection(t *testing.T) {
 	err := view.ChooseMenuItem("复制图片")
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("multi-selection chose 复制图片 (%v); want it disabled", err)
+	}
+}
+
+// The tray's ⌘C cannot reach a non-activating panel (the overlay never
+// becomes the key window), so the key is held globally while exactly one
+// selected picture can be copied, and released everywhere else so the
+// frontmost app keeps it (PLAN.md 验收反馈).
+func TestWantsCopyKeyOnlyForOneSelectedPicture(t *testing.T) {
+	a, _ := imageFileShelf(t, "one.png", "two.png")
+	pick := func(ids ...string) {
+		t.Helper()
+		if len(ids) == 0 {
+			a.selection.clear()
+		} else {
+			a.selection.onlyAll(ids)
+		}
+	}
+	images := a.visibleItems()
+	if len(images) != 2 {
+		t.Fatalf("tray has %d items, want 2", len(images))
+	}
+
+	pick(images[0].ID)
+	if !a.wantsCopyKey() {
+		t.Fatal("one selected picture must want ⌘C")
+	}
+	pick(images[0].ID, images[1].ID)
+	if a.wantsCopyKey() {
+		t.Fatal("two selected pictures cannot be copied: ⌘C must go to the app")
+	}
+	pick()
+	if a.wantsCopyKey() {
+		t.Fatal("no selection must not hold ⌘C")
+	}
+
+	pick(images[0].ID)
+	a.tab = pageClipboard
+	if a.wantsCopyKey() {
+		t.Fatal("the clipboard page must not take ⌘C")
+	}
+	a.tab = pageTray
+	a.visible = false
+	if a.wantsCopyKey() {
+		t.Fatal("a hidden panel must not hold ⌘C")
+	}
+	a.visible = true
+	a.focusMode = true
+	if a.wantsCopyKey() {
+		t.Fatal("clipboard search must keep ⌘C for the search field")
+	}
+	a.focusMode = false
+	a.settingsWin = &mygo.Window{}
+	if a.wantsCopyKey() {
+		t.Fatal("the settings window's keyboard must keep ⌘C")
+	}
+}
+
+// syncCopyKey registers the global key only while the tray wants it, and
+// the registered callback is the real copy path.
+func TestSyncCopyKeyHoldsAndReleases(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	pngBytes := testPNG(t)
+	if err := s.AddImage(pngBytes); err != nil {
+		t.Fatal(err)
+	}
+	item := s.Items[0]
+	rec := &recordClip{}
+	a := &shelf{store: s, dataDir: dir, visible: true, tab: pageTray,
+		write: rec, win: &mygo.Window{}, escHeld: true}
+	var held string
+	var press func()
+	origReg, origUnreg := registerKey, unregisterKey
+	registerKey = func(acc string, fn func()) error {
+		held, press = acc, fn
+		return nil
+	}
+	unregisterKey = func(acc string) {
+		if held == acc {
+			held, press = "", nil
+		}
+	}
+	t.Cleanup(func() { registerKey, unregisterKey = origReg, origUnreg })
+
+	a.syncCopyKey()
+	if held != "" {
+		t.Fatalf("held %q with nothing selected", held)
+	}
+	a.selection.only(item.ID)
+	a.syncCopyKey()
+	a.syncCopyKey() // idempotent: no second registration
+	if held != copyKey || press == nil {
+		t.Fatalf("one selected picture must hold %s, held=%q", copyKey, held)
+	}
+	press()
+	if !bytes.Equal(rec.png, pngBytes) {
+		t.Fatalf("the held key copied %d bytes, want %d", len(rec.png), len(pngBytes))
+	}
+	a.selection.clear()
+	a.syncCopyKey()
+	if held != "" {
+		t.Fatalf("%s still held with nothing selected", held)
+	}
+
+	// releaseKeys is the one exit every hide/handover takes.
+	a.selection.only(item.ID)
+	a.syncCopyKey()
+	a.releaseKeys()
+	if held != "" {
+		t.Fatalf("%s survived releaseKeys", held)
+	}
+	a.syncCopyKey()
+	if held != "" {
+		t.Fatal("rendering after an outside click must not reclaim ⌘C")
+	}
+}
+
+// A text file is not a picture: ⌘C keeps going to the frontmost app.
+func TestWantsCopyKeyIgnoresPlainFiles(t *testing.T) {
+	a, _ := imageFileShelf(t, "notes.txt")
+	items := a.visibleItems()
+	if len(items) != 1 {
+		t.Fatalf("tray has %d items, want 1", len(items))
+	}
+	a.selection.only(items[0].ID)
+	if a.wantsCopyKey() {
+		t.Fatal("a text file must not hold ⌘C")
 	}
 }
 
