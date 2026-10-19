@@ -3,15 +3,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"shelf/internal/aiusage"
 	"shelf/internal/mac"
 	"shelf/internal/settings"
 	"shelf/internal/store"
@@ -148,6 +151,30 @@ func (a *shelf) ready(show bool) {
 	a.modules = append(a.modules, a.np)
 	a.conv = &converter{host: a}
 	a.modules = append(a.modules, a.conv, &leavingModule{host: a})
+
+	// AI 用量页：额度查询与本地用量扫描都注入为可替换的实现，页面只认
+	// internal/aiusage 的类型。额度读取本机已保存的登录信息，只发给
+	// 对应服务的官方端点；本地扫描的增量缓存放数据目录的
+	// usage-cache/。这里的组装不碰凭据、文件与网络——一切取数都在
+	// tick/点击触发且 aiUsage.enabled 为 true 之后才开始。
+	usageEnv := aiusage.DefaultEnv()
+	deps := usageDeps{
+		fetchCodex:  func(ctx context.Context) aiusage.Quota { return aiusage.FetchCodex(ctx, usageEnv) },
+		fetchClaude: func(ctx context.Context) aiusage.Quota { return aiusage.FetchClaude(ctx, usageEnv) },
+		pace:        aiusage.Pace,
+		// A fresh scanner per refresh follows the local* switches; the
+		// incremental cache in usage-cache keeps rebuilds cheap.
+		newScanner: func() usageScanner {
+			if usageEnv.Home == "" {
+				return nil
+			}
+			return aiusage.NewScanner(usageEnv.Home, filepath.Join(a.dataDir, "usage-cache"), usageSources(&a.settings.AIUsage))
+		},
+		now: time.Now,
+	}
+	usage := newUsageFeature(a, deps)
+	a.registerPage(usage)
+	a.modules = append(a.modules, usage)
 	_, a.dragSerial = mac.DragState()
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。

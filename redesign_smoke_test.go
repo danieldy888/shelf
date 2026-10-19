@@ -154,7 +154,7 @@ func redesignShelf(t *testing.T) *shelf {
 		a.modules, a.np = nil, nil
 		a.search, a.focusMode = "", false
 		a.settings.IslandNowPlaying = false
-		a.setTab(tabTray)
+		a.setTab(pageTray)
 	})
 	return a
 }
@@ -259,7 +259,7 @@ func TestRedesignTrayMusic(t *testing.T) {
 				}
 			}
 		}
-		a.setTab(tabTray)
+		a.setTab(pageTray)
 	})
 	expandShelf(t, a)
 	shotNotch(t, a, "tray-with-music")
@@ -272,7 +272,7 @@ func TestRedesignTrayEmpty(t *testing.T) {
 		a.np = nil
 		_ = a.store.Clear()
 		a.dropStaleThumbnails()
-		a.setTab(tabTray)
+		a.setTab(pageTray)
 	})
 	expandShelf(t, a)
 	shotNotch(t, a, "tray-empty")
@@ -287,7 +287,7 @@ func TestRedesignClipboardSearch(t *testing.T) {
 		_ = a.store.AddClipText("购物清单：牛奶、鸡蛋、面包", "com.apple.Notes")
 		_ = a.store.AddClipText("https://example.com/release-notes", "com.apple.Safari")
 		_ = a.store.AddClipText("货架设计评审 周五 15:00", "com.apple.Calendar")
-		a.setTab(tabClipboard)
+		a.setTab(pageClipboard)
 		a.search = "清"
 		a.focusMode = true
 	})
@@ -308,7 +308,7 @@ func TestRedesignClipboardMusic(t *testing.T) {
 		_ = a.store.AddClipText("购物清单：牛奶、鸡蛋、面包", "com.apple.Notes")
 		_ = a.store.AddClipText("https://example.com/release-notes", "com.apple.Safari")
 		_ = a.store.AddClipText("货架设计评审 周五 15:00", "com.apple.Calendar")
-		a.setTab(tabClipboard)
+		a.setTab(pageClipboard)
 	})
 	expandShelf(t, a)
 	shotNotch(t, a, "clipboard-music")

@@ -103,6 +103,40 @@ func TestAutoCheckUpdatesLoad(t *testing.T) {
 	}
 }
 
+// aiUsage is a nested object: a file without the key (every install before
+// the AI 用量 page) must load the page's defaults — the feature off, every
+// source on — never Go's zero value. Partial objects keep defaults for
+// their missing keys too, and an explicit enabled is honoured.
+func TestAIUsageLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AIUsage.Enabled {
+		t.Fatal("missing aiUsage turned the page on")
+	}
+	for name, on := range map[string]bool{
+		"quotaCodex": s.AIUsage.QuotaCodex, "quotaClaude": s.AIUsage.QuotaClaude,
+		"localOmp": s.AIUsage.LocalOmp, "localClaude": s.AIUsage.LocalClaude, "localCodex": s.AIUsage.LocalCodex,
+	} {
+		if !on {
+			t.Fatalf("missing aiUsage.%s loaded as off", name)
+		}
+	}
+	// A partial object fills only the keys it sets.
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"aiUsage": {"enabled": true, "localCodex": false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Load(dir)
+	if err != nil || !s.AIUsage.Enabled || s.AIUsage.LocalCodex || !s.AIUsage.QuotaCodex || !s.AIUsage.LocalOmp {
+		t.Fatalf("partial aiUsage = %+v, %v; want enabled, localCodex off, the rest on", s.AIUsage, err)
+	}
+}
+
 func TestSaveRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	want := Settings{ClipboardHistory: false, RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}

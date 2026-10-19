@@ -39,11 +39,14 @@ type shelf struct {
 	modules                                    []module
 	np                                         *nowPlayingModule     // the peek player reads its state
 	conv                                       *converter            // image conversion jobs; nil until the app starts
+	usage                                      *usageFeature         // nil until the AI usage page registers itself
 	clip                                       *clipboardModule      // nil while clipboard history is off
-	tab                                        int                   // panelTab: which list the expanded panel shows
+	pages                                      []panelPage           // registered pages in ear order (built-ins first)
+	pagesReady                                 bool                  // built-in pages have been registered
+	tab                                        pageID                // current page of the expanded panel (registry in pages.go)
 	tabAt                                      time.Time             // when the tab last switched; drives the pages' crossfade
-	tabFrom                                    int                   // the page being left by the last switch, drawn fading out
-	search                                     string                // clipboard tab's search text
+	tabFrom                                    pageID                // the page being left by the last switch, drawn fading out
+	search                                     string                // clipboard page's search text
 	reveal                                     string                // row to keep in view after a keyboard move
 	focusMode                                  bool                  // the window took the keyboard for clipboard search
 	prevAppPID                                 int                   // app to hand the keyboard back to when focusMode ends
@@ -343,7 +346,8 @@ func (a *shelf) openClipboardSearch() {
 			a.prevAppPID = pid
 		}
 	}
-	a.tab, a.search = tabClipboard, ""
+	a.switchTab(pageClipboard) // leaving pageUsage retires its work the same way setTab does
+	a.search = ""
 	a.focusMode = true
 	// The window must sit below the IM candidate band before the search
 	// field takes the keyboard — even when the panel was already open
@@ -355,6 +359,17 @@ func (a *shelf) openClipboardSearch() {
 	// 键盘已经在这个窗口里：Esc 与空格交给窗口处理，全局注册会把
 	// 按键从搜索框手里抢走。
 	a.releaseKeys()
+}
+
+// switchTab changes the current page without a fade: the search hotkey's
+// direct jump. setTab keeps its own copy because it also records tabFrom
+// for the crossfade; both retire the AI usage page's background work the
+// moment it is left.
+func (a *shelf) switchTab(id pageID) {
+	if a.tab == pageUsage && id != pageUsage && a.usage != nil {
+		a.usage.stopWork()
+	}
+	a.tab = id
 }
 
 // Keyboard handback seams: tests stub these (mac's own calls need the app

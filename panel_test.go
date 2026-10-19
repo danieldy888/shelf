@@ -192,7 +192,7 @@ func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
 	if len(left) != 2 || !slices.Contains(left, "复制的文字") || !slices.Contains(left, "置顶的文字") {
 		t.Fatalf("the tray's 清空 must remove only the file and keep the clipboard history: %q", left)
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	a.search = "复制"
 	view.Frame()
 	if view.HasText("清空") {
@@ -241,8 +241,8 @@ func TestEarBarFlanksTheNotch(t *testing.T) {
 	if r, ok := view.Find("清空"); !ok || r.Y < notchH {
 		t.Fatalf("the module bar's 清空 must sit below the notch: %+v %v", r, ok)
 	}
-	if err := view.Click("剪贴板"); err != nil || a.tab != tabClipboard {
-		t.Fatalf("the ear icon must switch pages: %v tab=%d", err, a.tab)
+	if err := view.Click("剪贴板"); err != nil || a.tab != pageClipboard {
+		t.Fatalf("the ear icon must switch pages: %v tab=%s", err, a.tab)
 	}
 	a.focusMode = true
 	view.Frame()
@@ -263,20 +263,20 @@ func TestActivityStripShowsUpToTwoLiveModules(t *testing.T) {
 	first := &fakeActivity{label: "第一个活动", isLive: true}
 	second := &fakeActivity{label: "第二个活动", isLive: true}
 	third := &fakeActivity{label: "第三个活动", isLive: true}
-	a := &shelf{tab: tabTray}
+	a := &shelf{tab: pageTray}
 	a.modules = []module{idle, first, second, third}
-	for _, tab := range []int{tabTray, tabClipboard} {
+	for _, tab := range []pageID{pageTray, pageClipboard} {
 		a.tab = tab
 		first.compact, second.compact = false, false
 		view := ui.NewTester(a.view, panelWidth, panelHeight)
 		if view.HasText("空闲") || view.HasText("第三个活动") {
-			t.Fatalf("page %d: an idle activity and a third live one must not show", tab)
+			t.Fatalf("page %s: an idle activity and a third live one must not show", tab)
 		}
 		if !view.HasText("第一个活动") || !view.HasText("第二个活动") {
-			t.Fatalf("page %d: the first two live activities must show", tab)
+			t.Fatalf("page %s: the first two live activities must show", tab)
 		}
 		if !first.compact || !second.compact {
-			t.Fatalf("page %d: two activities side by side must both be compact", tab)
+			t.Fatalf("page %s: two activities side by side must both be compact", tab)
 		}
 	}
 	a.modules = []module{first}
@@ -659,7 +659,7 @@ func TestPageSwitchKeepsPanelHeight(t *testing.T) {
 	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
 	a.x, a.y, a.h = 455, 0, 900
 	tray := a.desiredFrame().Height
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	if clip := a.desiredFrame().Height; clip != tray {
 		t.Fatalf("switching to the clipboard resized the panel: %d -> %d", tray, clip)
 	}
@@ -669,6 +669,119 @@ func TestPageSwitchKeepsPanelHeight(t *testing.T) {
 	}
 	if got := a.desiredFrame().Height; got <= tray {
 		t.Fatalf("a longer clipboard list must still grow the panel: %d -> %d", tray, got)
+	}
+}
+
+// fakePage is a registered page outside the height-sharing group: the
+// panel must follow its own stage height instead of the tray/clipboard
+// group max. on flips enabled().
+type fakePage struct {
+	on     bool
+	height int
+}
+
+func (p *fakePage) id() pageID    { return "fake" }
+func (p *fakePage) label() string { return "假页面" }
+func (p *fakePage) icon(c *ui.Context, _ bool) ui.Element {
+	return ui.Icon(c, textSymbol)
+}
+func (p *fakePage) enabled() bool      { return p.on }
+func (p *fakePage) sharesHeight() bool { return false }
+func (p *fakePage) stageH() int        { return p.height }
+func (p *fakePage) body(c *ui.Context, _ bool, _ bool) ui.Element {
+	return ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Text(c, "假页面内容").FontSize(13).TextColor(ink)
+	})
+}
+func (p *fakePage) moduleTitle() (title, count string) { return "假页面", "" }
+func (p *fakePage) moduleTrailing(c *ui.Context, _ bool) []ui.Element {
+	return nil
+}
+
+// A page that opts out of height sharing owns the stage height: switching
+// to it eases the panel to its own measure, and switching back to a
+// sharing page restores the group height — while tray↔clipboard stays
+// constant (TestPageSwitchKeepsPanelHeight).
+func TestNonSharingPageDrivesPanelHeight(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.AddText("托盘里一条"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		if err := s.AddClipText(fmt.Sprintf("剪贴板 %d", i), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
+	a.x, a.y, a.h = 455, 0, 900
+
+	fake := &fakePage{on: true, height: 260}
+	a.registerPage(fake)
+	if got := a.pageIndex("fake"); got != 2 {
+		t.Fatalf("the fake page must register after the two built-ins, got index %d", got)
+	}
+
+	shared := a.desiredFrame().Height // tray: the group's taller stage (clipboard)
+	a.setTab(pageClipboard)
+	if got := a.desiredFrame().Height; got != shared {
+		t.Fatalf("tray→clipboard must keep the group height: %d -> %d", shared, got)
+	}
+	a.setTab("fake")
+	fixed := spacerH() + min(max(fake.stageH(), stageMinH), stageMaxH)
+	if got := a.desiredFrame().Height; got != fixed {
+		t.Fatalf("a non-sharing page must own the stage height: want %d, got %d", fixed, got)
+	}
+	fake.height = 190
+	if got := a.desiredFrame().Height; got != spacerH()+190 {
+		t.Fatalf("the panel must follow the page's own stageH: want %d, got %d", spacerH()+190, got)
+	}
+	a.setTab(pageTray)
+	if got := a.desiredFrame().Height; got != shared {
+		t.Fatalf("switching back must restore the group height: %d -> %d", fake.stageH(), got)
+	}
+}
+
+// spacerH is panelContentH without its stage: ears, module bar and the
+// bottom padding (no activity, no search hint).
+func spacerH() int {
+	a := &shelf{}
+	spacer, rowH, _ := a.earLayout()
+	return spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
+}
+
+// Switching off the current page (e.g. AI 用量's setting) folds the panel
+// back to the tray on the next frame; its ear icon also disappears.
+func TestDisabledCurrentPageFallsBackToTray(t *testing.T) {
+	a := &shelf{visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	fake := &fakePage{on: true, height: 200}
+	a.registerPage(fake)
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	a.setTab("fake")
+	view.Frame()
+	if !view.HasText("假页面内容") {
+		t.Fatal("the fake page did not render")
+	}
+	fake.on = false
+	view.Frame()
+	if a.tab != pageTray || a.currentPage().id() != pageTray {
+		t.Fatalf("a disabled current page must fall back to the tray, tab=%s", a.tab)
+	}
+	if view.HasText("假页面") {
+		t.Fatal("a disabled page kept its ear icon and module bar")
+	}
+	// Re-enabling brings the icon back but the panel stays on the tray.
+	fake.on = true
+	view.Frame()
+	if a.tab != pageTray {
+		t.Fatal("the fallback must not be undone by re-enabling the page")
+	}
+	if _, ok := view.Find("假页面"); !ok {
+		t.Fatal("the re-enabled page's ear icon did not come back")
 	}
 }
 
@@ -745,7 +858,7 @@ func TestTrayClearHidesClipboardCaptureInsteadOfDeleting(t *testing.T) {
 	if !view.HasText("把文件拖到这里") {
 		t.Fatal("tray still shows the hidden capture")
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 	if !view.HasText(itemTitle(clip)) {
 		t.Fatal("hidden capture missing from the clipboard page")
@@ -802,13 +915,13 @@ func TestTrayMenuRemoveHidesClipboardCapture(t *testing.T) {
 	if !view.HasText("把文件拖到这里") {
 		t.Fatal("tray still shows the hidden capture")
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 	if !view.HasText(itemTitle(clip)) {
 		t.Fatal("hidden capture missing from the clipboard page")
 	}
 	// 再次复制同一张图：去重命中，回到托盘最前。
-	a.setTab(tabTray)
+	a.setTab(pageTray)
 	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
 		t.Fatal(err)
 	}

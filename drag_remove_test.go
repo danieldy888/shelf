@@ -21,7 +21,7 @@ func dropOut(a *shelf, ids ...string) {
 
 func trayIDs(a *shelf) []string {
 	var ids []string
-	for _, it := range a.itemsFor(tabTray) {
+	for _, it := range a.itemsFor(pageTray) {
 		ids = append(ids, it.ID)
 	}
 	return ids
@@ -95,7 +95,7 @@ func TestRemoveAfterDragKeepsHistoryAndReAdds(t *testing.T) {
 		t.Fatalf("tray = %v, want the re-added file back", got)
 	}
 	a.flushLeaving(time.Now().Add(time.Second))
-	if !slices.ContainsFunc(a.itemsFor(tabClipboard), func(it store.Item) bool { return it.ID == clip.ID }) {
+	if !slices.ContainsFunc(a.itemsFor(pageClipboard), func(it store.Item) bool { return it.ID == clip.ID }) {
 		t.Fatal("the capture must stay in the clipboard history")
 	}
 	if got := trayIDs(a); !slices.Equal(got, []string{file.ID}) {

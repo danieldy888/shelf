@@ -605,8 +605,8 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 			a.report(err)
 			return
 		}
-		if a.tab != tabTray {
-			a.setTab(tabTray)
+		if a.tab != pageTray {
+			a.setTab(pageTray)
 		}
 		a.selection.onlyAll(ids)
 	}

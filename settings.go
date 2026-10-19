@@ -258,6 +258,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 					})
 				}
 				a.settingsGeneralSection(c)
+				a.settingsAIUsageSection(c)
 				a.settingsClipboardSection(c)
 				a.settingsTraySection(c)
 				a.settingsShortcutsSection(c)
@@ -437,6 +438,59 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 				}
 			})
 		}
+	})
+}
+
+// settingsAIUsageSection is the AI 用量 group (mock frame 4): the master
+// switch with its privacy caption, then the two chip rows choosing the
+// quota and local-usage sources. Everything goes through applySettings.
+func (a *shelf) settingsAIUsageSection(c *ui.Context) {
+	// chip is one source pill: a small toggle button, accent-tinted while
+	// on (mock's .ck/.ck.on). Its accessible label prefixes the row so the
+	// two rows' same-named chips stay distinct.
+	chip := func(key, text, label string, on bool, apply func(*settings.Settings, bool)) {
+		b := ui.ButtonBase(c.Key("chip-"+key)).Radius(7).Padding(3, 8, 3, 8).Label(label)
+		if on {
+			b.Background(ui.RGBA(10, 132, 255, 0.24))
+		} else {
+			b.Background(ui.RGBA(255, 255, 255, 0.08))
+		}
+		b.Children(func() {
+			tc := setInk2
+			if on {
+				tc = setInk
+			}
+			ui.Text(c, text).SingleLine().FontSize(11).FontWeight(600).TextColor(tc)
+		})
+		if b.Clicked() {
+			a.setAIUsage(func(s *settings.Settings) { apply(s, !on) })
+		}
+	}
+	settingsSection(c, "AI 用量", a.settingsBroken, func() {
+		settingsToggleCap(c, "aiusage", "在刘海里显示 AI 用量",
+			"查看 Codex、Claude Code 的套餐剩余额度和这台电脑的 token 用量。会读取本机这些工具已保存的登录信息，只用来向它们的官方地址查询额度，不发给其他任何地方。",
+			setInk3, a.settings.AIUsage.Enabled,
+			func(on bool) { a.setAIUsage(func(s *settings.Settings) { s.AIUsage.Enabled = on }) })
+		settingsSep(c, "aiusage")
+		settingsRow(c, "quota", "套餐额度", func() {
+			ui.Row(c.Key("quota-cks")).Gap(6).Children(func() {
+				chip("quota-codex", "Codex", "套餐额度 Codex", a.settings.AIUsage.QuotaCodex,
+					func(s *settings.Settings, on bool) { s.AIUsage.QuotaCodex = on })
+				chip("quota-claude", "Claude Code", "套餐额度 Claude Code", a.settings.AIUsage.QuotaClaude,
+					func(s *settings.Settings, on bool) { s.AIUsage.QuotaClaude = on })
+			})
+		})
+		settingsSep(c, "quota")
+		settingsRow(c, "local", "本机用量", func() {
+			ui.Row(c.Key("local-cks")).Gap(6).Children(func() {
+				chip("local-omp", "omp", "本机用量 omp", a.settings.AIUsage.LocalOmp,
+					func(s *settings.Settings, on bool) { s.AIUsage.LocalOmp = on })
+				chip("local-claude", "Claude Code", "本机用量 Claude Code", a.settings.AIUsage.LocalClaude,
+					func(s *settings.Settings, on bool) { s.AIUsage.LocalClaude = on })
+				chip("local-codex", "Codex", "本机用量 Codex", a.settings.AIUsage.LocalCodex,
+					func(s *settings.Settings, on bool) { s.AIUsage.LocalCodex = on })
+			})
+		})
 	})
 }
 

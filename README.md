@@ -55,9 +55,13 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Hover the notch while music plays and it becomes a small player: cover, progress, previous / play-pause / next.
 - The open shelf shows the same controls at the top.
 
+**AI usage** (optional, off by default)
+- Enable it in Settings → AI 用量 and the shelf gains a third page: subscription quota for Codex and Claude Code — a double ring per card, outer weekly, inner 5-hour — plus this Mac's token usage for omp, Claude Code and Codex, as a stacked chart over 今天 / 7 天 / 30 天 / 全部.
+- Quota checks read the login info those tools already saved on this Mac and send it only to the tools' own endpoints (chatgpt.com, api.anthropic.com) — never anywhere else, and never to sign in or refresh a login.
+
 **Quiet by design**
 - One shortcut, `⌃⌥Space`, opens or closes it; clicking anywhere else tucks it away.
-- A settings window holds every option: start at login, clipboard history size, excluded apps, automatic cleanup, now playing, updates.
+- A settings window holds every option: start at login, clipboard history size, excluded apps, automatic cleanup, now playing, AI usage, updates.
 - Updates are checked against this repository's GitHub releases. Shelf tells you when one is out and installs it only when you say so.
 
 <a id="install"></a>
@@ -107,7 +111,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Take something out | Drag it from the shelf into any app; ⌘/⇧-click to take several at once |
 | Copy text back | Click a text item, then paste with `⌘V` |
 | Search what you copied | Press `⌃⌥V`, type, pick with ↑/↓, press ⏎ |
-| Switch lists | Click 托盘 (Tray) or 剪贴板 (Clipboard) at the top of the shelf |
+| Switch lists | Click 托盘 (Tray), 剪贴板 (Clipboard) — or AI 用量 when enabled — at the top of the shelf |
 | Control music | Hover the notch while music plays, or use the card at the top of the open shelf |
 | Pin, remove, Quick Look, AirDrop | Right-click an item (Space also opens Quick Look) |
 | Clear the shelf | Click the trash icon at the top — pinned items stay; original files are never deleted |
@@ -118,7 +122,7 @@ The full manual is in [docs/MANUAL.zh-CN.md](docs/MANUAL.zh-CN.md) (Chinese).
 
 ## Privacy
 
-Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network request is the update check — shortly after launch and then once a day, Shelf asks this repository's latest GitHub release whether a newer version exists. It sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
+Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network requests are the update check — shortly after launch and then once a day, Shelf asks this repository's latest GitHub release whether a newer version exists — and, only if you enable the optional AI usage page, its quota lookups to the tools' own endpoints (nothing else is sent, and logins are never refreshed). The update request sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
 
 Clipboard text is stored in plain text in `~/Library/Application Support/Shelf/`. If you are about to copy something you don't want kept, pause recording from the menu-bar icon → 剪贴板记录 (Clipboard History), or exclude the app it comes from.
 
@@ -164,9 +168,13 @@ MIT — see [LICENSE](LICENSE).
 - 放音乐时把鼠标移到刘海上，它会变成一个小播放器：封面、进度、上一首 / 播放暂停 / 下一首。
 - 打开托盘后，上方也有一条播放条，托盘和剪贴板两页都能看到。
 
+**AI 用量**（可选，默认关闭）
+- 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，刘海会多出第三页：Codex、Claude Code 的套餐剩余额度（每张卡内外双圈：外圈每周、内圈 5 小时），以及这台电脑上 omp、Claude Code、Codex 的 token 用量（堆叠柱图，按 今天 / 7 天 / 30 天 / 全部 切换；额度卡和本机来源都可以在设置里单独关掉）。
+- 查额度时会读取这些工具保存在本机的登录信息，只用它向工具自己的官方地址（chatgpt.com、api.anthropic.com）查询，不会发给任何其他地方，也不会替你登录或刷新登录。
+
 **安静、不打扰**
 - 一个快捷键 `⌃⌥Space` 打开或收起；点别处就自动缩回刘海。
-- 所有选项都在设置窗口里：开机自启、剪贴板保留条数、排除的应用、自动清理、正在播放、更新。
+- 所有选项都在设置窗口里：开机自启、剪贴板保留条数、排除的应用、自动清理、正在播放、AI 用量、更新。
 - 新版本从本仓库的 GitHub Releases 检查；有更新时会提示你，你点了才会安装。
 
 <a id="安装"></a>
@@ -216,7 +224,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 拿东西出去 | 从托盘拖到任意应用；按住 `⌘` 或 `⇧` 可以一次拖多个 |
 | 把文字复制回来 | 单击文字项，再在任意地方 `⌘V` 粘贴 |
 | 搜索复制过的内容 | 按 `⌃⌥V`，输入关键词，`↑`/`↓` 选择，回车 |
-| 切换列表 | 点托盘左上角的托盘图标或剪贴板图标 |
+| 切换列表 | 点刘海左侧的托盘、剪贴板图标——开了 AI 用量时还有第三个 |
 | 控制音乐 | 放音乐时把鼠标移到刘海上，或用打开后上方的播放条 |
 | 置顶、移除、快速查看、隔空投送 | 右键项目（快速查看也可以直接按空格） |
 | 转换图片格式、转 PDF 或 Word | 右键图片 →「转换为」；多张图片右键 →「合并为一个 PDF」；右键 PDF →「转换为」Word 或每页一张图片 |
@@ -229,7 +237,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 
 ## 隐私
 
-一切都留在你的 Mac 上：不用注册账号，没有遥测，没有云同步。唯一的网络请求是检查更新：启动后不久一次、之后每天一次，向本仓库 GitHub 上的最新 Release 询问有没有新版本，请求里只带一个标准的 User-Agent 头（应用名和版本号）。可以在 设置… → 通用 →「自动检查更新」里关闭；关闭后仍可在菜单里手动检查。
+一切都留在你的 Mac 上：不用注册账号，没有遥测，没有云同步。联网请求只有两类：检查更新（启动后不久一次、之后每天一次，向本仓库 GitHub 上的最新 Release 询问有没有新版本，请求里只带一个标准的 User-Agent 头）；以及可选的 AI 用量页的额度查询——只有打开它才会发生，查询用本机已保存的登录信息，只发给工具自己的官方地址，不会发给任何其他地方，也不会刷新登录。「自动检查更新」可以在 设置… → 通用 里关闭；关闭后仍可在菜单里手动检查。
 
 剪贴板文字以明文保存在 `~/Library/Application Support/Shelf/`。要复制不希望被保存的内容时，可以先在菜单栏图标 →「剪贴板记录」里暂停记录，或者把来源应用加入排除列表。
 

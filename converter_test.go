@@ -341,10 +341,10 @@ func TestConvertClipboardScreenshot(t *testing.T) {
 	if err := a.store.AddClipImage(testPNG(t), "com.apple.screencaptureui"); err != nil {
 		t.Fatal(err)
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	shot := a.store.Items[0]
 	a.startConvert([]store.Item{shot}, toPDF)
-	if a.tab != tabTray {
+	if a.tab != pageTray {
 		t.Fatal("the outputs live on the tray, so the tray must come forward")
 	}
 	got := outputNames(a)

@@ -254,13 +254,13 @@ func (a *shelf) removeExcludedApp(bundleID string) {
 // clipboard page keeps it and only its own 移除/清空 truly deletes —
 // while every other item is deleted outright. On the clipboard page all
 // of them are deleted.
-func (a *shelf) remove(items []store.Item) { a.removeFrom(items, a.tab) }
+func (a *shelf) remove(items []store.Item) { a.removeFrom(items, a.currentPage().id()) }
 
-// removeFrom is remove as done from page tab.
-func (a *shelf) removeFrom(items []store.Item, tab int) {
+// removeFrom is remove as done from page id.
+func (a *shelf) removeFrom(items []store.Item, id pageID) {
 	var hide, del []string
 	for _, it := range items {
-		if tab == tabTray && it.Source == store.SourceClipboard {
+		if id == pageTray && it.Source == store.SourceClipboard {
 			hide = append(hide, it.ID)
 		} else {
 			del = append(del, it.ID)

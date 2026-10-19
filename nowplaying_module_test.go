@@ -160,11 +160,11 @@ func TestNowPlayingActivityDrawsTrackAndControls(t *testing.T) {
 		}
 	}
 	// The strip sits above every page, not only the tray.
-	a.tab = tabClipboard
+	a.tab = pageClipboard
 	if !ui.NewTester(a.view, panelWidth, panelHeight).HasText("夜曲") {
 		t.Fatal("the clipboard page must keep the activity strip")
 	}
-	a.tab = tabTray
+	a.tab = pageTray
 	// Clicking the play/pause button must send the toggle command to the
 	// helper; the button is reachable by its accessibility label.
 	if err := view.Click("暂停"); err != nil {

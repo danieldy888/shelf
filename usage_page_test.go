@@ -1,0 +1,917 @@
+//go:build darwin
+
+package main
+
+// Hermetic tests for the AI 用量 page: fake quota fetches and a fake local
+// scanner behind the same usageDeps the feature injects, goWork/dispatchMain
+// stubbed to run inline (or queued where a test wants an in-flight scan).
+// The only non-hermetic test is the screenshot, gated by SHELF_BASKET_SMOKE.
+
+import (
+	"context"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/aiusage"
+	"shelf/internal/settings"
+)
+
+type fakeQuotaFetch struct {
+	calls       int
+	q           aiusage.Quota
+	qs          []aiusage.Quota
+	cancelledAt int // calls index at which ctx was already cancelled
+}
+
+func (f *fakeQuotaFetch) fetch(ctx context.Context) aiusage.Quota {
+	q := f.q
+	if len(f.qs) > 0 {
+		q = f.qs[0]
+		if len(f.qs) > 1 {
+			f.qs = f.qs[1:]
+		}
+	}
+	f.calls++
+	if ctx.Err() != nil {
+		f.cancelledAt = f.calls
+	}
+	return q
+}
+
+// fakeUsageScanner records Scan calls and every range Summary is asked for.
+type fakeUsageScanner struct {
+	scans     int
+	ranges    []aiusage.Range
+	summaries map[aiusage.Range]aiusage.Summary
+	err       error
+	cancelled bool // a Scan saw its ctx already cancelled
+}
+
+func (s *fakeUsageScanner) Scan(ctx context.Context, progress func(done, total int64)) error {
+	s.scans++
+	if ctx.Err() != nil {
+		s.cancelled = true
+	}
+	return s.err
+}
+
+func (s *fakeUsageScanner) Summary(r aiusage.Range, now time.Time) aiusage.Summary {
+	s.ranges = append(s.ranges, r)
+	if s.summaries != nil {
+		if sum, ok := s.summaries[r]; ok {
+			return sum
+		}
+	}
+	return aiusage.Summary{Range: r}
+}
+
+// stubUsageSeams replaces goWork and dispatchMain: work runs inline so a
+// tick completes the whole fetch→publish chain, unless queued is wanted.
+func stubUsageSeams(t *testing.T, queued bool) (flush func()) {
+	t.Helper()
+	origWork, origMain := goWork, dispatchMain
+	var queue []func()
+	if queued {
+		goWork = func(fn func()) { queue = append(queue, fn) }
+		dispatchMain = func(fn func()) { queue = append(queue, fn) }
+		flush = func() {
+			for len(queue) > 0 {
+				fn := queue[0]
+				queue = queue[1:]
+				fn()
+			}
+		}
+	} else {
+		goWork = func(fn func()) { fn() }
+		dispatchMain = func(fn func()) { fn() }
+	}
+	t.Cleanup(func() {
+		goWork, dispatchMain = origWork, origMain
+	})
+	return flush
+}
+
+// usageFixture wires a feature with fake deps onto a visible shelf and
+// returns the lot for assertions.
+type usageFixture struct {
+	a      *shelf
+	f      *usageFeature
+	view   *ui.Tester
+	now    *time.Time
+	codex  *fakeQuotaFetch
+	claude *fakeQuotaFetch
+	scan   *fakeUsageScanner
+}
+
+func newUsageFixture(t *testing.T, on bool) *usageFixture {
+	t.Helper()
+	stubUsageSeams(t, false)
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.Local)
+	a := &shelf{dataDir: dir, visible: true, settings: settings.Default(),
+		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}, appNames: map[string]string{}}
+	a.settings.AIUsage.Enabled = on
+	fx := &usageFixture{a: a, now: &now, codex: &fakeQuotaFetch{}, claude: &fakeQuotaFetch{}, scan: &fakeUsageScanner{}}
+	fx.f = newUsageFeature(a, usageDeps{
+		fetchCodex:  fx.codex.fetch,
+		fetchClaude: fx.claude.fetch,
+		pace:        fakePace,
+		newScanner:  func() usageScanner { return fx.scan },
+		now:         func() time.Time { return *fx.now },
+	})
+	a.registerPage(fx.f)
+	fx.view = ui.NewTester(a.view, panelWidth, panelHeight)
+	return fx
+}
+
+// fakePace is the even-pace seam: 40% expected remaining, always lasting
+// until reset.
+func fakePace(w aiusage.Window, now time.Time) aiusage.PaceInfo {
+	return aiusage.PaceInfo{ExpectedLeftPct: 40, LastsUntilReset: true}
+}
+
+// okQuota is a healthy quota answer: 95% left on the 5h window, 70% on the
+// weekly.
+func okQuota(tool aiusage.Tool, plan string, now time.Time) aiusage.Quota {
+	return aiusage.Quota{
+		Tool:      tool,
+		Plan:      plan,
+		Status:    aiusage.QuotaOK,
+		FetchedAt: now,
+		FiveHour:  &aiusage.Window{UsedPct: 5, Length: 5 * time.Hour, ResetsAt: now.Add(4*time.Hour + 25*time.Minute)},
+		Weekly:    &aiusage.Window{UsedPct: 30, Length: 7 * 24 * time.Hour, ResetsAt: now.Add(30 * time.Hour)},
+	}
+}
+
+func TestUsageDisabledShowsNothingAndFetchesNothing(t *testing.T) {
+	fx := newUsageFixture(t, false)
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if _, found := fx.view.Find("AI 用量"); found {
+		t.Fatal("AI 用量 ear icon must not show while the feature is off")
+	}
+	if fx.codex.calls != 0 || fx.claude.calls != 0 || fx.scan.scans != 0 {
+		t.Fatalf("disabled feature must not fetch or scan: %d %d %d",
+			fx.codex.calls, fx.claude.calls, fx.scan.scans)
+	}
+	// Even while hidden the tick must stay idle.
+	for i := range 10 {
+		fx.f.tick(fx.now.Add(time.Duration(i) * time.Hour))
+	}
+	if fx.codex.calls != 0 || fx.scan.scans != 0 {
+		t.Fatal("tick on a disabled feature did work")
+	}
+}
+
+func TestUsagePageSwitchTriggersOneFetchAndScan(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	if _, found := fx.view.Find("AI 用量"); !found {
+		t.Fatal("AI 用量 ear icon missing while the feature is on")
+	}
+	if err := fx.view.Click("AI 用量"); err != nil {
+		t.Fatalf("switch to AI 用量: %v", err)
+	}
+	fx.f.tick(*fx.now)
+	if fx.codex.calls != 1 || fx.claude.calls != 1 {
+		t.Fatalf("one fetch per enabled quota tool expected, got %d %d", fx.codex.calls, fx.claude.calls)
+	}
+	if fx.scan.scans != 1 {
+		t.Fatalf("one local scan expected, got %d", fx.scan.scans)
+	}
+	fx.view.Frame()
+	for _, want := range []string{"Codex", "Plus", "Claude Code", "Pro", "95%", "4:25 后重置", "本机用量", "刚刚更新"} {
+		if !fx.view.HasText(want) {
+			t.Fatalf("page missing %q; texts=%v", want, fx.view.Texts())
+		}
+	}
+	// Staying visible does not refetch before the intervals pass.
+	for i := 1; i <= 3; i++ {
+		fx.f.tick(fx.now.Add(time.Duration(i) * 15 * time.Second))
+	}
+	if fx.codex.calls != 1 || fx.scan.scans != 1 {
+		t.Fatal("early refetch while visible")
+	}
+	// Local usage refreshes after its 60s, quota only after 5 minutes.
+	fx.f.tick(fx.now.Add(61 * time.Second))
+	if fx.scan.scans != 2 {
+		t.Fatalf("local refresh after 60s expected, scans=%d", fx.scan.scans)
+	}
+	if fx.codex.calls != 1 {
+		t.Fatal("quota must not refetch before 5 minutes")
+	}
+	fx.f.tick(fx.now.Add(5 * time.Minute))
+	if fx.codex.calls != 2 || fx.claude.calls != 2 {
+		t.Fatalf("quota refetch after 5 minutes expected, got %d %d", fx.codex.calls, fx.claude.calls)
+	}
+}
+
+func TestUsageRefreshButtonForcesWithinLimits(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	// A manual refresh inside the same minute still only scans locally.
+	if err := fx.view.Click("刷新"); err != nil {
+		t.Fatalf("refresh button: %v", err)
+	}
+	if fx.codex.calls != 1 || fx.scan.scans != 2 {
+		t.Fatalf("manual refresh: quota=%d scans=%d (want 1, 2)", fx.codex.calls, fx.scan.scans)
+	}
+	// After 60s the button refetches Codex only: Claude Code's own
+	// minimum cadence is five minutes (PLAN.md), whatever the trigger.
+	*fx.now = fx.now.Add(61 * time.Second)
+	fx.view.Click("刷新")
+	if fx.codex.calls != 2 || fx.claude.calls != 1 {
+		t.Fatalf("manual quota refresh at 61s: codex=%d claude=%d (want 2, 1)", fx.codex.calls, fx.claude.calls)
+	}
+	// A 429's Retry-After does not loosen the minimum either: the next
+	// allowed fetch is max(last receipt + 5m, the server's deadline).
+	fx.claude.q = aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaRateLimited,
+		RetryAfter: 90 * time.Second}
+	*fx.now = fx.now.Add(5*time.Minute - 61*time.Second) // t0+5m: cadence refetch
+	fx.f.tick(*fx.now)
+	if fx.claude.calls != 2 {
+		t.Fatalf("claude cadence refetch expected, calls=%d", fx.claude.calls)
+	}
+	*fx.now = fx.now.Add(95 * time.Second) // past the 90s deadline, inside 5m
+	fx.view.Click("刷新")
+	if fx.claude.calls != 2 {
+		t.Fatalf("Retry-After expiry must not beat the 5-minute cadence, calls=%d", fx.claude.calls)
+	}
+	*fx.now = fx.now.Add(5 * time.Minute)
+	fx.view.Click("刷新")
+	if fx.claude.calls != 3 {
+		t.Fatalf("claude refetch at 5 minutes expected, calls=%d", fx.claude.calls)
+	}
+}
+
+func TestUsageRetryAfterRespected(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = aiusage.Quota{
+		Tool: aiusage.ToolCodex, Status: aiusage.QuotaRateLimited,
+		FetchedAt: *fx.now, RetryAfter: 10 * time.Minute,
+	}
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	if fx.codex.calls != 1 {
+		t.Fatalf("first fetch expected, got %d", fx.codex.calls)
+	}
+	// Both the 5-minute interval and the refresh button must yield to
+	// the server's RetryAfter.
+	fx.f.tick(fx.now.Add(5 * time.Minute))
+	fx.f.requestRefresh()
+	if fx.codex.calls != 1 {
+		t.Fatalf("RetryAfter was not respected, calls=%d", fx.codex.calls)
+	}
+	if fx.claude.calls != 2 {
+		t.Fatalf("the other tool still refetches on its own schedule, calls=%d", fx.claude.calls)
+	}
+	fx.f.tick(fx.now.Add(10 * time.Minute))
+	if fx.codex.calls != 2 {
+		t.Fatalf("fetch allowed after RetryAfter, calls=%d", fx.codex.calls)
+	}
+}
+
+func TestUsageQuotaStates(t *testing.T) {
+	cases := []struct {
+		name   string
+		status aiusage.QuotaStatus
+		want   string
+	}{
+		{"not-logged-in", aiusage.QuotaNotLoggedIn, "本机没有登录 Codex"},
+		{"expired", aiusage.QuotaExpired, "登录已过期"},
+		{"rate-limited", aiusage.QuotaRateLimited, "额度查询暂时被限流"},
+		{"failed", aiusage.QuotaFailed, "暂时查不到额度"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newUsageFixture(t, true)
+			fx.codex.q = aiusage.Quota{Tool: aiusage.ToolCodex, Status: tc.status, FetchedAt: *fx.now}
+			fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+			fx.view.Click("AI 用量")
+			fx.f.tick(*fx.now)
+			fx.view.Frame()
+			if !fx.view.HasText(tc.want) {
+				t.Fatalf("missing %q; texts=%v", tc.want, fx.view.Texts())
+			}
+		})
+	}
+}
+
+// A stale card keeps the last good numbers (dimmed) when the newest fetch
+// failed, and the module bar adds 「· 网络不通」.
+func TestUsageStaleDataWithOfflineMarker(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.qs = []aiusage.Quota{
+		okQuota(aiusage.ToolCodex, "Plus", *fx.now),
+		{Tool: aiusage.ToolCodex, Status: aiusage.QuotaFailed, FetchedAt: fx.now.Add(5 * time.Minute)},
+	}
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	*fx.now = fx.now.Add(5 * time.Minute)
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	for _, want := range []string{"95%", "网络不通", "5 分钟前的数据"} {
+		if !fx.view.HasText(want) {
+			t.Fatalf("stale view missing %q; texts=%v", want, fx.view.Texts())
+		}
+	}
+}
+
+func TestUsageLowRemainingWarns(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	q := okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	q.FiveHour.UsedPct = 94 // 6% left → 快用完了
+	fx.claude.q = q
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if !fx.view.HasText("快用完了") {
+		t.Fatalf("low remaining must warn; texts=%v", fx.view.Texts())
+	}
+}
+
+func TestUsagePaceRunsOut(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.f.deps.pace = func(w aiusage.Window, now time.Time) aiusage.PaceInfo {
+		return aiusage.PaceInfo{ExpectedLeftPct: 60, AheadPct: 17, RunsOutIn: time.Hour + 42*time.Minute, LastsUntilReset: false}
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if !fx.view.HasText("5 小时 · 1:42 后用完") {
+		t.Fatalf("depletion line missing; texts=%v", fx.view.Texts())
+	}
+}
+
+func TestUsageRangeSwitchRequestsNewSummary(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if got := fx.scan.ranges; len(got) != 1 || got[0] != aiusage.RangeToday {
+		t.Fatalf("first summary must be 今天, got %v", got)
+	}
+	if err := fx.view.Click("7 天"); err != nil {
+		t.Fatalf("range segment: %v", err)
+	}
+	fx.view.Frame()
+	if got := fx.scan.ranges; len(got) < 2 || got[len(got)-1] != aiusage.Range7d {
+		t.Fatalf("switching must summarise 7 天, ranges=%v", got)
+	}
+}
+
+// The first pass over local records shows the progress card while the
+// scan is in flight.
+func TestUsageFirstScanProgress(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	// Re-stub goWork queued: the view can render while the scan is out.
+	flush := func() {}
+	{
+		origWork, origMain := goWork, dispatchMain
+		var queue []func()
+		goWork = func(fn func()) { queue = append(queue, fn) }
+		dispatchMain = func(fn func()) { queue = append(queue, fn) }
+		flush = func() {
+			for len(queue) > 0 {
+				fn := queue[0]
+				queue = queue[1:]
+				fn()
+			}
+		}
+		t.Cleanup(func() { goWork, dispatchMain = origWork, origMain })
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if !fx.view.HasText("第一次统计本机记录") {
+		t.Fatalf("progress card missing; texts=%v", fx.view.Texts())
+	}
+	flush()
+	fx.view.Frame()
+	if fx.view.HasText("第一次统计本机记录") {
+		t.Fatal("progress card must leave once the summary is in")
+	}
+}
+
+// Numbers on the KPI row follow the compact formats: ≤3 significant digits,
+// a decimal only under 100 of the unit (164M / 4.7M / 626 / ≈$+ / %), and
+// the token split must fit its cell at real-world magnitudes.
+func TestUsageKpiFormats(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	now := *fx.now
+	fx.scan.summaries = map[aiusage.Range]aiusage.Summary{
+		aiusage.RangeToday: {
+			Range: aiusage.RangeToday,
+			Total: aiusage.Totals{Input: 2_500_000, Output: 467_000, CacheRead: 161_000_000, Requests: 626, Cost: 42.96, Unpriced: 143},
+			ByTool: map[aiusage.Tool]aiusage.Totals{
+				aiusage.ToolOmp:    {Input: 400_000, Output: 67_000, CacheRead: 119_933_000, Requests: 600, Cost: 42.96},
+				aiusage.ToolClaude: {Input: 2_000_000, Output: 300_000, CacheRead: 1_000_000, Requests: 20},
+				aiusage.ToolCodex:  {Output: 100_000, CacheRead: 40_000_000, Requests: 6, Unpriced: 143},
+			},
+			Buckets: []aiusage.Bucket{{Start: now.Add(-time.Hour), Tokens: map[aiusage.Tool]int64{aiusage.ToolOmp: 120_000_000, aiusage.ToolCodex: 40_000_000, aiusage.ToolClaude: 3_200_000}}},
+		},
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	for _, want := range []string{"164M", "626", "≈$42.96+", "143 条没有价格", "98%", "输入2.5M·输出467K·缓存161M"} {
+		if !fx.view.HasText(want) {
+			t.Fatalf("KPI %q missing; texts=%v", want, fx.view.Texts())
+		}
+	}
+}
+
+// usageTokens caps at 3 significant digits: one decimal under 100 of the
+// unit, none at ≥100 — the shapes that appear in real session logs.
+func TestUsageTokensFormat(t *testing.T) {
+	for in, want := range map[int64]string{
+		0:             "0",
+		999:           "999",
+		1_500:         "1.5K",
+		39_300:        "39.3K",
+		100_000:       "100K",
+		467_000:       "467K",
+		1_300_000:     "1.3M",
+		4_700_000:     "4.7M",
+		98_940_000:    "98.9M",
+		99_960_000:    "100M",
+		290_628_159:   "291M",
+		2_217_105_299: "2.2B",
+	} {
+		if got := usageTokens(in); got != want {
+			t.Errorf("usageTokens(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Per-source settings hide their card or the whole local section.
+func TestUsagePerSourceSettings(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.a.settings.AIUsage.QuotaCodex = false
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if fx.codex.calls != 0 {
+		t.Fatal("disabled quota source must not be fetched")
+	}
+	if fx.claude.calls != 1 {
+		t.Fatal("the enabled source still fetches")
+	}
+	if !fx.view.HasText("Claude Code") {
+		t.Fatal("enabled card missing")
+	}
+	// With every local source off the 本机用量 section leaves.
+	fx.a.settings.AIUsage.LocalOmp = false
+	fx.a.settings.AIUsage.LocalClaude = false
+	fx.a.settings.AIUsage.LocalCodex = false
+	fx.view.Frame()
+	if fx.view.HasText("本机用量") {
+		t.Fatal("local section must hide when every source is off")
+	}
+}
+
+// The settings group writes through applySettings: the running copy and
+// settings.json change together.
+func TestUsageSettingsSection(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	a, view := newSettingsShelf(t)
+	if !view.HasText("AI 用量") {
+		t.Fatalf("AI 用量 section missing; texts=%v", view.Texts())
+	}
+	clickVisible(t, view, "在刘海里显示 AI 用量")
+	if !a.settings.AIUsage.Enabled {
+		t.Fatal("the master switch did not apply")
+	}
+	loaded, err := settings.Load(a.dataDir)
+	if err != nil || !loaded.AIUsage.Enabled {
+		t.Fatalf("settings.json lacks the change: %v %+v", err, loaded.AIUsage)
+	}
+	clickVisible(t, view, "套餐额度 Claude Code")
+	if a.settings.AIUsage.QuotaClaude {
+		t.Fatal("the Claude quota chip did not turn off")
+	}
+	clickVisible(t, view, "本机用量 omp")
+	if a.settings.AIUsage.LocalOmp {
+		t.Fatal("the omp local chip did not turn off")
+	}
+}
+
+// A disabled feature must never appear on the ear even though it is
+// registered; the current page falls back to the tray.
+func TestUsageDisabledFallsBackToTray(t *testing.T) {
+	fx := newUsageFixture(t, false)
+	fx.a.tab = pageUsage
+	fx.view.Frame()
+	if got := fx.a.currentPage().id(); got != pageTray {
+		t.Fatalf("current page must fall back to tray, got %s", got)
+	}
+}
+
+// Disabling the feature, hiding the panel, or leaving the page cancels
+// in-flight work at once — on the transition itself, not the next tick:
+// queued workers see a cancelled context and their results are dropped
+// instead of written into the page state.
+func TestUsageHidingCancelsWork(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true) // override the fixture's inline stubs
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	if !fx.f.localBusy && !fx.f.quota[0].busy && !fx.f.quota[1].busy {
+		t.Fatal("expected work in flight")
+	}
+
+	// hide() itself retires everything — no tick in between: the queued
+	// workers then run with a cancelled context and are dropped.
+	fx.a.hide(hideExplicit)
+	if fx.f.localBusy || fx.f.quota[0].busy || fx.f.quota[1].busy {
+		t.Fatal("busy flags must clear synchronously on hide")
+	}
+	flush()
+	if fx.codex.calls != 1 || fx.claude.calls != 1 || fx.scan.scans != 1 {
+		t.Fatalf("queued work still ran: %d %d %d", fx.codex.calls, fx.claude.calls, fx.scan.scans)
+	}
+	if fx.codex.cancelledAt != 1 || fx.claude.cancelledAt != 1 || !fx.scan.cancelled {
+		t.Fatal("workers must see a cancelled context")
+	}
+	if !fx.f.quota[0].latest.FetchedAt.IsZero() || fx.f.hasSummary {
+		t.Fatal("retired results must not publish")
+	}
+
+	// Coming back starts a fresh generation that publishes again.
+	fx.a.visible = true
+	fx.a.setTab(pageUsage)
+	fx.f.tick(*fx.now)
+	flush()
+	if !fx.f.hasSummary || fx.f.quota[0].latest.Status != aiusage.QuotaOK {
+		t.Fatal("the next visibility pass must publish normally")
+	}
+}
+
+// Leaving the usage page cancels work the same way, synchronously in
+// setTab — no tick needed.
+func TestUsageLeavingPageCancelsWork(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+
+	fx.a.setTab(pageTray)
+	if fx.f.localBusy || fx.f.quota[0].busy || fx.f.quota[1].busy {
+		t.Fatal("busy flags must clear synchronously on page departure")
+	}
+	flush()
+	if !fx.scan.cancelled || fx.codex.cancelledAt == 0 || fx.claude.cancelledAt == 0 {
+		t.Fatal("leaving the page must cancel in-flight work")
+	}
+	if fx.f.hasSummary || !fx.f.quota[0].latest.FetchedAt.IsZero() {
+		t.Fatal("results landing after the switch must be dropped")
+	}
+}
+
+// The clipboard-search hotkey jumps straight to pageClipboard — through
+// the same switchTab openClipboardSearch uses — and must retire the usage
+// page's work just like a setTab departure, synchronously.
+func TestUsageSearchShortcutStopsWork(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+
+	fx.a.switchTab(pageClipboard) // what openClipboardSearch assigns
+	if fx.a.tab != pageClipboard {
+		t.Fatal("switchTab must land on the clipboard page")
+	}
+	if fx.f.localBusy || fx.f.quota[0].busy || fx.f.quota[1].busy {
+		t.Fatal("busy flags must clear synchronously on the shortcut jump")
+	}
+	flush()
+	if !fx.scan.cancelled || fx.codex.cancelledAt == 0 || fx.claude.cancelledAt == 0 {
+		t.Fatal("the search shortcut must cancel in-flight usage work")
+	}
+}
+
+// Switching the feature off mid-flight retires work the same way: the
+// setter itself cancels, before any tick could notice.
+func TestUsageDisableCancelsWork(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true) // override the fixture's inline stubs
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.a.setAIUsage(func(s *settings.Settings) { s.AIUsage.Enabled = false })
+	if fx.f.localBusy || fx.f.quota[0].busy || fx.f.quota[1].busy {
+		t.Fatal("busy flags must clear synchronously on disable")
+	}
+	flush()
+	if !fx.scan.cancelled || fx.codex.cancelledAt == 0 || fx.claude.cancelledAt == 0 {
+		t.Fatal("disable must cancel in-flight work")
+	}
+}
+
+// Hiding then reopening inside the throttle window must not refetch: the
+// attempt timestamp survives the cancelled generation.
+func TestUsageReopenKeepsQuotaThrottle(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+
+	fx.a.hide(hideExplicit)
+	flush()
+	if fx.claude.calls != 1 {
+		t.Fatalf("first fetch ran %d times", fx.claude.calls)
+	}
+
+	*fx.now = fx.now.Add(2 * time.Minute) // inside both 5m intervals
+	fx.a.visible = true
+	fx.a.setTab(pageUsage)
+	fx.f.tick(*fx.now)
+	flush()
+	if fx.codex.calls != 1 || fx.claude.calls != 1 {
+		t.Fatalf("reopen re-fetched inside the interval: %d %d", fx.codex.calls, fx.claude.calls)
+	}
+	// The discarded first results never published.
+	if !fx.f.quota[0].latest.FetchedAt.IsZero() || !fx.f.quota[1].latest.FetchedAt.IsZero() {
+		t.Fatal("discarded results must not become latest")
+	}
+}
+
+// A 429 landing after the panel hid is discarded as UI data, but its
+// RetryAfter still backs the endpoint off.
+func TestUsageLate429KeepsBackoff(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	flush := stubUsageSeams(t, true)
+	fx.claude.q = aiusage.Quota{
+		Tool: aiusage.ToolClaude, Status: aiusage.QuotaRateLimited,
+		FetchedAt: *fx.now, RetryAfter: 5 * time.Minute,
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.a.hide(hideExplicit)
+	flush() // the cancelled fetch's 429 lands, late
+
+	st := &fx.f.quota[quotaIndex(aiusage.ToolClaude)]
+	want := fx.now.Add(5 * time.Minute)
+	if !st.retryTill.Equal(want) {
+		t.Fatalf("retryTill = %v, want %v", st.retryTill, want)
+	}
+
+	// Reopen before the backoff ends: no second request.
+	*fx.now = fx.now.Add(3 * time.Minute)
+	fx.a.visible = true
+	fx.a.setTab(pageUsage)
+	fx.f.tick(*fx.now)
+	flush()
+	if fx.claude.calls != 1 {
+		t.Fatalf("RetryAfter was lost with the discarded 429: calls=%d", fx.claude.calls)
+	}
+}
+
+// The depletion line shows the earliest runout across both windows, not
+// whichever the loop visited last.
+func TestUsagePaceEarliestDepletion(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.f.deps.pace = func(w aiusage.Window, now time.Time) aiusage.PaceInfo {
+		if w.Length == 5*time.Hour {
+			return aiusage.PaceInfo{ExpectedLeftPct: 60, AheadPct: 20, RunsOutIn: 42 * time.Minute, LastsUntilReset: false}
+		}
+		return aiusage.PaceInfo{ExpectedLeftPct: 60, AheadPct: 20, RunsOutIn: 30 * time.Hour, LastsUntilReset: false}
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if !fx.view.HasText("5 小时 · 0:42 后用完") {
+		t.Fatalf("earliest depletion expected; texts=%v", fx.view.Texts())
+	}
+}
+
+// Under a quarter remaining the ring must draw that fraction, not always a
+// quarter-circle: paint where the arc should reach, nothing where it must
+// not.
+func TestUsageRingArcSmallFraction(t *testing.T) {
+	render := func(frac float32) *image.RGBA {
+		view := ui.NewTester(func(c *ui.Context) {
+			e := ui.Box(c).Size(64, 64)
+			e.Draw(func(p *ui.Painter, r ui.Rect) {
+				strokeRingArc(p, r.X+r.W/2, r.Y+r.H/2, 20, 5, frac, ui.RGB(255, 0, 0))
+			})
+		}, 64, 64)
+		return view.Image()
+	}
+	painted := func(img *image.RGBA, x, y int) bool {
+		r, g, b, _ := img.At(x, y).RGBA()
+		r8, g8, b8 := r>>8, g>>8, b>>8
+		return r8 > 150 && g8 < 80 && b8 < 80 // the red arc on the white canvas
+	}
+	cx, cy, rad := 32, 32, 20
+
+	small := render(0.1) // 36° clockwise from 12 o'clock
+	if !painted(small, cx, cy-rad) {
+		t.Fatal("0.1 arc must start at 12 o'clock")
+	}
+	if painted(small, cx+rad, cy) {
+		t.Fatal("0.1 arc must not reach 3 o'clock (was a fixed quarter)")
+	}
+
+	half := render(0.5) // 12 → 6 o'clock, the right half
+	if !painted(half, cx+rad, cy) {
+		t.Fatal("0.5 arc must reach 3 o'clock")
+	}
+	if !painted(half, cx, cy+rad) {
+		t.Fatal("0.5 arc must reach 6 o'clock")
+	}
+	if painted(half, cx-rad, cy) {
+		t.Fatal("0.5 arc must not reach 9 o'clock")
+	}
+}
+
+// --- screenshots -------------------------------------------------------------
+
+// usageShotShelf is a visible shelf on the usage page with fake deps and a
+// fixed clock, for the screenshot tests and any render-level check.
+type usageShotShelf struct {
+	a      *shelf
+	f      *usageFeature
+	codex  *fakeQuotaFetch
+	claude *fakeQuotaFetch
+	scan   *fakeUsageScanner
+}
+
+func newUsageShot(now time.Time) *usageShotShelf {
+	a := &shelf{dataDir: os.TempDir(), visible: true, settings: settings.Default(),
+		topInset: 32, notchW: 180, notchH: 32, hasNotch: true,
+		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}, appNames: map[string]string{}}
+	a.settings.AIUsage.Enabled = true
+	s := &usageShotShelf{a: a, codex: &fakeQuotaFetch{}, claude: &fakeQuotaFetch{}}
+	s.scan = &fakeUsageScanner{summaries: usageShotSummaries(now)}
+	s.f = newUsageFeature(a, usageDeps{
+		fetchCodex:  s.codex.fetch,
+		fetchClaude: s.claude.fetch,
+		pace: func(w aiusage.Window, now time.Time) aiusage.PaceInfo {
+			return aiusage.PaceInfo{ExpectedLeftPct: 60, AheadPct: 5, LastsUntilReset: true}
+		},
+		newScanner: func() usageScanner { return s.scan },
+		now:        func() time.Time { return now },
+	})
+	a.registerPage(s.f)
+	a.tab = pageUsage
+	return s
+}
+
+// usageShotSummaries is the mock's 今天 page: the same 164M / 626 / ≈$42.96
+// numbers and the 24 hourly bars.
+func usageShotSummaries(now time.Time) map[aiusage.Range]aiusage.Summary {
+	buckets := make([]aiusage.Bucket, 24)
+	hours := []int64{38, 36, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 34, 2, 0, 0, 0, 0, 0, 0, 0, 0}
+	for i, v := range hours {
+		buckets[i] = aiusage.Bucket{Start: now.Add(time.Duration(i-24) * time.Hour), Tokens: map[aiusage.Tool]int64{
+			aiusage.ToolOmp:    v * 1_000_000 * 72 / 100,
+			aiusage.ToolClaude: v * 1_000_000 * 25 / 100,
+			aiusage.ToolCodex:  v * 1_000_000 * 3 / 100,
+		}}
+	}
+	return map[aiusage.Range]aiusage.Summary{
+		aiusage.RangeToday: {
+			Range: aiusage.RangeToday,
+			Total: aiusage.Totals{Input: 2_500_000, Output: 467_000, CacheRead: 161_000_000, Requests: 626, Cost: 42.96, Unpriced: 143},
+			ByTool: map[aiusage.Tool]aiusage.Totals{
+				aiusage.ToolOmp:    {Input: 400_000, Output: 400_000, CacheRead: 119_600_000, Requests: 600, Cost: 40.12},
+				aiusage.ToolClaude: {Input: 1_000_000, Output: 60_000, CacheRead: 2_140_000, Requests: 20},
+				aiusage.ToolCodex:  {Input: 1_100_000, Output: 7_000, CacheRead: 39_260_000, Requests: 6, Unpriced: 143},
+			},
+			Buckets: buckets,
+		},
+	}
+}
+
+// TestUsagePageScreenshot writes design/screens/usage-*.png with the same
+// fake data the design mock uses, so the layout can be compared with
+// design/usage-v1.png. Gated by SHELF_USAGE_SHOT=1 (headless PNGs from
+// ui.Tester, no app loop needed); with SHELF_BASKET_SMOKE=1 — which boots
+// the real app — the native notch window is screenshotted instead of the
+// headless image.
+func TestUsagePageScreenshot(t *testing.T) {
+	headless := os.Getenv("SHELF_USAGE_SHOT") == "1"
+	native := os.Getenv("SHELF_BASKET_SMOKE") == "1"
+	if !headless && !native {
+		t.Skip("set SHELF_USAGE_SHOT=1 (headless) or SHELF_BASKET_SMOKE=1 (native window) to write the shots")
+	}
+	dir := "design/screens" // shots land next to the existing design screenshots
+	if _, err := os.Stat(dir); err != nil {
+		t.Skipf("design/screens not found: %v", err)
+	}
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.Local)
+
+	if native {
+		a := redesignShelf(t)
+		s := newUsageShot(now)
+		onMain(func() {
+			s.codex.q = okQuota(aiusage.ToolCodex, "Plus", now)
+			s.claude.q = okQuota(aiusage.ToolClaude, "Pro", now)
+			s.claude.q.FiveHour.UsedPct = 53
+			a.dataDir = s.a.dataDir
+			a.settings.AIUsage.Enabled = true
+			a.registerPage(s.f)
+			a.modules = append(a.modules, s.f)
+			a.setTab(pageUsage)
+		})
+		expandShelf(t, a)
+		time.Sleep(500 * time.Millisecond) // let the fake fetches publish
+		shotNotch(t, a, "usage-main")
+		onMain(func() {
+			good := okQuota(aiusage.ToolCodex, "Plus", now)
+			good.FetchedAt = now.Add(-12 * time.Minute)
+			s.f.quota[quotaIndex(aiusage.ToolCodex)] = usageQuotaState{
+				latest: aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaFailed, FetchedAt: now},
+				good:   good,
+			}
+			s.f.quota[quotaIndex(aiusage.ToolClaude)] = usageQuotaState{
+				latest: aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaExpired, FetchedAt: now},
+			}
+			// A monitor tick may refetch in the real app: make the fakes
+			// answer the same states so the shot can't clobber them.
+			s.codex.q = s.f.quota[0].latest
+			s.claude.q = s.f.quota[1].latest
+			s.f.localAt = now.Add(-12 * time.Minute) // the mock's stale stamp
+			a.win.Invalidate()
+		})
+		shotNotch(t, a, "usage-states")
+		peekRestore(t, a)
+		return
+	}
+
+	// Headless: stub the worker seams so the whole pipeline is synchronous.
+	stubUsageSeams(t, false)
+	write := func(name string, view *ui.Tester) {
+		out := filepath.Join(dir, name+".png")
+		file, err := os.Create(out)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		defer file.Close()
+		if err := png.Encode(file, view.Image()); err != nil {
+			t.Fatalf("%s encode: %v", name, err)
+		}
+		t.Logf("wrote %s", out)
+	}
+	s := newUsageShot(now)
+	s.codex.q = okQuota(aiusage.ToolCodex, "Plus", now)
+	s.claude.q = okQuota(aiusage.ToolClaude, "Pro", now)
+	s.claude.q.FiveHour.UsedPct = 53
+	s.f.tick(now)
+	write("usage-main", ui.NewTester(s.a.view, panelWidth, panelHeight))
+	s2 := newUsageShot(now)
+	good := okQuota(aiusage.ToolCodex, "Plus", now)
+	good.FetchedAt = now.Add(-12 * time.Minute)
+	s2.f.quota[quotaIndex(aiusage.ToolCodex)] = usageQuotaState{
+		latest: aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaFailed, FetchedAt: now},
+		good:   good,
+	}
+	s2.f.quota[quotaIndex(aiusage.ToolClaude)] = usageQuotaState{
+		latest: aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaExpired, FetchedAt: now},
+	}
+	s2.f.tick(now)
+	s2.f.localAt = now.Add(-12 * time.Minute) // the mock's stale stamp
+	write("usage-states", ui.NewTester(s2.a.view, panelWidth, panelHeight))
+
+	// The first-scan progress card (mock frame 3's bottom) with the two
+	// other card states: 未登录 and 快用完了.
+	s3 := newUsageShot(now)
+	s3.scan.summaries = nil
+	s3.f.quota[quotaIndex(aiusage.ToolCodex)] = usageQuotaState{
+		latest: aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaNotLoggedIn, FetchedAt: now},
+	}
+	low := okQuota(aiusage.ToolClaude, "Pro", now)
+	low.FiveHour.UsedPct = 94
+	s3.f.quota[quotaIndex(aiusage.ToolClaude)] = usageQuotaState{latest: low, good: low}
+	s3.f.localBusy = true
+	s3.f.scanned = false
+	s3.f.scanDone.Store(37)
+	s3.f.scanTotal.Store(100)
+	write("usage-scan", ui.NewTester(s3.a.view, panelWidth, panelHeight))
+}

@@ -36,6 +36,22 @@ type Settings struct {
 	// RemoveAfterDrag takes an item off the tray once it was dragged out
 	// and dropped; pinned items stay.
 	RemoveAfterDrag bool `json:"removeAfterDrag"`
+	// AIUsage is the AI 用量 page: off by default; each source (quota and
+	// local usage) can be switched separately.
+	AIUsage AIUsageSettings `json:"aiUsage"`
+}
+
+// AIUsageSettings is the aiUsage object in settings.json. Enabled turns
+// the AI 用量 page on; the rest pick which data the page reads: the Codex
+// and Claude Code subscription quotas, and the local token usage of omp,
+// Claude Code and Codex.
+type AIUsageSettings struct {
+	Enabled     bool `json:"enabled"`
+	QuotaCodex  bool `json:"quotaCodex"`
+	QuotaClaude bool `json:"quotaClaude"`
+	LocalOmp    bool `json:"localOmp"`
+	LocalClaude bool `json:"localClaude"`
+	LocalCodex  bool `json:"localCodex"`
 }
 
 // defaultClipboardLimit is the clipboard text history cap a fresh
@@ -44,7 +60,21 @@ const defaultClipboardLimit = 30
 
 // Default is what a fresh install uses.
 func Default() Settings {
-	return Settings{ClipboardHistory: true, ClipboardLimit: defaultClipboardLimit, IslandNowPlaying: true, AutoCheckUpdates: true, RemoveAfterDrag: false}
+	return Settings{
+		ClipboardHistory: true,
+		ClipboardLimit:   defaultClipboardLimit,
+		IslandNowPlaying: true,
+		AutoCheckUpdates: true,
+		RemoveAfterDrag:  false,
+		AIUsage: AIUsageSettings{
+			Enabled:     false,
+			QuotaCodex:  true,
+			QuotaClaude: true,
+			LocalOmp:    true,
+			LocalClaude: true,
+			LocalCodex:  true,
+		},
+	}
 }
 
 // Save replaces dir/settings.json with s, atomically.

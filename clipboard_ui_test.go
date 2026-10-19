@@ -107,7 +107,7 @@ func TestClipboardTabFiltersToCaptures(t *testing.T) {
 	if view.HasText("从剪贴板来的") {
 		t.Fatal("tray tab showed an unpinned clipboard capture")
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 	if view.HasText("拖进来的文字") {
 		t.Fatal("clipboard tab showed a non-clipboard item")
@@ -132,7 +132,7 @@ func TestClipboardSearchFiltersBySubstring(t *testing.T) {
 	if err := a.store.AddClipImage(buf.Bytes(), "com.apple.screenshot"); err != nil {
 		t.Fatal(err)
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 	if len(a.visibleItems()) != 3 {
 		t.Fatalf("want 3 clipboard rows, got %d", len(a.visibleItems()))
@@ -160,7 +160,7 @@ func TestClipboardSearchFiltersBySubstring(t *testing.T) {
 // 置顶行排在列表最前，带小图钉；取消置顶后回到原来的位置。
 func TestClipboardPinnedFirstAndPinMenu(t *testing.T) {
 	a, view, _ := clipShelf(t, "alpha top", "beta mid", "gamma bottom")
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 
 	// Pin the last item; it must move to the top of the visible list.
@@ -209,7 +209,7 @@ func TestTrayPinnedFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.Frame()
-	if a.tab != tabTray {
+	if a.tab != pageTray {
 		t.Fatal("expected the tray tab")
 	}
 	// Items are newest-first: beta mid, alpha top; the unpinned capture
@@ -253,7 +253,7 @@ func TestTrayPinnedFirst(t *testing.T) {
 // 右键剪贴板条目可以把来源应用加入排除列表并写入 settings.json。
 func TestExcludeAppMenuWritesSettings(t *testing.T) {
 	a, view, _ := clipShelf(t, "from the recorder")
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 	a.appNames["com.example.Source"] = "Recorder" // 模拟已解析的显示名
 	if err := view.RightClick("from the recorder"); err != nil {
@@ -296,7 +296,7 @@ func TestExcludeAppMenuWritesSettings(t *testing.T) {
 // ↑/↓ 在剪贴板标签移动选中行，⏎ 把它复制到剪贴板并收起托盘。
 func TestClipboardKeyboardFlow(t *testing.T) {
 	a, view, rec := clipShelf(t, "first clip", "second clip", "third clip")
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	a.focusMode = true
 	view.Frame()
 
@@ -319,7 +319,7 @@ func TestClipboardKeyboardFlow(t *testing.T) {
 	if rec.text != "first clip" {
 		t.Fatalf("⏎ copied %q, want %q", rec.text, "first clip")
 	}
-	if a.visible || a.tab != tabTray || a.search != "" {
+	if a.visible || a.tab != pageTray || a.search != "" {
 		t.Fatal("⏎ did not collapse the shelf back to the tray tab")
 	}
 }
@@ -327,7 +327,7 @@ func TestClipboardKeyboardFlow(t *testing.T) {
 // 搜索框里的 Esc 先清空搜索，再收一次才收起托盘。
 func TestEscapeClearsSearchBeforeHiding(t *testing.T) {
 	a, view, _ := clipShelf(t, "find me")
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	a.focusMode = true
 	a.search = "find"
 	view.Frame()
@@ -365,7 +365,7 @@ func TestSelectionFollowsTheVisibleList(t *testing.T) {
 	if a.selection.count() != 1 {
 		t.Fatal("click did not select")
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	view.Frame()
 	if a.selection.count() != 0 {
 		t.Fatal("the tray selection survived into the clipboard tab")
@@ -393,7 +393,7 @@ func TestEnterCopiesImageAsPNG(t *testing.T) {
 	if err := a.store.AddClipImage(buf.Bytes(), "com.apple.screenshot"); err != nil {
 		t.Fatal(err)
 	}
-	a.setTab(tabClipboard)
+	a.setTab(pageClipboard)
 	a.selection.only(a.visibleItems()[0].ID)
 	a.copyClipSelection()
 	got := a.write.(*recordClip).png
@@ -411,10 +411,10 @@ func TestEnterCopiesImageAsPNG(t *testing.T) {
 // hide() 的键盘模式清理：回到托盘标签并交还焦点标记。
 func TestHideLeavesKeyboardMode(t *testing.T) {
 	a, _, _ := clipShelf(t, "x")
-	a.tab, a.search, a.focusMode, a.prevAppPID = tabClipboard, "q", true, 999999
+	a.tab, a.search, a.focusMode, a.prevAppPID = pageClipboard, "q", true, 999999
 	a.hide(hideExplicit)
-	if a.tab != tabTray || a.search != "" || a.focusMode || a.prevAppPID != 0 {
-		t.Fatalf("hide left keyboard state: tab=%d search=%q focus=%v", a.tab, a.search, a.focusMode)
+	if a.tab != pageTray || a.search != "" || a.focusMode || a.prevAppPID != 0 {
+		t.Fatalf("hide left keyboard state: tab=%s search=%q focus=%v", a.tab, a.search, a.focusMode)
 	}
 }
 
@@ -485,7 +485,7 @@ func TestClearKeepsPinnedItems(t *testing.T) {
 	if err := a.store.SetPinned(a.store.Items[1].ID, true); err != nil {
 		t.Fatal(err)
 	}
-	a.tab = tabClipboard
+	a.tab = pageClipboard
 	gone := a.store.Items[0].ID
 	a.thumbnails[gone] = &ui.Bitmap{}
 	a.selection.only(gone) // 选中将被清掉的那行
@@ -512,7 +512,7 @@ func TestClearKeepsPinnedItems(t *testing.T) {
 func TestCopyFailureKeepsShelfOpen(t *testing.T) {
 	a, view, _ := clipShelf(t, "won't paste")
 	a.write = failClip{}
-	a.tab = tabClipboard
+	a.tab = pageClipboard
 	a.focusMode = true
 	a.selection.only(a.store.Items[0].ID)
 	view.Frame()

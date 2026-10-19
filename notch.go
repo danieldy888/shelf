@@ -340,7 +340,7 @@ func (a *shelf) escape() {
 		mac.CloseQuickLook()
 		return
 	}
-	if a.tab == tabClipboard && a.search != "" {
+	if a.tab == pageClipboard && a.search != "" {
 		a.search = ""
 		if a.win != nil {
 			a.win.Invalidate()
@@ -363,11 +363,14 @@ func (a *shelf) hide(exit hideExit) {
 	restore := a.shouldRestoreApp(exit)
 	prev := a.prevAppPID
 	a.visible, a.edgeOpened, a.peeking = false, false, false
+	if a.usage != nil { // 隐藏即取消 AI 用量的在途取数和扫描
+		a.usage.stopWork()
+	}
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.peekFrom, a.peekAnimStart = a.peekProgress, time.Now()
 	// 收起后回到默认视图：下次打开（悬停、拖入、托盘）从托盘标签开始，
 	// 搜索框清空；键盘模式在用户明确的收起动作下交还焦点。
-	a.focusMode, a.tab, a.search, a.reveal = false, tabTray, "", ""
+	a.focusMode, a.tab, a.tabFrom, a.search, a.reveal = false, pageTray, pageTray, "", ""
 	a.prevAppPID = 0
 	a.releaseKeys()
 	a.selection.clear()

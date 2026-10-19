@@ -56,10 +56,10 @@ func TestSearchOpenFocusesWindow(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Logf("keyWindow=%v isKeyWindow=%v visible=%v focusMode=%v tab=%d prevPID=%d",
+	t.Logf("keyWindow=%v isKeyWindow=%v visible=%v focusMode=%v tab=%s prevPID=%d",
 		key, a.win.IsFocused(), a.win.IsVisible(), a.focusMode, a.tab, a.prevAppPID)
-	if !a.focusMode || a.tab != tabClipboard || a.search != "" {
-		t.Fatalf("open-for-search state wrong: focusMode=%v tab=%d search=%q", a.focusMode, a.tab, a.search)
+	if !a.focusMode || a.tab != pageClipboard || a.search != "" {
+		t.Fatalf("open-for-search state wrong: focusMode=%v tab=%s search=%q", a.focusMode, a.tab, a.search)
 	}
 	if a.prevAppPID != prev {
 		t.Fatalf("previous app not remembered: %d, want %d", a.prevAppPID, prev)

@@ -33,11 +33,9 @@ var (
 	searchSymbol    = symbol(`<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>`)
 )
 
-// panelTab is one of the two lists the expanded panel shows.
-const (
-	tabTray      = iota // 托盘：全部内容
-	tabClipboard        // 剪贴板：只显示剪贴板收录的文字与图片
-)
+// The expanded panel's pages are registered in pages.go (pageID,
+// panelPage); tray and clipboard are the built-in pages, further pages
+// register themselves in ear order.
 
 func symbol(paths string) *ui.SVG {
 	return symbolWidth(paths, 1.7)
@@ -169,6 +167,9 @@ type panelHeightKey struct{ gen int }
 // 提示）、展开（纯黑面板从刘海里长出来）。单元测试里 a.win 为 nil，
 // 直接按完整展开态渲染。
 func (a *shelf) view(c *ui.Context) {
+	// A page that got switched off (or a stale id) must not stay current:
+	// fold back to the tray before anything reads a.tab.
+	a.normalizeTab()
 	if c.Shortcut(0, ui.KeyEscape) {
 		a.escape()
 	}
@@ -176,7 +177,7 @@ func (a *shelf) view(c *ui.Context) {
 	// 剪贴板标签的回车：焦点在搜索框时由输入框的 OnTextKey 处理（输入框先
 	// 拿到方向键和回车），焦点在别处时在这里兜底。Esc 无此需要：输入框不
 	// 消费它，窗口顶部注册的 Shortcut 已经覆盖所有焦点位置。
-	if a.visible && a.tab == tabClipboard {
+	if a.visible && a.tab == pageClipboard {
 		if c.Shortcut(0, ui.KeyEnter) {
 			a.copyClipSelection()
 		}
@@ -329,7 +330,7 @@ func (a *shelf) tabBody(c *ui.Context, over bool) {
 	// The pages sit left to right as their icons do: going right, the new
 	// page arrives from the right.
 	dir := float32(1)
-	if a.tab < a.tabFrom {
+	if a.pageIndex(a.tab) < a.pageIndex(a.tabFrom) {
 		dir = -1
 	}
 	if c.Preferences().ReduceMotion {
@@ -343,13 +344,16 @@ func (a *shelf) tabBody(c *ui.Context, over bool) {
 			body.Opacity(in).Translate(tabShift*dir*(1-in), 0)
 			c.AnimationFrame()
 		}
-		body.Children(func() { a.panelBody(c, over, a.tab, true) })
+		body.Children(func() { a.panelBody(c, over, a.currentPage(), true) })
 		if t < tabOutShare && a.tabFrom != a.tab {
 			// The outgoing page is only a picture: it takes no pointer
-			// and never the keyboard.
-			old := ui.Column(c.Key("body-out")).Absolute().Left(0).Right(0).Top(0).Bottom(0).
-				PassThrough().Opacity(1 - ui.EaseIn(t/tabOutShare))
-			old.Children(func() { a.panelBody(c, false, a.tabFrom, false) })
+			// and never the keyboard. It may already be disabled; an
+			// unregistered one is skipped instead of drawn half-built.
+			if out := a.page(a.tabFrom); out != nil {
+				old := ui.Column(c.Key("body-out")).Absolute().Left(0).Right(0).Top(0).Bottom(0).
+					PassThrough().Opacity(1 - ui.EaseIn(t/tabOutShare))
+				old.Children(func() { a.panelBody(c, false, out, false) })
+			}
 		}
 	})
 }
@@ -377,13 +381,20 @@ func (a *shelf) earBar(c *ui.Context) {
 		ui.Box(c.Key("ear-spacer")).Height(float32(spacer))
 	}
 	bar := ui.Row(c.Key("ears")).Height(float32(rowH)).AlignItems(ui.Center).FillWidth()
-	var navs [2]ui.Element
+	var navs map[pageID]ui.Element
 	bar.Children(func() {
 		// Both ears grow from a zero basis, so they split the width evenly
 		// and the housing gap stays centred on the notch.
 		ui.Row(c.Key("ear-left")).Grow(1).MinWidth(0).Gap(earBtnGap).AlignItems(ui.Center).Children(func() {
-			navs[tabTray] = a.navButton(c, "tab-tray", trayNavSymbol, "托盘", tabTray)
-			navs[tabClipboard] = a.navButton(c, "tab-clipboard", clipNavSymbol, "剪贴板", tabClipboard)
+			navs = map[pageID]ui.Element{}
+			for i, p := range a.enabledPages() {
+				if i >= earMaxPages {
+					// 左耳最多 5 个页面图标（DESIGN.md）；多出的页面仍能
+					// 通过 setTab 打开，只是没有耳栏图标。
+					break
+				}
+				navs[p.id()] = a.navButton(c, p)
+			}
 		})
 		if inBand && a.notchW > 0 {
 			ui.Box(c.Key("ear-housing")).Width(float32(a.notchW + 2*earHousingPad)).Shrink(0)
@@ -399,9 +410,10 @@ func (a *shelf) earBar(c *ui.Context) {
 	})
 	// The capsule follows the active icon's box from the last frame; the
 	// icon paints its own capsule until that box is known (first frame).
-	r := navs[a.tab].LayoutBounds()
-	if r.W <= 0 {
-		navs[a.tab].Background(fill2)
+	cur, ok := navs[a.currentPage().id()]
+	r := cur.LayoutBounds()
+	if !ok || r.W <= 0 {
+		cur.Background(fill2)
 		return
 	}
 	x := r.X
@@ -416,14 +428,14 @@ func (a *shelf) earBar(c *ui.Context) {
 // navButton is one page icon of the left ear: ink when active (its capsule
 // is earBar's), ink2 with a fill1 hover otherwise. The page's name is its
 // tooltip and accessible label; the module bar spells it out below.
-func (a *shelf) navButton(c *ui.Context, key string, icon *ui.SVG, label string, tab int) ui.Element {
-	on := a.tab == tab
-	b := ui.ButtonBase(c.Key(key)).Size(earBtn, earBtn).Radius(earBtn / 2).Center().Label(label).Tooltip(label)
+func (a *shelf) navButton(c *ui.Context, p panelPage) ui.Element {
+	on := p.id() == a.currentPage().id()
+	b := ui.ButtonBase(c.Key("page-"+string(p.id()))).Size(earBtn, earBtn).Radius(earBtn / 2).Center().Label(p.label()).Tooltip(p.label())
 	if !on && b.Hovered() {
 		b.Background(fill1)
 	}
 	b.Children(func() {
-		g := ui.Icon(c, icon).Size(15, 15)
+		g := p.icon(c, on || b.Hovered()).Size(15, 15)
 		if on || b.Hovered() {
 			g.TextColor(ink)
 		} else {
@@ -431,7 +443,7 @@ func (a *shelf) navButton(c *ui.Context, key string, icon *ui.SVG, label string,
 		}
 	})
 	if b.Clicked() {
-		a.setTab(tab)
+		a.setTab(p.id())
 	}
 	return b
 }
@@ -485,65 +497,34 @@ func (a *shelf) activityStrip(c *ui.Context) {
 }
 
 // panelBody renders a page under the activity strip: its module bar, then
-// the tray's thumbnail grid or the clipboard's search field and list. live
-// is false for the page fading out after a switch, which is drawn only.
-func (a *shelf) panelBody(c *ui.Context, over bool, tab int, live bool) {
-	list := a.itemsFor(tab)
-	a.moduleBar(c, list, tab, live)
-	if tab == tabClipboard {
-		a.clipboardBody(c, list, live)
-		return
-	}
-	if len(list) == 0 {
-		a.emptyState(c, tab)
-		return
-	}
-	ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Children(func() {
-		ui.Grid(c.Key("grid")).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1)).
-			Gap(gridGap).FillWidth().Children(func() {
-			// 快照：右键菜单或拖入回调可改变原切片。
-			for _, item := range list {
-				a.itemTile(c, item)
-			}
-		})
-	})
+// its stage body from the page itself. live is false for the page fading
+// out after a switch, which is drawn only.
+func (a *shelf) panelBody(c *ui.Context, over bool, p panelPage, live bool) {
+	a.moduleBar(c, p, live)
+	p.body(c, over, live)
 }
 
-// moduleBar is the page's own 28pt row: its name and count on the left;
-// on the right the tray's multi-select hint and the page's 清空.
-func (a *shelf) moduleBar(c *ui.Context, list []store.Item, tab int, live bool) {
-	title, count := "托盘", fmt.Sprintf("%d 项", len(list))
-	if tab == tabClipboard {
-		title, count = "剪贴板", fmt.Sprintf("%d 条", len(list))
-	}
+// moduleBar is the page's own 28pt row: its name and count on the left,
+// the page's own controls on the right.
+func (a *shelf) moduleBar(c *ui.Context, p panelPage, live bool) {
+	title, count := p.moduleTitle()
 	ui.Row(c.Key("module-bar")).Height(moduleBarH).AlignItems(ui.Center).FillWidth().
 		Padding(0, 0, 0, 2).Margin(0, 0, stageGap, 0).Children(func() {
 		ui.Text(c, title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-		if len(list) > 0 {
+		if count != "" {
 			ui.Text(c, count).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 0, 0, 8)
 		}
 		ui.Box(c).Grow(1)
-		if tab == tabTray && len(list) > 0 {
-			hint := "⌘ / ⇧ 多选 · 空格预览"
-			if n := a.selection.count(); n > 1 {
-				hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
-			}
-			ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 6, 0, 0)
-		}
-		if gone := a.clearable(list, tab); len(gone) > 0 {
-			if a.iconButton(c, "clear", trashSymbol, "清空").Clicked() && live {
-				a.remove(gone)
-			}
-		}
+		p.moduleTrailing(c, live)
 	})
 }
 
-// clearable is what the module bar's 清空 removes: the unpinned rows the
-// page shows, so the tray's button leaves the clipboard history alone and
-// the other way round. While a search narrows the clipboard list there is
+// clearable is what a page's 清空 removes: the unpinned rows the page
+// shows, so the tray's button leaves the clipboard history alone and the
+// other way round. While a search narrows the clipboard list there is
 // nothing to clear — emptying only the matches would surprise.
-func (a *shelf) clearable(list []store.Item, tab int) []store.Item {
-	if tab == tabClipboard && strings.TrimSpace(a.search) != "" {
+func (a *shelf) clearable(list []store.Item, id pageID) []store.Item {
+	if id == pageClipboard && strings.TrimSpace(a.search) != "" {
 		return nil
 	}
 	var gone []store.Item
@@ -553,23 +534,6 @@ func (a *shelf) clearable(list []store.Item, tab int) []store.Item {
 		}
 	}
 	return gone
-}
-
-// clipboardBody is the clipboard tab: the 32pt search field, then the
-// capture rows (source-app icon, text, 「应用 · 相对时间」).
-func (a *shelf) clipboardBody(c *ui.Context, list []store.Item, live bool) {
-	a.searchField(c, live)
-	if len(list) == 0 {
-		a.emptyState(c, tabClipboard)
-		return
-	}
-	ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0).Children(func() {
-		ui.Column(c.Key("clip-list")).Gap(clipRowGap).FillWidth().Children(func() {
-			for _, item := range list {
-				a.clipRow(c, item)
-			}
-		})
-	})
 }
 
 // searchField is the clipboard tab's search box: 32pt fill1 capsule with a
@@ -629,20 +593,10 @@ func (a *shelf) searchField(c *ui.Context, live bool) {
 }
 
 // emptyState is what a page shows when it has no rows: a centered ink3
-// icon, a medium ink2 title and an ink3 note line.
-func (a *shelf) emptyState(c *ui.Context, tab int) {
-	icon, title, hint := shelfSymbol, "把文件拖到这里", "文件、文件夹、文字和图片"
-	switch {
-	case tab == tabClipboard && a.search != "":
-		icon, title, hint = searchSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
-	case tab == tabClipboard && !a.settings.ClipboardHistory:
-		icon, title, hint = textSymbol, "剪贴板记录已关闭", "在设置里打开「记录复制的内容」"
-	case tab == tabClipboard:
-		icon, title, hint = textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
-	case a.settings.ClipboardHistory:
-		hint += "\n复制的文字与截图也会自动收好"
-	}
-	ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
+// icon, a medium ink2 title and an ink3 note line. The page picks the
+// contents; this draws the shared layout.
+func (a *shelf) emptyState(c *ui.Context, icon *ui.SVG, title, hint string) ui.Element {
+	return ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 		ui.Icon(c, icon).Size(28, 28).TextColor(ink3)
 		ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(ink2)
 		ui.Text(c, hint).TextAlign(ui.Center).FontSize(11).TextColor(ink3)
@@ -657,7 +611,7 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 	stack := ui.Column(c.Key("toasts")).Absolute().Left(16).Right(16).Bottom(10).
 		AlignItems(ui.Center).Gap(6).PassThrough()
 	stack.Children(func() {
-		if a.tab == tabClipboard && (a.focusMode || a.search != "") {
+		if a.tab == pageClipboard && (a.focusMode || a.search != "") {
 			a.pill(c, "hint", "↑↓ 选择 · ↩ 复制并返回 · Esc 关闭", false)
 		}
 		if a.status != "" {
@@ -783,18 +737,18 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool
 
 // panelContentH is the expanded panel's desired content height (excluding
 // the window frame margin): the ears, the activity strip when something
-// is under way, the module bar, then the stage. The stage is as tall as
-// the tallest page needs, clamped between stageMinH and stageMaxH (each
-// page scrolls past that), so switching pages never resizes the panel —
-// only content coming and going does. Pure; unit-tested.
+// is under way, the module bar, then the stage. Pages whose sharesHeight
+// is true size the stage to the group's tallest, so switching between
+// them never resizes the panel; any other page sizes it to its own
+// stageH. Clamped between stageMinH and stageMaxH (pages scroll past
+// that). Pure; unit-tested.
 func (a *shelf) panelContentH() int {
 	spacer, rowH, _ := a.earLayout()
 	h := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
 	if len(a.liveActivities()) > 0 {
 		h += liveH + liveGap
 	}
-	stage := max(a.stageH(tabTray), a.stageH(tabClipboard))
-	h += min(max(stage, stageMinH), stageMaxH)
+	h += min(max(a.currentStageH(), stageMinH), stageMaxH)
 	if a.focusMode || a.search != "" {
 		// The keyboard hint pill floats over the clipboard stage's foot.
 		h += hintPillH
@@ -802,21 +756,23 @@ func (a *shelf) panelContentH() int {
 	return h
 }
 
-// stageH is the height a page's stage content wants, before clamping.
-func (a *shelf) stageH(tab int) int {
-	list := a.itemsFor(tab)
-	switch {
-	case tab == tabClipboard:
-		h := clipSearchH
-		if len(list) > 0 {
-			h += clipListTop + len(list)*(clipRowH+clipRowGap) - clipRowGap
+// currentStageH is the stage height the panel sizes to now: the tallest
+// stage of the height-sharing group while the current page is in it
+// (switching pages inside the group keeps the height), otherwise the
+// current page's own stageH — switching to or from such a page eases the
+// panel to its own height over resizeAnimation.
+func (a *shelf) currentStageH() int {
+	if cur := a.currentPage(); cur.sharesHeight() {
+		tallest := 0
+		for _, p := range a.enabledPages() {
+			if p.sharesHeight() {
+				tallest = max(tallest, p.stageH())
+			}
 		}
-		return h
-	case len(list) > 0:
-		rows := (len(list) + gridCols - 1) / gridCols
-		return rows*tileH + (rows-1)*gridGap
+		return tallest
+	} else {
+		return cur.stageH()
 	}
-	return 0
 }
 
 // panelTargetH is panelContentH clamped to the panel's size bound; the
@@ -825,45 +781,27 @@ func (a *shelf) panelTargetH() int {
 	return min(panelMaxH, a.panelContentH())
 }
 
-// visibleItems is the list the expanded panel shows and acts on: the tray
-// tab lists every item except ones hidden from it, and the clipboard tab
-// lists clipboard captures that match the search text; on both tabs
+// visibleItems is the item list the expanded panel shows and acts on: the
+// current page's rows. The tray lists every item except ones hidden from
+// it, the clipboard page the captures matching the search text; on both
 // pinned items come first, stable within each group (otherwise newest
 // first). Rows, selection ranges, menus and drag-outs all use it, so no
-// action can reach a row the tab is not showing and the display order is
-// the selection order.
-func (a *shelf) visibleItems() []store.Item { return a.itemsFor(a.tab) }
+// action can reach a row the page is not showing and the display order is
+// the selection order. Pages without an item list answer nil.
+func (a *shelf) visibleItems() []store.Item { return a.itemsFor(a.currentPage().id()) }
 
 // itemsFor is visibleItems for the given page (the page fading out after
-// a switch draws its own rows).
-func (a *shelf) itemsFor(tab int) []store.Item {
-	if a.store == nil {
+// a switch draws its own rows). Each store-backed page owns its list
+// (see pages.go); a page without one answers nil.
+func (a *shelf) itemsFor(id pageID) []store.Item {
+	switch p := a.page(id).(type) {
+	case *trayPage:
+		return p.items()
+	case *clipboardPage:
+		return p.items()
+	default:
 		return nil
 	}
-	query := strings.ToLower(strings.TrimSpace(a.search))
-	var pinned, rest []store.Item
-	for _, it := range a.store.Items {
-		if tab == tabClipboard && (it.Source != store.SourceClipboard || !clipboardItemMatches(it, query)) {
-			continue
-		}
-		// 托盘页的移除对剪贴板收录只做到「不在托盘显示」：标了 OffTray 的
-		// 项目仍留在剪贴板页，托盘不再列出。
-		if tab == tabTray && (it.OffTray || a.isLeaving(it)) {
-			continue
-		}
-		// 设计决定：剪贴板收录的文字只属于剪贴板标签；托盘放文件、
-		// 文件夹、图片（含剪贴板截图）以及拖入/服务收录/置顶的文字。
-		if tab == tabTray && it.Source == store.SourceClipboard &&
-			it.Kind == store.KindText && !it.Pinned {
-			continue
-		}
-		if it.Pinned {
-			pinned = append(pinned, it)
-		} else {
-			rest = append(rest, it)
-		}
-	}
-	return append(pinned, rest...)
 }
 
 // clipboardItemMatches reports whether a clipboard-list row matches the
@@ -879,14 +817,23 @@ func clipboardItemMatches(it store.Item, query string) bool {
 	return strings.Contains(strings.ToLower(it.Text), query)
 }
 
-// setTab switches the panel's list. The selection follows: ids the new
+// setTab switches the panel's page. The selection follows: ids the new
 // list does not show are dropped, so a ⇧-range never spans rows the user
-// cannot see.
-func (a *shelf) setTab(tab int) {
-	if a.tab == tab {
+// cannot see. Disabled or unregistered pages cannot be switched to.
+func (a *shelf) setTab(id pageID) {
+	p := a.page(id)
+	if p == nil || !p.enabled() {
 		return
 	}
-	a.tabFrom, a.tab = a.tab, tab
+	cur := a.currentPage().id()
+	if cur == id {
+		a.tab = id // a.tab was stale; nothing to fade from
+		return
+	}
+	a.tabFrom, a.tab = cur, id
+	if cur == pageUsage && a.usage != nil { // 离开用量页即取消其后台工作
+		a.usage.stopWork()
+	}
 	if a.visible {
 		a.tabAt = time.Now()
 	}

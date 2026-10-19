@@ -87,7 +87,7 @@ func (a *shelf) flushLeaving(cutoff time.Time) {
 	if len(gone) == 0 {
 		return
 	}
-	a.removeFrom(gone, tabTray)
+	a.removeFrom(gone, pageTray)
 	retry := map[string]bool{}
 	for _, it := range gone {
 		retry[it.ID] = true
