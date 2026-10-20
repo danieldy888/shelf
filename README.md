@@ -44,6 +44,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Drag files, folders, images or text toward the notch — it shows "release to drop" (松开放入), and the shelf opens as you let go.
 - Files show as thumbnails. Drag one or several (⌘/⇧ to select) straight into any app.
 - Press Space for Quick Look; right-click to open, reveal in Finder, AirDrop, copy, pin or remove — pictures get an extra "复制图片" (Copy Image) entry that copies the image itself.
+- Tidy files where they sit: right-click a picture → 压缩到 (Compress To) to fit it under 500 KB, 1 MB, 2 MB or 5 MB; right-click a zip, tar, 7z or rar archive → 解压 (Extract); right-click files → 重新命名… (Rename…) to rename a batch the way Finder does — replace text, add text, or name plus number — with a live preview and undo.
 - Other ways in: shake the pointer while dragging to summon a drop basket beside the cursor, or use Services → "添加到 Shelf" (Add to Shelf) in Finder and other apps.
 
 **Clipboard history**
@@ -59,6 +60,10 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Enable it in Settings → AI 用量 and the shelf gains a third page: subscription quota for Codex and Claude Code — a double ring per card, outer weekly, inner 5-hour — plus this Mac's token usage for omp, Claude Code and Codex, as a stacked chart over 今天 / 7 天 / 30 天 / 全部.
 - Quota checks read the login info those tools already saved on this Mac and send it only to the tools' own endpoints (chatgpt.com, api.anthropic.com) — never anywhere else, and never to sign in or refresh a login.
 - Refresh always shows progress or the wait until the next quota check. Claude Code checks stay at least five minutes apart, and server retry delays still apply.
+
+**Stay awake**
+- Right-click the menu-bar icon → 保持唤醒 (Stay Awake) and your Mac won't fall asleep for 30 minutes, 1, 2 or 4 hours, or until you turn it off. Tick 屏幕也保持亮着 (Keep Screen On) to keep the display awake as well.
+- While it is on, the open shelf shows the time left with a button to stop it.
 
 **Quiet by design**
 - One shortcut, `⌃⌥Space`, opens or closes it; clicking anywhere else tucks it away.
@@ -116,6 +121,10 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Switch lists | Click 托盘 (Tray), 剪贴板 (Clipboard) — or AI 用量 when enabled — at the top of the shelf |
 | Control music | Hover the notch while music plays, or use the card at the top of the open shelf |
 | Pin, remove, Quick Look, AirDrop | Right-click an item (Space also opens Quick Look) |
+| Shrink a picture to a file size | Right-click it → 压缩到 (Compress To) → 500 KB / 1 MB / 2 MB / 5 MB |
+| Unpack an archive | Right-click a zip, tar, 7z or rar file → 解压 (Extract); the folder lands on the shelf |
+| Rename files | Right-click one or more files → 重新命名… (Rename…), check the preview, then rename; undo from the notice that follows |
+| Keep the Mac awake | Right-click the menu-bar icon → 保持唤醒 (Stay Awake) and pick how long |
 | Clear the shelf | Click the trash icon at the top — pinned items stay; original files are never deleted |
 | Change settings | Right-click the menu-bar icon → Settings |
 | Check for updates | Right-click the menu-bar icon → 检查更新… (Check for Updates) |
@@ -159,6 +168,7 @@ MIT — see [LICENSE](LICENSE).
 - 文件以缩略图显示（iPhone 拍的 HEIC 照片也有预览），可以一次拖出一个或多个（按住 ⌘ 或 ⇧ 多选），直接拖进任何应用；也可以在设置里让拖出去的东西自动离开托盘。
 - 按空格快速查看；右键可以打开、在 Finder 中显示、隔空投送、复制（图片多一项「复制图片」，复制图片数据本身）、置顶或移除。
 - 图片和 PDF 可以直接转换：右键图片 →「转换为」JPEG、HEIC、PNG、PDF，或识别图里的文字生成 Word，多张还能合并成一个 PDF；大图可以一键缩小；右键 PDF 可以提取文字生成 Word，或每页存成一张图片。文件和文件夹可以压缩成 zip。全部在本机完成，原文件不动，做好的文件放在托盘最前面。
+- 文件整理也能就地完成：右键图片 →「压缩到」500 KB / 1 MB / 2 MB / 5 MB 以内；右键 zip、tar、7z、rar 压缩包 →「解压」；右键托盘里的文件 →「重新命名…」，像 Finder 一样替换文字、添加文字或按序号命名，改之前先预览，改完可以撤销。
 - 还有别的放法：拖着东西时左右晃动指针，光标旁会出现一个暂存篮；也可以在 Finder 或其他应用里右键 →「服务」→「添加到 Shelf」。
 
 **剪贴板记录**
@@ -174,6 +184,10 @@ MIT — see [LICENSE](LICENSE).
 - 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，刘海会多出第三页：Codex、Claude Code 的套餐剩余额度（每张卡内外双圈：外圈每周、内圈 5 小时），以及这台电脑上 omp、Claude Code、Codex 的 token 用量（堆叠柱图，按 今天 / 7 天 / 30 天 / 全部 切换；额度卡和本机来源都可以在设置里单独关掉）。
 - 查额度时会读取这些工具保存在本机的登录信息，只用它向工具自己的官方地址（chatgpt.com、api.anthropic.com）查询，不会发给任何其他地方，也不会替你登录或刷新登录。
 - 点刷新会显示进度或下次可查的等待时间；Claude Code 查询至少间隔 5 分钟，也会遵守服务端的重试等待时间。
+
+**保持唤醒**
+- 右键菜单栏图标 →「保持唤醒」，选 30 分钟、1 小时、2 小时、4 小时或「一直（直到关闭）」，这段时间里 Mac 不会自动睡眠；勾选「屏幕也保持亮着」，屏幕也不会熄灭。
+- 开启后，打开托盘能看到剩余时间，随时可以停止。
 
 **安静、不打扰**
 - 一个快捷键 `⌃⌥Space` 打开或收起；点别处就自动缩回刘海。
@@ -233,6 +247,10 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 置顶、移除、快速查看、隔空投送 | 右键项目（快速查看也可以直接按空格） |
 | 转换图片格式、转 PDF 或 Word | 右键图片 →「转换为」；多张图片右键 →「合并为一个 PDF」；右键 PDF →「转换为」Word 或每页一张图片 |
 | 缩小图片、压缩成 zip | 右键图片 →「缩小图片」选大小；右键文件或文件夹 →「压缩为 zip」 |
+| 压缩图片到指定大小 | 右键图片 →「压缩到」→ 500 KB / 1 MB / 2 MB / 5 MB 以内 |
+| 解压压缩包 | 右键 zip、tar、7z、rar 文件 →「解压」，解出的文件夹放进托盘 |
+| 批量重新命名 | 右键一个或多个文件 →「重新命名…」，看过预览再点「改名」；改完可以在提示上撤销 |
+| 不让 Mac 睡眠 | 右键菜单栏图标 →「保持唤醒」，选时长 |
 | 清空当前列表 | 点列表标题右边的垃圾桶图标——只清这一页，置顶的保留，原文件不会被删除 |
 | 修改设置 | 右键菜单栏图标 → 设置… |
 | 检查更新 | 右键菜单栏图标 →「检查更新…」 |
