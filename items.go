@@ -193,10 +193,11 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 			}
 			ui.Text(c, text).SingleLine().FontSize(13).TextColor(ink)
 			// An image the search matched through its recognized text
-			// shows the hit snippet instead of 「应用 · 时间」.
-			if item.Kind == store.KindImage && item.OCRDone && item.OCRText != "" &&
-				strings.TrimSpace(a.search) != "" {
-				a.ocrSnippetLine(c, item)
+			// shows the hit snippet instead of 「应用 · 时间」; when the
+			// snippet comes back empty the row keeps its ordinary meta.
+			if before, hit, after, ok := ocrSnippet(item.OCRText, a.search); ok &&
+				item.Kind == store.KindImage && item.OCRDone {
+				ocrSnippetLine(c, before, hit, after)
 			} else {
 				ui.Text(c, a.clipRowMeta(item)).SingleLine().FontSize(11).TextColor(ink3)
 			}

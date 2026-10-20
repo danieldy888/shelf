@@ -324,3 +324,143 @@ func TestRecognizeCopyMenuOnlyForImages(t *testing.T) {
 		}
 	}
 }
+
+// TestOCRNeverTwoConcurrent: while one worker is still running the tick
+// must not launch another, no matter how many images wait — a 30ms tick
+// would otherwise stack every pending recognition at once.
+func TestOCRNeverTwoConcurrent(t *testing.T) {
+	a, o, _ := testOCRShelf(t)
+	addClipImage(t, a, 30)
+	addClipImage(t, a, 60)
+	addClipImage(t, a, 90)
+	// Capture the worker instead of running it: the item stays in flight.
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	o.recognize = func(string) ([]string, error) { return []string{"字"}, nil }
+	for i := range 5 {
+		o.tick(time.Now().Add(time.Duration(i) * 3 * time.Second))
+	}
+	if len(workers) != 1 {
+		t.Fatalf("one worker may run at a time, got %d queued launches", len(workers))
+	}
+	workers[0]()
+	if !a.store.Items[0].OCRDone {
+		t.Fatal("the first worker must have recognized the newest image")
+	}
+	o.tick(time.Now().Add(30 * time.Second))
+	if len(workers) != 2 {
+		t.Fatalf("after the first finishes the next may start, got %d", len(workers))
+	}
+}
+
+// TestOCRMenuWaitsForTheWorker: 「识别文字并复制」 while another
+// recognition runs queues ahead of the background backlog, tells the
+// user, and copies once its turn comes — never silently dropped.
+func TestOCRMenuWaitsForTheWorker(t *testing.T) {
+	a, o, rec := testOCRShelf(t)
+	addClipImage(t, a, 30)        // the background item (Items[1])
+	it2 := addClipImage(t, a, 60) // the menu's item (Items[0])
+	addClipImage(t, a, 90)        // more backlog (Items[0] after this)
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	var order []string
+	o.recognize = func(path string) ([]string, error) {
+		order = append(order, path)
+		return []string{"识别到的菜单文字"}, nil
+	}
+	o.tick(time.Now())
+	if len(workers) != 1 {
+		t.Fatalf("first tick starts the background worker, got %d", len(workers))
+	}
+	a.copyRecognizedText(it2)
+	if len(workers) != 1 {
+		t.Fatalf("the menu request must queue behind the running worker, not start a second")
+	}
+	if !strings.Contains(a.status, "正在识别") {
+		t.Fatalf("a queued request must tell the user, status=%q", a.status)
+	}
+	// The background worker finishes; the queued copy runs before the
+	// backlog's next item and copies to the clipboard.
+	workers[0]()
+	o.tick(time.Now())
+	if len(workers) != 2 {
+		t.Fatalf("the queued item must be next, got %d workers", len(workers))
+	}
+	workers[1]()
+	if order[1] != it2.Path {
+		t.Fatalf("the queued request must precede the backlog: %v", order)
+	}
+	if rec.text != "识别到的菜单文字" {
+		t.Fatalf("the queued copy must land on the clipboard, got %q", rec.text)
+	}
+	if !strings.Contains(a.status, "已复制识别出的文字") {
+		t.Fatalf("completion toast missing: %q", a.status)
+	}
+}
+
+// TestOCRBusySaysSo: the same item asked while its own worker runs gets
+// the busy toast instead of silence.
+func TestOCRBusySaysSo(t *testing.T) {
+	a, o, rec := testOCRShelf(t)
+	it := addClipImage(t, a, 30)
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	o.recognize = func(string) ([]string, error) { return []string{"字"}, nil }
+	o.tick(time.Now())
+	a.copyRecognizedText(it)
+	if a.status != "正在识别，请稍候" {
+		t.Fatalf("a busy item must show the busy hint, got %q", a.status)
+	}
+	if rec.text != "" || len(workers) != 1 {
+		t.Fatal("nothing may copy or run while the item is mid-recognition")
+	}
+}
+
+// TestOCRAbortClearsInflight: a worker that sees the stop channel before
+// recognizing releases the item's in-flight mark.
+func TestOCRAbortClearsInflight(t *testing.T) {
+	a, o, _ := testOCRShelf(t)
+	addClipImage(t, a, 30)
+	a.stop = make(chan struct{})
+	close(a.stop)
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	calls := 0
+	o.recognize = func(string) ([]string, error) { calls++; return nil, nil }
+	o.tick(time.Now())
+	if len(workers) != 1 {
+		t.Fatal("the worker must have been launched")
+	}
+	workers[0]()
+	if calls != 0 {
+		t.Fatal("a stopped app must not run the recognizer")
+	}
+	if o.inflight[a.store.Items[0].ID] {
+		t.Fatal("an aborted worker must drop its in-flight mark")
+	}
+}
+
+// TestOCRSearchMatchesFoldedText: the matcher and the snippet share one
+// normalization, so a query with extra spaces hits the folded text and a
+// snippet is always produced for a listed row.
+func TestOCRSearchMatchesFoldedText(t *testing.T) {
+	text := "货架 图片    文字"
+	query := "图片    文字" // consecutive spaces in the query
+	if !clipboardItemMatches(store.Item{Kind: store.KindImage, OCRDone: true, OCRText: text},
+		strings.ToLower(query)) {
+		t.Fatal("the matcher must fold whitespace like the snippet does")
+	}
+	// Extra spaces in the text fold to the query's single space too.
+	if !clipboardItemMatches(store.Item{Kind: store.KindImage, OCRDone: true, OCRText: "货架 图片    文字"},
+		"图片 文字") {
+		t.Fatal("extra spaces in the recognized text must not break a plain query")
+	}
+	if _, hit, _, ok := ocrSnippet(text, query); !ok || hit == "" {
+		t.Fatal("a matched query must produce a snippet, not an empty 「图中文字：」")
+	}
+	// And the other direction: a miss keeps ok=false so the row falls
+	// back to 「应用 · 时间」.
+	if _, _, _, ok := ocrSnippet(text, "不存在的内容"); ok {
+		t.Fatal("a non-match must report ok=false")
+	}
+}

@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -28,6 +29,10 @@ type ocrIndex struct {
 	// inflight marks item IDs a worker is recognizing now (the main
 	// thread owns the map; workers only report back through dispatch).
 	inflight map[string]bool
+	// pending holds recognizeNow calls that arrived while a worker was
+	// busy; they run before the next background item (FIFO, the menu
+	// path shares the same one-worker lock).
+	pending []ocrRequest
 	// failed holds ids recognition or its write-back already failed for
 	// this session, so a broken image is not retried every tick; the next
 	// launch tries again.
@@ -41,6 +46,13 @@ type ocrIndex struct {
 	dispatch  func(func())
 	run       func(func())
 	now       func() time.Time
+}
+
+// ocrRequest is one queued 「识别文字并复制」: the item as it stood when
+// asked, and the callback the answer goes to on the main thread.
+type ocrRequest struct {
+	item store.Item
+	cb   func(text string, err error)
 }
 
 // ocrGap is the pause between background recognitions.
@@ -70,7 +82,24 @@ func (o *ocrIndex) nowTime() time.Time {
 // the main thread from the monitoring loop like every module.
 func (o *ocrIndex) tick(time.Time) {
 	a := o.host
-	if a.quitting || a.store == nil || o.nowTime().Before(o.nextAt) {
+	if a.quitting || a.store == nil {
+		return
+	}
+	// Queued menu requests run before the next background image; the busy
+	// worker has just finished, so no gap applies between them.
+	if len(o.pending) > 0 && len(o.inflight) == 0 {
+		r := o.pending[0]
+		o.pending = o.pending[1:]
+		// The item may have been deleted while queued: drop it silently.
+		if idx := slices.IndexFunc(a.store.Items, func(x store.Item) bool { return x.ID == r.item.ID }); idx >= 0 {
+			o.start(a.store.Items[idx], r.cb)
+		}
+		return
+	}
+	// One image at a time: a running worker owns the recognizer until it
+	// reports back, so a fast 30ms tick can never stack a second one on
+	// top of it — Vision's model load alone would multiply memory use.
+	if len(o.inflight) > 0 || o.nowTime().Before(o.nextAt) {
 		return
 	}
 	for _, it := range a.store.Items {
@@ -88,12 +117,30 @@ func (o *ocrIndex) tick(time.Time) {
 func (o *ocrIndex) needs(it store.Item) bool {
 	return it.Kind == store.KindImage && it.Source == store.SourceClipboard &&
 		!it.OCRDone && !it.Missing && it.Path != "" &&
-		!o.inflight[it.ID] && !o.failed[it.ID]
+		!o.busy(it.ID) && !o.failed[it.ID]
 }
 
-// busy reports whether a worker is recognizing item right now; the menu
-// entry stays disabled while it is.
-func (o *ocrIndex) busy(id string) bool { return o.inflight[id] }
+// busy reports whether the item is being recognized or is queued for it.
+func (o *ocrIndex) busy(id string) bool { return o.inflight[id] || o.queued(id) }
+
+// queued reports whether the item waits in the menu-request queue.
+func (o *ocrIndex) queued(id string) bool {
+	for _, r := range o.pending {
+		if r.item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// anyBusy reports whether a recognition worker is running at all — the
+// one-worker lock the background pass and the menu path share.
+func (o *ocrIndex) anyBusy() bool { return len(o.inflight) > 0 }
+
+// abort releases an id whose worker stopped before reporting (the app is
+// quitting): the id is cleared so nothing looks stuck, and no nextAt is
+// set since nothing ran.
+func (o *ocrIndex) abort(id string) { delete(o.inflight, id) }
 
 // start launches the one-at-a-time worker for item. cb (nil for the
 // background pass) runs on the main thread after the write-back attempt.
@@ -124,6 +171,7 @@ func (o *ocrIndex) start(it store.Item, cb func(string, error)) {
 		if host.stop != nil {
 			select {
 			case <-host.stop:
+				dispatch(func() { o.abort(id) })
 				return
 			default:
 			}
@@ -189,9 +237,10 @@ func (o *ocrIndex) markFailed(id string) {
 }
 
 // recognizeNow is the menu path: a stored result answers at once (done
-// includes "no text found"), a running one reports busy, anything else
-// jumps the background queue and runs now. cb is invoked on the main
-// thread either way.
+// includes "no text found"), the same item already running reports busy,
+// any other running worker puts the request at the front of the queue
+// (its cb fires when that item's turn comes), and an idle recognizer
+// starts it now. cb is invoked on the main thread either way.
 func (o *ocrIndex) recognizeNow(it store.Item, cb func(text string, err error)) bool {
 	if it.OCRDone {
 		cb(it.OCRText, nil)
@@ -199,6 +248,10 @@ func (o *ocrIndex) recognizeNow(it store.Item, cb func(text string, err error)) 
 	}
 	if o.busy(it.ID) || it.Missing || it.Path == "" {
 		return false
+	}
+	if o.anyBusy() {
+		o.pending = append(o.pending, ocrRequest{item: it, cb: cb})
+		return true
 	}
 	o.start(it, cb)
 	return true
@@ -212,8 +265,9 @@ func joinOCRLines(lines []string) string {
 
 // copyRecognizedText is 「识别文字并复制」: the recognized text of one
 // image goes on the clipboard (copyText, so Shelf never records its own
-// copy). A recognized item answers immediately; a fresh one is
-// recognized on a worker thread while the menu item is disabled.
+// copy). A recognized item answers immediately; while the recognizer is
+// busy elsewhere the request is queued and the copy lands when it
+// finishes; a fresh one starts right away.
 func (a *shelf) copyRecognizedText(item store.Item) {
 	o := a.ocr()
 	if o == nil {
@@ -221,7 +275,12 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 		// copy through a throwaway recognizer instead of failing.
 		o = &ocrIndex{host: a}
 	}
-	o.recognizeNow(item, func(text string, err error) {
+	if item.Missing || item.Path == "" {
+		a.toastStatus("图片文件已不可用", time.Now().Add(3*time.Second), true)
+		return
+	}
+	queued := !item.OCRDone && o.anyBusy() && !o.busy(item.ID)
+	if !o.recognizeNow(item, func(text string, err error) {
 		switch {
 		case err != nil:
 			a.report(err)
@@ -231,12 +290,22 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 			a.toastStatus(fmt.Sprintf("已复制识别出的文字 · %d 字", utf8.RuneCountInString(text)),
 				time.Now().Add(3*time.Second), false)
 		}
-	})
+	}) {
+		a.toastStatus("正在识别，请稍候", time.Now().Add(3*time.Second), false)
+		return
+	}
+	if queued {
+		a.toastStatus("正在识别，完成后自动复制", time.Now().Add(3*time.Second), false)
+	}
 }
 
-// ocrBusy backs the menu's disabled state: while a worker recognizes the
-// item the entry stays grey, so it cannot be triggered twice.
+// ocrBusy backs the menu's disabled state: while the item is being
+// recognized or queued the entry stays grey, so it cannot be triggered
+// twice; a missing image file has nothing to recognize.
 func (a *shelf) ocrBusy(item store.Item) bool {
+	if item.Missing || item.Path == "" {
+		return true
+	}
 	o := a.ocr()
 	return o != nil && o.busy(item.ID)
 }
@@ -247,12 +316,14 @@ func (a *shelf) ocrBusy(item store.Item) bool {
 // each side, ellipsized at the text's ends. ok is false when the query
 // does not hit (the row then shows its ordinary meta line).
 func ocrSnippet(text, query string) (before, hit, after string, ok bool) {
-	q := strings.TrimSpace(query)
+	q := ocrFold(query)
 	if q == "" {
 		return "", "", "", false
 	}
-	// Flatten the stored newlines: the row is single-line.
-	flat := strings.Join(strings.Fields(text), " ")
+	// The matcher and the snippet both look in the whitespace-folded text
+	// (newlines and runs of spaces collapse to single spaces): what the
+	// row shows is always exactly what matched.
+	flat := ocrFold(text)
 	// strings.ToLower maps rune by rune (no expansions), so a byte hit in
 	// the lowered string converts to rune offsets usable on the original.
 	low := strings.ToLower(flat)
@@ -276,10 +347,16 @@ func ocrSnippet(text, query string) (before, hit, after string, ok bool) {
 	return before, hit, after, true
 }
 
+// ocrFold is the single normalization both matching and the snippet use:
+// runs of whitespace (including the stored newlines) collapse to one
+// space, edges trimmed.
+func ocrFold(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // ocrSnippetLine draws the 「图中文字：…」 line of a clipboard row whose
 // recognized text matched the search: context dim, the hit in ink.
-func (a *shelf) ocrSnippetLine(c *ui.Context, item store.Item) ui.Element {
-	before, hit, after, _ := ocrSnippet(item.OCRText, a.search)
+func ocrSnippetLine(c *ui.Context, before, hit, after string) ui.Element {
 	return ui.RichText(c,
 		ui.Span{Text: "图中文字：", Color: ink2},
 		ui.Span{Text: before, Color: ink2},
