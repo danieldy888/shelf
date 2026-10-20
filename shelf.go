@@ -80,6 +80,8 @@ type shelf struct {
 	peeking                                    bool
 	peekProgress, peekFrom                     float32
 	peekAnimStart                              time.Time
+	fb                                         feedback    // the notch's completion capsule (feedback.go)
+	fx                                         shellMotion // the shell drawn last, for the window frame
 	ignoringMouse                              bool
 	thumbnails                                 map[string]*ui.Bitmap
 	shake                                      shakeDetector // 摇晃召唤：拖拽中左右晃动检测
@@ -147,10 +149,16 @@ func (a *shelf) startMonitoring() {
 
 // toastStatus posts a transient status pill at the panel's bottom centre:
 // msg until the deadline (or toastLife from its first paint when until is
-// zero); isErr gives it the small red dot of error toasts.
+// zero); isErr gives it the small red dot of error toasts. With the panel
+// closed there is no pill to read, so the same status grows out of the
+// notch as a capsule instead (feedback.go).
 func (a *shelf) toastStatus(msg string, until time.Time, isErr bool) {
+	now := time.Now()
 	a.status = msg
-	a.statusUntil, a.statusShown, a.statusErr = until, time.Time{}, isErr
+	a.statusUntil, a.statusShown, a.statusErr = until, now, isErr
+	if !a.visible && a.progress <= 0.01 {
+		a.fb.show(msg, isErr, now)
+	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}

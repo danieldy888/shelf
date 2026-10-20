@@ -141,7 +141,10 @@ func (a *shelf) normalizeTab() {
 
 // trayPage is the panel's home page: the 5-column thumbnail grid of every
 // stored item except ones hidden from the tray.
-type trayPage struct{ host *shelf }
+type trayPage struct {
+	host   *shelf
+	scroll ui.ScrollState // where the grid is scrolled to (progressive blur)
+}
 
 func (p *trayPage) id() pageID    { return pageTray }
 func (p *trayPage) label() string { return "托盘" }
@@ -197,14 +200,25 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 		}
 		return a.emptyState(c, shelfSymbol, "把文件拖到这里", hint)
 	}
-	return ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Children(func() {
-		ui.Grid(c.Key("grid")).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1)).
-			Gap(gridGap).FillWidth().Children(func() {
-			// 快照：右键菜单或拖入回调可改变原切片。
-			for _, item := range list {
-				a.itemTile(c, item)
-			}
+	rows := (len(list) + gridCols - 1) / gridCols
+	contentH := float32(rows*tileH + max(rows-1, 0)*gridGap)
+	reduce := c.Preferences().ReduceMotion
+	return ui.Column(c.Key("tray-stage")).Grow(1).MinHeight(0).Children(func() {
+		scroll := ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).TrackScroll(&p.scroll)
+		top, bottom, viewH := scrollEdges(&p.scroll, contentH)
+		scroll.Children(func() {
+			ui.Grid(c.Key("grid")).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1)).
+				Gap(gridGap).FillWidth().Children(func() {
+				// 快照：右键菜单或拖入回调可改变原切片。
+				for i, item := range list {
+					rowTop := float32(i/gridCols*(tileH+gridGap)) - p.scroll.Y
+					a.fadedRow(c, item.ID, rowTop, tileH, viewH, top, bottom, reduce, func() {
+						a.itemTile(c, item)
+					})
+				}
+			})
 		})
+		a.scrollMelt(c, "tray", top, bottom, 0)
 	})
 }
 
@@ -236,7 +250,10 @@ func (p *trayPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
 // clipboardPage is the capture history: the 32pt search field over the
 // 46pt rows (source-app icon, text, 「应用 · 相对时间」). Only clipboard
 // captures matching the search text are listed.
-type clipboardPage struct{ host *shelf }
+type clipboardPage struct {
+	host   *shelf
+	scroll ui.ScrollState // where the list is scrolled to (progressive blur)
+}
 
 func (p *clipboardPage) id() pageID    { return pageClipboard }
 func (p *clipboardPage) label() string { return "剪贴板" }
@@ -292,13 +309,22 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 			a.emptyState(c, icon, title, hint)
 			return
 		}
-		ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0).Children(func() {
+		contentH := float32(len(list)*(clipRowH+clipRowGap) - clipRowGap)
+		reduce := c.Preferences().ReduceMotion
+		scroll := ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0).
+			TrackScroll(&p.scroll)
+		top, bottom, viewH := scrollEdges(&p.scroll, contentH)
+		scroll.Children(func() {
 			ui.Column(c.Key("clip-list")).Gap(clipRowGap).FillWidth().Children(func() {
-				for _, item := range list {
-					a.clipRow(c, item)
+				for i, item := range list {
+					rowTop := float32(i*(clipRowH+clipRowGap)) - p.scroll.Y
+					a.fadedRow(c, item.ID, rowTop, clipRowH, viewH, top, bottom, reduce, func() {
+						a.clipRow(c, item)
+					})
 				}
 			})
 		})
+		a.scrollMelt(c, "clip", top, bottom, clipSearchH+clipListTop)
 	})
 }
 
@@ -316,4 +342,96 @@ func (p *clipboardPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
 		return []ui.Element{b}
 	}
 	return nil
+}
+
+// Progressive blur: the stages' scrolling content does not stop at a hard
+// clip; the last scrollEdgeH points toward an edge that still has content
+// beyond it blur, dim and melt into the shell's black, so rows slide into
+// the notch instead of being cut off.
+const (
+	scrollEdgeH = 34   // how deep the melt reaches from an edge
+	edgeBlur    = 3.2  // blur sigma at the very edge, in points
+	edgeDim     = 0.55 // how much of a row's opacity the edge takes
+)
+
+// scrollEdges reports which melts a scroll container shows now — the top
+// while its content has scrolled down, the bottom while more is below —
+// and the viewport height both are measured in. MaxY is what the last
+// layout made scrollable, so a list that fits shows neither.
+func scrollEdges(st *ui.ScrollState, contentH float32) (top, bottom bool, viewH float32) {
+	viewH = contentH - st.MaxY
+	if viewH <= 0 {
+		viewH = contentH
+	}
+	return st.Y > 0.5, st.MaxY > 0.5 && st.Y < st.MaxY-0.5, viewH
+}
+
+// edgeFade is how deep d points into the edge band: 1 at the edge itself,
+// 0 at its inner end, smooth in between.
+func edgeFade(d float32) float32 {
+	if d <= 0 {
+		return 1
+	}
+	if d >= scrollEdgeH {
+		return 0
+	}
+	t := 1 - d/scrollEdgeH
+	return t * t * (3 - 2*t)
+}
+
+// rowFade is the edge weight of a row: 0 unless it is inside the viewport
+// and reaches into an edge that still has content beyond it.
+func rowFade(rowTop, rowH, viewH float32, top, bottom bool) float32 {
+	if rowTop+rowH <= 0 || rowTop >= viewH {
+		return 0
+	}
+	var t float32
+	if top {
+		t = max(t, edgeFade(rowTop))
+	}
+	if bottom {
+		t = max(t, edgeFade(viewH-(rowTop+rowH)))
+	}
+	return t
+}
+
+// fadedRow wraps one stage row (a tile's cell, a clipboard list row) so the
+// edge blur and dim follow it as it scrolls; the row itself keeps its key
+// and behaviour. Reduce Motion keeps the melt but drops the blur.
+func (a *shelf) fadedRow(c *ui.Context, id string, rowTop, rowH, viewH float32, top, bottom, reduce bool, children func()) {
+	row := ui.Column(c.Key(id + "-fade")).Height(rowH)
+	if t := rowFade(rowTop, rowH, viewH, top, bottom); t > 0 {
+		if !reduce {
+			row.Blur(edgeBlur * t)
+		}
+		row.Opacity(1 - edgeDim*t)
+	}
+	row.Children(children)
+}
+
+// scrollMelt lays the black melt over a scroll container's edges, a sibling
+// of the scroller so it stays put while the content moves. insetTop is
+// where the scroller starts under the stage's own rows (the clipboard's
+// search field).
+func (a *shelf) scrollMelt(c *ui.Context, key string, top, bottom bool, insetTop float32) {
+	if !top && !bottom {
+		return
+	}
+	// 34pt of gradient, fully black at the edge: DESIGN's
+	// #000 0%, 60% at 35%, clear at 100%.
+	stops := []ui.GradientStop{
+		{Color: ui.Hex("#000000"), At: 0},
+		{Color: ui.RGBA(0, 0, 0, 0.6), At: 0.35},
+		{Color: ui.RGBA(0, 0, 0, 0), At: 1},
+	}
+	if top {
+		ui.Column(c.Key(key + "-melt-top")).Absolute().Left(0).Right(0).Top(insetTop).
+			Height(scrollEdgeH).PassThrough().
+			LinearGradient(ui.LinearGradient{Angle: 180, Stops: stops})
+	}
+	if bottom {
+		ui.Column(c.Key(key + "-melt-bottom")).Absolute().Left(0).Right(0).Bottom(0).
+			Height(scrollEdgeH).PassThrough().
+			LinearGradient(ui.LinearGradient{Angle: 0, Stops: stops})
+	}
 }

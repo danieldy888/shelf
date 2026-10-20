@@ -66,7 +66,21 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		// A shrinking panel keeps its frame until the drawn shell has
 		// eased down to the new height, so the bottom is never cut off.
 		h := max(a.panelH(), int(a.shownH+0.5))
-		return mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: h}
+		w, x := panelWidth, a.x
+		if a.fx.openMoving {
+			// The opening spring overshoots its final size for a moment:
+			// the frame holds room for the whole flight (Bounce 0.28 ⇒
+			// about 4%, plus a tick of catch-up) and shrinks back once the
+			// spring rests, so no frame is clipped.
+			ow, oh := openFrameRoom(float32(a.panelH() - 8))
+			if oh > h {
+				h = oh
+			}
+			if ow > w {
+				w, x = ow, a.stripCenter()-ow/2
+			}
+		}
+		return mygo.Rectangle{X: x, Y: a.y, Width: w, Height: h}
 	}
 	// The resident strip holds the largest peek shape for the current
 	// state, so hovering only redraws; it resizes when a track comes or
@@ -75,8 +89,21 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	if a.np != nil && a.np.hasTrack() && a.settings.IslandNowPlaying {
 		pw, ph = a.playerSize()
 	}
+	if a.fx.peek {
+		// The shell can still be the larger shape it is folding back from,
+		// e.g. the capsule just expired or a track stopped playing.
+		pw, ph = max(pw, a.fx.w), max(ph, a.fx.h)
+	}
 	w := max(int(pw+0.5), notchTriggerWidth)
 	h := max(int(ph+0.5), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
+	if a.capsuleUp(time.Now()) || a.fb.drawn {
+		// The completion capsule is another peek shape: while it shows, the
+		// strip holds room for it and its glow at the widest the text can
+		// make it. The shape grows out of the notch in ~160ms, well inside
+		// the tick that resizes the strip, so no frame is cut.
+		w = max(w, fbMaxW+2*fbGlowPad)
+		h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+fbGlowPad)
+	}
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
 
@@ -111,15 +138,22 @@ func (a *shelf) windowGeometryChanged() {
 	a.syncWindowFrame()
 }
 
-// peekSize is the hover shape: the now-playing player while a track is
-// loaded (the notch grows into it, Droppy style), the drop pill while a
-// drag is on, otherwise a bulge carrying a chevron. The glyphs sit wholly
-// below the hardware notch: nothing drawn inside it is visible.
+// peekSize is the hover shape: the status capsule while the closed panel
+// has something to report, the now-playing player while a track is loaded
+// (the notch grows into it, Droppy style), the drop pill while a drag is
+// on, otherwise a bulge carrying a chevron. The glyphs sit wholly below
+// the hardware notch: nothing drawn inside it is visible.
 func (a *shelf) peekSize() (w, h float32) {
+	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
+	if a.capsuleUp(time.Now()) {
+		// The completion capsule takes the peek shape while the panel is
+		// closed: it is what the shell grows into, whether or not a track
+		// is loaded.
+		return a.fb.capsule(baseW, baseH)
+	}
 	if a.np != nil && a.np.showsPlayer() {
 		return a.playerSize()
 	}
-	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
 	if a.dragging && !a.ownDrag {
 		return baseW + dropPillExtraW, baseH + dropPillBody
 	}
@@ -174,8 +208,10 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// overlay paints a "click to expand" pill that never receives the click.
 	// A press on the visible pill expands either way — except a press the
 	// hover player received itself: its transport buttons handle that, and
-	// the player opens the shelf for presses elsewhere on it.
-	if a.peeking && !a.visible && (inside || a.overPeekPill(p)) {
+	// the player opens the shelf for presses elsewhere on it. The window
+	// keeps ignoring the mouse while the capsule shows, so every press
+	// there arrives through this monitor and clicks elsewhere pass through.
+	if (a.peeking || a.fb.drawn) && !a.visible && (inside || a.overPeekPill(p)) {
 		if inside && a.np != nil && a.np.showsPlayer() {
 			return
 		}

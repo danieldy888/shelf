@@ -193,15 +193,22 @@ func (a *shelf) view(c *ui.Context) {
 	// 全透明，否则整个窗口会一直盖着一块主题色灰板。
 	c.Root().Background(ui.Transparent)
 	opts := transfer.DropOptions{Formats: []transfer.Format{transfer.FileList, transfer.URIList, transfer.PNG, transfer.Text}, Operations: transfer.Copy}
+	now := c.Now()
+	// What a closed panel has to say grows out of the notch (feedback.go);
+	// the text is measured before the shell is sized around it.
+	a.fb.follow(a, now)
+	a.fb.pillW = a.fb.measure(c)
+	capsule := a.capsuleUp(now)
+	if capsule {
+		a.fb.schedule(c, now)
+	}
 	openTarget, peekTarget := float32(0), float32(0)
 	if a.visible {
 		openTarget = 1
 	}
-	if a.peeking || a.visible {
+	if a.peeking || a.visible || capsule {
 		peekTarget = 1
 	}
-	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。
-	idle := a.win != nil && !a.visible && a.progress <= 0.01 && !a.peeking && a.peekProgress <= 0.01
 	// Keep one native drop target across all states. The transparent root does
 	// not paint the theme background; clipping contains every animation frame.
 	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center).Clip()
@@ -212,10 +219,40 @@ func (a *shelf) view(c *ui.Context) {
 	if a.win == nil && !a.peeking {
 		openK = 1
 	}
+	sizeAnim := peekSpring
 	if a.win != nil {
-		openK = zone.AnimateTo("open", openTarget, ui.Animation{Duration: panelAnimation, Ease: ui.EaseOut})
-		peekK = zone.AnimateTo("peek", peekTarget, ui.Animation{Duration: peekAnimation, Ease: ui.EaseOut})
+		openAnim := openSpring
+		peekAnim := peekSpring
+		if openTarget == 0 {
+			openAnim = closeSpring
+		}
+		switch {
+		case capsule:
+			// The capsule grows with the panel's own spring.
+			peekAnim, sizeAnim = openSpring, openSpring
+		case peekTarget == 0 && a.fb.drawn:
+			// The capsule leaves on a spring that never overshoots.
+			peekAnim = retractSpring
+			a.fb.retracting = true
+		}
+		openK = zone.AnimateTo("open", openTarget, openAnim)
+		peekK = zone.AnimateTo("peek", peekTarget, peekAnim)
+		// A spring heading back to zero may overshoot its target; the shell
+		// never shrinks past the hardware notch it grows from. Growth under
+		// a point is not a shape: snap it, so the idle test matches the draw.
+		openK, peekK = max(openK, 0), max(peekK, 0)
+		if openK < 0.01 {
+			openK = 0
+		}
+		if peekK < 0.01 {
+			peekK = 0
+		}
+		if a.peeking || peekK <= 0.01 {
+			a.fb.retracting = false
+		}
 	}
+	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。
+	idle := a.win != nil && !a.visible && a.progress <= 0.01 && openK <= 0.01 && !a.peeking && peekK <= 0.01
 	// Shelf's own drag-out never lands back on the shelf: the drop would
 	// add a second item pointing at the same file. Without a target the
 	// drag ends as if cancelled — nothing is added, the panel stays open
@@ -227,6 +264,10 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	if idle {
 		// 空闲态收到内容只入库不展开：那时窗口本就不显示，也无从接受拖放。
+		// The mesh is the hardware notch: nothing is drawn, and the frame
+		// the next state starts from is the notch's own box.
+		a.fx.w, a.fx.h = float32(max(180, a.notchW)), float32(max(32, a.notchH))
+		a.fx.peek, a.fx.openMoving, a.fb.drawn = false, false, false
 		if accepts {
 			if drop, ok := ui.DropData(zone, opts); ok {
 				a.receive(drop.Data)
@@ -252,17 +293,29 @@ func (a *shelf) view(c *ui.Context) {
 		shownH = zone.AnimateTo(panelHeightKey{a.openGen}, targetH, ui.Animation{Duration: resizeAnimation, Ease: ui.EaseInOut})
 	}
 	a.shownH = shownH
-	// The hover shape eases between its forms (chevron, drop pill,
-	// player) when it changes while shown, e.g. a drag starting.
+	// The hover shape springs between its forms (chevron, drop pill,
+	// player, capsule) when it changes while shown, e.g. a drag starting.
 	peekW, peekH := a.peekSize()
 	if a.win != nil {
-		morph := ui.Animation{Duration: peekAnimation, Ease: ui.EaseOut}
-		peekW = zone.AnimateTo("peek-w", peekW, morph)
-		peekH = zone.AnimateTo("peek-h", peekH, morph)
+		peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
+		peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
 	}
 	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板
 	// （shellSize 是几何的唯一来源）。
 	shellW, shellH := a.shellSize(openK, peekK, peekW, peekH, shownH)
+	shellW, shellH = max(shellW, 0), max(shellH, 0)
+	// The frame follows the drawn shell while the springs are in flight (see
+	// desiredFrame): the opening overshoots, and a shape morph can be larger
+	// than the shape it heads for.
+	a.fx.w, a.fx.h = shellW, shellH
+	a.fx.openMoving = a.win != nil && !zone.Settled("open")
+	a.fx.peek = !expanded && peeked && !closing
+	// A failed job shakes the capsule, and only the capsule.
+	shake := float32(0)
+	if capsule {
+		shake = a.fb.shake(now, c.Preferences().ReduceMotion)
+		c.AnimationFrame()
+	}
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
 	// 刘海里长出来，而不是浮在菜单栏下方。
@@ -271,17 +324,18 @@ func (a *shelf) view(c *ui.Context) {
 		x1 := x0 + shellW
 		y1 := shellH
 		earR := float32(10)
-		// 底部圆角：探头胶囊半圆 → 展开 30pt。
-		botR := min(shellH/2, 12+18*openK)
+		// 底部圆角：探头胶囊半圆 → 展开 30pt。The opening's overshoot can
+		// push the drawn growth past its final value; the corner caps there.
+		botR := min(shellH/2, 12+18*min(openK, 1))
 		var path ui.Path
-		path.MoveTo(x0-earR, 0)
-		path.QuadTo(x0, 0, x0, earR)
-		path.LineTo(x0, y1-botR)
-		path.QuadTo(x0, y1, x0+botR, y1)
-		path.LineTo(x1-botR, y1)
-		path.QuadTo(x1, y1, x1, y1-botR)
-		path.LineTo(x1, earR)
-		path.QuadTo(x1, 0, x1+earR, 0)
+		path.MoveTo(x0-earR+shake, 0)
+		path.QuadTo(x0+shake, 0, x0+shake, earR)
+		path.LineTo(x0+shake, y1-botR)
+		path.QuadTo(x0+shake, y1, x0+shake+botR, y1)
+		path.LineTo(x1-botR+shake, y1)
+		path.QuadTo(x1+shake, y1, x1+shake, y1-botR)
+		path.LineTo(x1+shake, earR)
+		path.QuadTo(x1+shake, 0, x1+earR+shake, 0)
 		path.Close()
 		p.FillPath(&path, ui.Hex("#000000"))
 	})
@@ -291,7 +345,7 @@ func (a *shelf) view(c *ui.Context) {
 				// 收起途中只有壳缩回刘海，不画内容。
 				return
 			}
-			a.peekView(c, shellW, shellH, peekK, over)
+			a.peekView(c, shellW, shellH, openK, peekK, shake, over)
 			return
 		}
 		// The content is laid out once at the panel's final size and the
@@ -312,6 +366,9 @@ func (a *shelf) view(c *ui.Context) {
 			})
 		})
 	})
+	// What this frame drew decides the next one's retraction spring and
+	// whether the capsule's pill takes clicks.
+	a.fb.drawn = capsule
 	if !accepts {
 		return
 	}
@@ -705,12 +762,15 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 
 // peekView draws the pill under the hardware notch while hovering: the
 // now-playing player while a track is loaded, 「松开放入」 while a drag is
-// on, otherwise the small downward chevron. Like the player, the pill's
-// content is laid out at its final size and uncovered by the growing
-// shell; the glyphs sit in the band below the hardware notch, where the
-// screen has pixels.
-func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool) {
-	if !over && a.np != nil && a.np.showsPlayer() {
+// on, otherwise the small downward chevron. A closed panel with something
+// to report draws the status capsule instead (feedback.go). Like the
+// player, the pill's content is laid out at its final size and uncovered
+// by the growing shell; the glyphs sit in the band below the hardware
+// notch, where the screen has pixels.
+func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, over bool) {
+	now := c.Now()
+	hoverShape := a.peeking || (a.dragging && !a.ownDrag)
+	if !over && a.peeking && a.np != nil && a.np.showsPlayer() {
 		pw, ph := a.playerSize()
 		clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
 		drew := false
@@ -718,6 +778,15 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool
 		if drew {
 			return
 		}
+	}
+	if a.capsuleUp(now) {
+		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
+		return
+	}
+	if !hoverShape && a.fb.retracting {
+		// The shell is still folding back from the capsule: only the frame
+		// moves, as when the panel closes.
+		return
 	}
 	pw, ph := a.peekSize()
 	notchH := float32(max(32, a.notchH))
@@ -738,6 +807,52 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, peekK float32, over bool
 		})
 	})
 	if pill.Clicked() {
+		a.show(false)
+	}
+}
+
+// capsuleView draws the completion capsule: the 16pt status dot over the
+// toast's words, hung below the notch band, ringed by the status colour.
+// The glow sits in a sibling of the clipped content, so its shadow reaches
+// outside the shell; the content is clipped to the shell while it grows.
+func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, now time.Time) {
+	f := &a.fb
+	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
+	cw, ch := f.capsule(baseW, baseH)
+	col := f.color()
+	glow := f.glow(now, c.Preferences().ReduceMotion)
+	r := 0.9 * glow
+	botR := min(shellH/2, 12+18*min(openK, 1))
+	textW := cw - fbDot - fbGap - 2*fbPadX
+	label := "展开 Shelf · " + f.text
+	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label(label)
+	if shake != 0 {
+		box.Translate(shake, 0)
+	}
+	box.Children(func() {
+		// Two absolute layers in document order: the glow's black box and
+		// shadow first, then the words over it. An absolute child paints
+		// after the flow, so the order here is the only stacking there is.
+		ui.Box(c.Key("fb-glow")).Absolute().Top(shellH-ch).Left((shellW-cw)/2).
+			Width(cw).Height(ch).Radius(0, 0, botR, botR).
+			Background(ui.Hex("#000000")).
+			Shadow(0, 6, 26, -2, col.Alpha(r)).
+			Border(0.5, col.Alpha(r)).PassThrough()
+		body := ui.Column(c.Key("fb-body")).Absolute().Top(shellH - ch).Left((shellW - cw) / 2).
+			Width(cw).Height(ch).Justify(ui.End).PassThrough().
+			Opacity(min(max(peekK, 0), 1))
+		body.Children(func() {
+			ui.Row(c.Key("fb-msg")).Height(fbBody).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(fbGap).Children(func() {
+				dot := ui.Row(c.Key("fb-dot")).Size(fbDot, fbDot).Radius(fbDot / 2).Background(col).Center()
+				if g := f.glyph(); g != "" {
+					dot.Children(func() { ui.Text(c, g).FontSize(10).FontWeight(800).TextColor(ui.Hex("#000000")) })
+				}
+				ui.Text(c.Key("fb-text"), f.text).SingleLine().FontSize(12).FontWeight(600).
+					TextColor(ink).MaxWidth(textW)
+			})
+		})
+	})
+	if box.Clicked() {
 		a.show(false)
 	}
 }
