@@ -244,8 +244,8 @@ func TestExtractRejectsUnsafeZip(t *testing.T) {
 	if err := view.ChooseMenuItem("解压"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.statusErr || !strings.Contains(a.status, "不安全") {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "不安全") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
 		t.Fatalf("a refused archive must leave nothing: %v", entries)
@@ -282,8 +282,8 @@ func TestExtractEncryptedZip(t *testing.T) {
 	if err := view.ChooseMenuItem("解压"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.statusErr || !strings.Contains(a.status, "加密") {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "加密") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 }
 
@@ -301,8 +301,8 @@ func TestExtractCorruptZip(t *testing.T) {
 	if err := view.ChooseMenuItem("解压"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.statusErr || !strings.Contains(a.status, "解压失败") {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "解压失败") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
 		t.Fatalf("a failed extract must leave nothing: %v", entries)
@@ -450,8 +450,8 @@ func TestExtractChecksDiskSpace(t *testing.T) {
 	if err := view.ChooseMenuItem("解压"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.statusErr || !strings.Contains(a.status, "磁盘空间不足") {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "磁盘空间不足") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
 		t.Fatalf("nothing should be extracted: %v", entries)
@@ -481,8 +481,8 @@ func TestExtractSymlinkSafety(t *testing.T) {
 	if err := view.ChooseMenuItem("解压"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.statusErr || !strings.Contains(a.status, "符号链接") {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "符号链接") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 }
 
@@ -561,7 +561,7 @@ func TestExtractBatchNameCollisions(t *testing.T) {
 	items := slices.Clone(a.store.Items) // pack.zip first
 	view.Frame()
 	a.startConvert(items, toExtract)
-	if a.statusErr {
+	if a.statusKind == statusErr {
 		t.Fatalf("extraction failed: %s", a.status)
 	}
 	got := outputNames(a)
@@ -653,8 +653,8 @@ func TestExtractRarLimitations(t *testing.T) {
 		a, view := extractShelf(t, filepath.Join(dir, tc.name))
 		view.Frame()
 		extractOne(t, a, view, tc.name)
-		if !a.statusErr || !strings.Contains(a.status, tc.want) {
-			t.Fatalf("%s: status = %q err=%v, want %q", tc.name, a.status, a.statusErr, tc.want)
+		if a.statusKind != statusErr || !strings.Contains(a.status, tc.want) {
+			t.Fatalf("%s: status = %q err=%v, want %q", tc.name, a.status, a.statusKind == statusErr, tc.want)
 		}
 		if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
 			t.Fatalf("%s: nothing may be extracted: %v", tc.name, entries)

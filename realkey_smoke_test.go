@@ -122,6 +122,7 @@ func snapshotClipboard(t *testing.T) {
 				for uti, data := range itm {
 					objcSend(pb, "setData:forType:", objcData(data), objcStr(uti))
 				}
+				objcSend(pb, "setData:forType:", objcData(nil), objcStr("org.nspasteboard.ConcealedType"))
 				objcSend(arr, "addObject:", pb)
 				objcSend(pb, "release")
 			}

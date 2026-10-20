@@ -78,8 +78,8 @@ func TestOpeningIsElasticAndTheFrameNeverClips(t *testing.T) {
 	if got := a.fx.h; got > target+0.5 || got < target-2 {
 		t.Fatalf("the opening settled at %.1f, not the panel's %.1f", got, target)
 	}
-	if got := a.desiredFrame().Width; got != panelWidth {
-		t.Fatalf("the settled frame is %d wide, want the panel's %d", got, panelWidth)
+	if got := a.desiredFrame().Width; got != panelWidth+2*earR {
+		t.Fatalf("the settled frame is %d wide, want the panel plus both ears (%d)", got, panelWidth+2*earR)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestPeekStripHoldsFoldingShapes(t *testing.T) {
 	}
 	// The capsule's own room, glow included, appears with it.
 	a.fx = shellMotion{}
-	a.toastStatus("已压缩 3 张", time.Now().Add(3*time.Second), false)
+	a.toastStatus("已压缩 3 张", time.Now().Add(3*time.Second), statusOK)
 	if f := a.desiredFrame(); f.Width < fbMaxW || f.Height < 32+fbBody+fbGlowPad {
 		t.Fatalf("strip %+v cannot hold the capsule and its glow", f)
 	}
@@ -266,7 +266,7 @@ func TestRowsFadeOnlyInTheBand(t *testing.T) {
 func TestCapsuleOnlyWhileThePanelIsClosed(t *testing.T) {
 	now := time.Now()
 	a := motionShelf()
-	a.toastStatus("已压缩 3 张", now.Add(3*time.Second), false)
+	a.toastStatus("已压缩 3 张", now.Add(3*time.Second), statusOK)
 	if !a.capsuleUp(now) {
 		t.Fatal("a closed panel with a fresh toast has no capsule")
 	}
@@ -289,8 +289,9 @@ func TestCapsuleOnlyWhileThePanelIsClosed(t *testing.T) {
 		t.Fatal("Shelf's own drag-out does not ask for the drop pill: the capsule stays")
 	}
 	a.ownDrag, a.dragging = false, false
-	if a.capsuleUp(now.Add(fbExpand + fbHoldOK + time.Millisecond)) {
-		t.Fatal("the capsule outlived its hold")
+	a.fb.arm(now)
+	if a.capsuleUp(now.Add(3*time.Second + time.Millisecond)) {
+		t.Fatal("the capsule outlived the caller's deadline")
 	}
 }
 
@@ -300,27 +301,29 @@ func TestCapsuleOnlyWhileThePanelIsClosed(t *testing.T) {
 func TestToastWhileClosedBecomesCapsule(t *testing.T) {
 	a := motionShelf()
 	now := time.Now()
-	a.toastStatus("已压缩 3 张", now.Add(3*time.Second), false)
-	if a.fb.text != "已压缩 3 张" || a.fb.isErr {
-		t.Fatalf("capsule = %q err=%v, want the success text", a.fb.text, a.fb.isErr)
+	a.toastStatus("已压缩 3 张", now.Add(3*time.Second), statusOK)
+	if a.fb.text != "已压缩 3 张" || a.fb.kind != statusOK {
+		t.Fatalf("capsule = %q kind=%v, want the success text", a.fb.text, a.fb.kind)
 	}
 	if got := a.fb.color(); got != fbGreen {
 		t.Fatalf("success colour %v, want %v", got, fbGreen)
 	}
-	if held := a.fb.until.Sub(a.fb.shownAt); held != fbExpand+fbHoldOK {
-		t.Fatalf("success held %v, want %v", held, fbExpand+fbHoldOK)
+	// The caller's 3s deadline wins over the 1.6s floor (a few ns of clock
+	// skew between the post and show's own now is expected).
+	if held := a.fb.until.Sub(a.fb.shownAt); held < 3*time.Second-100*time.Millisecond || held > 3*time.Second {
+		t.Fatalf("success held %v, want the caller's 3s", held)
 	}
-	a.toastStatus("压缩包已加密", now.Add(4*time.Second), true)
+	a.toastStatus("压缩包已加密", now.Add(4*time.Second), statusErr)
 	if a.fb.color() != fbRed {
 		t.Fatalf("failure colour %v, want %v", a.fb.color(), fbRed)
 	}
-	if held := a.fb.until.Sub(a.fb.shownAt); held != fbExpand+fbHoldErr {
-		t.Fatalf("failure held %v, want %v", held, fbExpand+fbHoldErr)
+	if held := a.fb.until.Sub(a.fb.shownAt); held < 4*time.Second-100*time.Millisecond || held > 4*time.Second {
+		t.Fatalf("failure held %v, want the caller's 4s", held)
 	}
 	// The panel open: no capsule, the toast layer's pill carries it.
 	a.fb = feedback{}
 	a.visible = true
-	a.toastStatus("已放入", now.Add(3*time.Second), false)
+	a.toastStatus("已放入", now.Add(3*time.Second), statusOK)
 	if a.fb.text != "" || a.fb.up(now) {
 		t.Fatal("an open panel must not grow a capsule")
 	}
@@ -354,7 +357,7 @@ func TestLiveJobDrivesTheCapsuleAndHandsOverToItsVerdict(t *testing.T) {
 	}
 	// The job ends and its toast lands: the capsule turns into the verdict.
 	a.conv.job = nil
-	a.toastStatus("已转换 3 项 · 已选中，可直接拖出", time.Now().Add(3*time.Second), false)
+	a.toastStatus("已转换 3 项 · 已选中，可直接拖出", time.Now().Add(3*time.Second), statusOK)
 	view.Frame()
 	if a.fb.live || a.fb.text != "已转换 3 项 · 已选中，可直接拖出" {
 		t.Fatalf("after the job the capsule is %q live=%v", a.fb.text, a.fb.live)
@@ -405,7 +408,7 @@ func TestCapsuleGeometry(t *testing.T) {
 // is over within fbShake; successes and Reduce Motion never shake.
 func TestFailureShakesOnce(t *testing.T) {
 	now := time.Now()
-	f := feedback{text: "失败", isErr: true, shownAt: now, until: now.Add(time.Hour)}
+	f := feedback{text: "失败", kind: statusErr, shownAt: now, until: now.Add(time.Hour)}
 	if got := f.shake(now, false); got != 0 {
 		t.Fatalf("the shake started before the capsule grew: %.2f", got)
 	}
@@ -423,7 +426,7 @@ func TestFailureShakesOnce(t *testing.T) {
 	if got := f.shake(now.Add(fbExpand+fbShake/10), true); got != 0 {
 		t.Fatal("Reduce Motion must not shake")
 	}
-	f.isErr = false
+	f.kind = statusOK
 	if got := f.shake(now.Add(fbExpand+fbShake/10), false); got != 0 {
 		t.Fatalf("a success shook: %.2f", got)
 	}
@@ -434,7 +437,7 @@ func TestFailureShakesOnce(t *testing.T) {
 // capsule; a press away from it must not.
 func TestCapsuleClickExpandsThroughTheMonitor(t *testing.T) {
 	a := motionShelf()
-	a.toastStatus("已转换 1 项", time.Now().Add(3*time.Second), false)
+	a.toastStatus("已转换 1 项", time.Now().Add(3*time.Second), statusOK)
 	a.fb.drawn = true
 	r := a.peekPillRect()
 	if r.Width < 240 {
@@ -445,7 +448,7 @@ func TestCapsuleClickExpandsThroughTheMonitor(t *testing.T) {
 		t.Fatal("a press on the capsule must expand the shelf")
 	}
 	b := motionShelf()
-	b.toastStatus("已转换 1 项", time.Now().Add(3*time.Second), false)
+	b.toastStatus("已转换 1 项", time.Now().Add(3*time.Second), statusOK)
 	b.fb.drawn = true
 	b.mouseDown(false, mygo.Point{X: b.notchX - 120, Y: b.notchH + 10})
 	if b.visible {
@@ -491,7 +494,7 @@ func TestLiveCapsuleRearmsAfterAToastExpires(t *testing.T) {
 		t.Fatal("the job's capsule is not up")
 	}
 	// A toast lands while the capsule shows progress: it takes the words.
-	a.toastStatus("已自动清理 2 项", time.Now().Add(2*time.Second), false)
+	a.toastStatus("已自动清理 2 项", time.Now().Add(2*time.Second), statusOK)
 	view.Frame()
 	if a.fb.live || a.fb.text != "已自动清理 2 项" {
 		t.Fatalf("the toast did not take the capsule: %q live=%v", a.fb.text, a.fb.live)
@@ -527,7 +530,7 @@ func TestToastPostedWhileClosingStillShows(t *testing.T) {
 	}
 	// The panel is on its way down when the job reports.
 	a.visible, a.progress = false, 0.5
-	a.toastStatus("已转换 3 项", time.Now().Add(3*time.Second), false)
+	a.toastStatus("已转换 3 项", time.Now().Add(3*time.Second), statusOK)
 	if a.fb.text != "已转换 3 项" {
 		t.Fatalf("a toast posted mid-close never reached the capsule: %q", a.fb.text)
 	}
@@ -544,8 +547,8 @@ func TestToastPostedWhileClosingStillShows(t *testing.T) {
 	if !a.fb.armed {
 		t.Fatal("the capsule's clock never started on its drawn frame")
 	}
-	if got := a.fb.until.Sub(a.fb.shownAt); got != fbExpand+fbHoldOK {
-		t.Fatalf("the shown capsule holds %v, want %v", got, fbExpand+fbHoldOK)
+	if got := a.fb.until.Sub(a.fb.shownAt); got < fbExpand+fbHoldOK {
+		t.Fatalf("the shown capsule holds %v, less than the %v floor", got, fbExpand+fbHoldOK)
 	}
 	// Past its hold it folds away and clears itself.
 	view.Advance(fbHoldOK + time.Second)
@@ -563,7 +566,7 @@ func TestToastPostedWhileClosingStillShows(t *testing.T) {
 // toast still lives until its first paint, as it always did.
 func TestCollapsedToastKeepsItsClockInThePill(t *testing.T) {
 	a := motionShelf()
-	a.toastStatus("出错了", time.Time{}, true)
+	a.toastStatus("出错了", time.Time{}, statusErr)
 	if !a.statusShown.IsZero() {
 		t.Fatal("a closed-panel toast already counts down before it is ever painted")
 	}
@@ -579,7 +582,7 @@ func TestCapsuleGrowNeverPaintsPastTheShell(t *testing.T) {
 	a := motionWindow()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
 	view.Frame() // the idle frame the grow starts from
-	a.toastStatus("已压缩 3 张 · 4.6 MB → 1.8 MB", time.Now().Add(3*time.Second), false)
+	a.toastStatus("已压缩 3 张 · 4.6 MB → 1.8 MB", time.Now().Add(3*time.Second), statusOK)
 	view.Frame()
 	view.Advance(60 * time.Millisecond) // mid grow-out: the shell is narrow
 	view.Frame()
@@ -638,7 +641,7 @@ func TestPeekMorphFlightKeepsStripRoom(t *testing.T) {
 // about half strength — and is done; the old five-lobe shiver is gone.
 func TestShakeIsOneLeftRightPass(t *testing.T) {
 	now := time.Now()
-	f := feedback{text: "失败", isErr: true, shownAt: now, until: now.Add(time.Hour)}
+	f := feedback{text: "失败", kind: statusErr, shownAt: now, until: now.Add(time.Hour)}
 	if got := f.shake(now.Add(fbExpand+fbShake/2+30*time.Millisecond), false); got <= 0 {
 		// t≈0.55: the single pass must already be on its right-hand return;
 		// a 2.5-cycle shiver is still swinging left here.
@@ -670,15 +673,15 @@ func TestCapsuleGlowAlphaIsTheSpec(t *testing.T) {
 }
 
 // TestSettledCapsuleAsksForNoFrames: a capsule that is holding still must not
-// make the whole view repaint at display rate; only the breath and the shake
-// do.
+// make the whole view repaint at display rate; the failure shake does, and
+// the breath runs on its timed beats.
 func TestSettledCapsuleAsksForNoFrames(t *testing.T) {
 	now := time.Now()
 	ok := feedback{text: "已完成", shownAt: now.Add(-time.Second), until: now.Add(time.Hour)}
 	if ok.animating(now, false) {
 		t.Fatal("a settled success capsule still asks for per-frame redraws")
 	}
-	fail := feedback{text: "失败", isErr: true, shownAt: now.Add(-fbExpand - 100*time.Millisecond)}
+	fail := feedback{text: "失败", kind: statusErr, shownAt: now.Add(-fbExpand - 100*time.Millisecond)}
 	if !fail.animating(now, false) {
 		t.Fatal("a shaking failure must keep per-frame redraws")
 	}
@@ -688,8 +691,13 @@ func TestSettledCapsuleAsksForNoFrames(t *testing.T) {
 		t.Fatal("a finished shake still asks for per-frame redraws")
 	}
 	live := feedback{text: "正在转成 JPEG · 1/3", live: true}
-	if !live.animating(now, false) || live.animating(now, true) {
-		t.Fatal("the breathing glow animates only when motion is allowed")
+	if live.animating(now, false) {
+		// The breath runs on the timed beats settle() hands to After —
+		// four frames per breath, not one per display frame.
+		t.Fatal("the breathing glow must not ask for per-frame redraws")
+	}
+	if got := live.settle(now); got.Sub(now) != fbBreathe/4 {
+		t.Fatalf("a running job's next beat is %v out, want %v", got.Sub(now), fbBreathe/4)
 	}
 }
 

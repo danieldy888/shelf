@@ -181,7 +181,7 @@ func (r *renameUI) fail(msg string) {
 		r.repaint()
 		return
 	}
-	r.host.toastStatus(msg, time.Now().Add(8*time.Second), true)
+	r.host.toastStatus(msg, time.Now().Add(8*time.Second), statusErr)
 }
 
 // undoBlockedName names an original name a batch's undo cannot go back to
@@ -326,7 +326,7 @@ func (r *renameUI) undo() {
 	}
 	n := len(d.ops)
 	r.done, r.undoUntil, r.err = nil, time.Time{}, ""
-	r.host.toastStatus(fmt.Sprintf("已撤销 %d 项重命名", n), time.Now().Add(4*time.Second), false)
+	r.host.toastStatus(fmt.Sprintf("已撤销 %d 项重命名", n), time.Now().Add(4*time.Second), statusOK)
 	r.repaint()
 }
 

@@ -69,11 +69,21 @@ var dropCellOpts = transfer.DropOptions{
 // Seams: the pasteboard reads, the dropped data's file extraction,
 // AirDrop and the cursor probe are substituted in tests.
 var (
-	dragFiles       = mac.DragFiles
-	dragFilesChange = mac.DragFilesChange
-	dropFilesData   = func(d transfer.Data) ([]string, error) { return d.Files() }
-	airDrop         = mac.AirDrop
-	cursorPoint     = func() mygo.Point { return mygo.Screen.CursorScreenPoint() }
+	dragFiles = func(a *shelf) []string {
+		if a.win == nil {
+			return nil
+		}
+		return mac.DragFiles()
+	}
+	dragFilesChange = func(a *shelf) int64 {
+		if a.win == nil {
+			return 0
+		}
+		return mac.DragFilesChange()
+	}
+	dropFilesData = func(d transfer.Data) ([]string, error) { return d.Files() }
+	airDrop       = mac.AirDrop
+	cursorPoint   = func() mygo.Point { return mygo.Screen.CursorScreenPoint() }
 )
 
 // dropZoneState is the drop zone's memory of the drag in flight. paths
@@ -89,6 +99,7 @@ var (
 type dropZoneState struct {
 	serial int64     // drag session the cache belongs to
 	count  int64     // drag pasteboard changeCount last read
+	loaded bool      // count and files belong to this session, even when count is zero
 	files  []string  // paths read at count
 	class  dropClass // their classification
 	until  time.Time // hold deadline once the drag flag fell
@@ -281,7 +292,9 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		return paths
 	}
 	if a.dragging {
-		d.serial, d.until, d.done = a.dragSerial, time.Time{}, false
+		if d.serial != a.dragSerial {
+			*d = dropZoneState{serial: a.dragSerial}
+		}
 		inside := over || a.win == nil
 		if !inside {
 			p := cursorPoint()
@@ -290,9 +303,9 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		if !inside {
 			return nil
 		}
-		if count := dragFilesChange(); count != d.count {
-			d.count = count
-			d.files = dragFiles()
+		if count := dragFilesChange(a); !d.loaded || count != d.count {
+			d.count, d.loaded = count, true
+			d.files = dragFiles(a)
 			d.class = classifyDrop(d.files)
 		}
 		if len(d.files) == 0 {

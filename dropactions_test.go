@@ -335,7 +335,7 @@ func dropViewShelf(t *testing.T, paths []string) (*shelf, *ui.Tester) {
 	}
 	a.conv = &converter{host: a}
 	old := dragFiles
-	dragFiles = func() []string { return paths }
+	dragFiles = func(*shelf) []string { return paths }
 	t.Cleanup(func() { dragFiles = old })
 	return a, ui.NewTester(a.view, panelWidth, panelHeight)
 }
@@ -453,8 +453,8 @@ func snapShelf(t *testing.T, files []string) (*shelf, *int, *int64) {
 	count := new(int64)
 	*count = 7
 	oldF, oldC := dragFiles, dragFilesChange
-	dragFiles = func() []string { *reads++; return files }
-	dragFilesChange = func() int64 { return *count }
+	dragFiles = func(*shelf) []string { *reads++; return files }
+	dragFilesChange = func(*shelf) int64 { return *count }
 	t.Cleanup(func() { dragFiles, dragFilesChange = oldF, oldC })
 	return a, reads, count
 }

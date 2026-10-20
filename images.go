@@ -34,7 +34,7 @@ func (a *shelf) thumbnail(item store.Item) *ui.Bitmap {
 	if b, ok := a.thumbnails[item.ID]; ok {
 		return b
 	}
-	if a.thumbPending[item.ID] {
+	if a.win == nil || a.thumbPending[item.ID] {
 		return nil
 	}
 	// 并发解码上限 2：名额满则留待完成回调触发的重绘再试，

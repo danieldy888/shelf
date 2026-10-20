@@ -216,7 +216,8 @@ func (a *shelf) newNotchWindow() {
 		Content: ui.View(a.view),
 	})
 	a.win.SetVisibleOnAllWorkspaces(true)
-	mac.ConfigureNotchWindow(a.win.NativeHandle())
+	a.winH = a.win.NativeHandle()
+	mac.ConfigureNotchWindow(a.winH)
 	a.win.OnMove(a.windowGeometryChanged)
 	a.win.OnResize(a.windowGeometryChanged)
 	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))

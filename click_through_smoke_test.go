@@ -35,8 +35,15 @@ func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 			f := a.desiredFrame()
 			screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
 			cx := float64(a.stripCenter())
+			sampleW := f.Width
+			if wantShelf {
+				// The ear margins are transparent below the top arc.
+				// Hit-test the visible player; idle still checks the
+				// entire native strip, margins included.
+				sampleW = int(a.fx.w)
+			}
 			for _, y := range []float64{10, float64(a.notchH) + 20, float64(f.Height) - 10} {
-				for _, dx := range []float64{0, -float64(f.Width)/2 + 10, float64(f.Width)/2 - 10} {
+				for _, dx := range []float64{0, -float64(sampleW)/2 + 10, float64(sampleW)/2 - 10} {
 					got := mac.WindowAtPoint(cx+dx, float64(a.dispBounds.Y)+y, screenH) == shelf
 					if got != wantShelf {
 						t.Errorf("%s: click at strip (%+.0f, %.0f) reached the shelf = %v, want %v (strip %+v)", state, dx, y, got, wantShelf, f)
@@ -47,8 +54,7 @@ func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 	}
 	check(false, "idle")
 	onMain(func() {
-		a.peeking, a.peekProgress = true, 1
-		a.syncMousePassThrough()
+		a.setPeek(true)
 	})
 	time.Sleep(200 * time.Millisecond)
 	check(true, "hover player")

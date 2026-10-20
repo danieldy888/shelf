@@ -173,7 +173,7 @@ func TestOCRDeletedWhileRecognizing(t *testing.T) {
 	if len(a.store.Items) != 0 {
 		t.Fatal("the removed item must stay removed")
 	}
-	if a.statusErr {
+	if a.statusKind == statusErr {
 		t.Fatalf("a dropped result is not an error: %q", a.status)
 	}
 }

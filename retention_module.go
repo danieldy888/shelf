@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -39,13 +40,15 @@ func (a *shelf) removeExpired(now time.Time) {
 	n, err := a.store.RemoveOlderThan(now.AddDate(0, 0, -days))
 	if err != nil {
 		// n > 0: removed and saved, but an image file could not be deleted.
-		a.report(err)
+		// 后台自动清理不惊动刘海胶囊：留在面板底部提示里。
+		a.toastQuiet("操作失败："+err.Error(), time.Time{}, statusErr)
+		log.Print(a.status)
 	}
 	if n > 0 {
 		a.dropStaleThumbnails()
 		a.selection.keepExisting(a.visibleItems())
 		if err == nil {
-			a.toastStatus(fmt.Sprintf("已自动清理 %d 项超过 %d 天的内容", n, days), now.Add(5*time.Second), false)
+			a.toastQuiet(fmt.Sprintf("已自动清理 %d 项超过 %d 天的内容", n, days), now.Add(5*time.Second), statusInfo)
 		}
 		if a.win != nil {
 			a.win.Invalidate()

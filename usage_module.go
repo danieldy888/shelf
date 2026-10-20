@@ -278,11 +278,11 @@ func (f *usageFeature) requestRefresh() {
 	// local scan is instant: say when it may be asked again.
 	switch {
 	case wait > 0:
-		f.host.toastStatus("刚查过，"+usageWait(wait)+"后可再刷新", time.Time{}, false)
+		f.host.toastStatus("刚查过，"+usageWait(wait)+"后可再刷新", time.Time{}, statusInfo)
 	case started:
-		f.host.toastStatus("正在刷新…", time.Time{}, false)
+		f.host.toastStatus("正在刷新…", time.Time{}, statusInfo)
 	default:
-		f.host.toastStatus("没有可刷新的来源", time.Time{}, false)
+		f.host.toastStatus("没有可刷新的来源", time.Time{}, statusInfo)
 	}
 }
 

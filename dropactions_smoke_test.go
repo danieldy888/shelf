@@ -23,10 +23,10 @@ import (
 
 // Real-window drop-zone checks, run only under SHELF_BASKET_SMOKE=1 so the
 // shared TestMain already hosts the app loop. Shots land in
-// /tmp/shelf-drop-actions/<name>.png; the instance works in the smoke data
+// /tmp/shelf-fix/drop-zone/<name>.png; the instance works in the smoke data
 // dir and never touches ~/Library/Application Support/Shelf.
 
-const dropShotDir = "/tmp/shelf-drop-actions"
+const dropShotDir = "/tmp/shelf-fix/drop-zone"
 
 // dropSmokeShelf is the live shelf with its converter, the way ready()
 // wires it, minus the observers a screenshot pass does not need.
@@ -109,6 +109,7 @@ func shotDropZone(t *testing.T, a *shelf, paths []string, name string) {
 		a.win.Invalidate()
 	})
 	time.Sleep(900 * time.Millisecond) // settle the window and thumbnails
+	onMain(a.syncWindowFrame)
 	if err := os.MkdirAll(dropShotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

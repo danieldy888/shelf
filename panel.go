@@ -130,14 +130,17 @@ const (
 	panelMaxH      = 560                     // 面板最大高，受屏高钳制
 	toastLife      = 2500 * time.Millisecond // 状态胶囊的展示时长
 	toastFade      = 220 * time.Millisecond  // 淡出时长
+	// earR 是壳顶边左右各伸出的耳角半径；窗口宽度必须包含两侧耳角，
+	// 任何一帧耳角都是完整圆弧（desiredFrame 据此加宽）。
+	earR = 10
 )
 
 // contentFade is the expanded content's opacity at open progress k: it
 // stays transparent while the shell is still a notch-sized sliver and
-// fades in over the last 60% of the growth, so the content arrives with
-// the shell instead of flashing through it.
+// fades in linearly over the last 60% of the growth, so the content
+// arrives with the shell instead of flashing through it.
 func contentFade(k float32) float32 {
-	return ui.EaseOut(min(max((k-0.4)/0.6, 0), 1))
+	return min(max((k-0.4)/0.6, 0), 1)
 }
 
 // Page switch "fade through": the page being left fades out over the first
@@ -196,6 +199,23 @@ func (a *shelf) view(c *ui.Context) {
 	now := c.Now()
 	// What a closed panel has to say grows out of the notch (feedback.go);
 	// the text is measured before the shell is sized around it.
+	// 悬停或外来拖拽占用探头形状期间，胶囊根本没画出来：计时随让位整体
+	// 滑动（含没画过的新提示——它的时钟本来就从第一帧算起），回来后按
+	// 剩余时间继续，绝不会被静默吃掉。
+	if f := &a.fb; f.text != "" && !f.live {
+		yielded := !a.visible && a.progress <= 0.01 && (a.peeking || (a.dragging && !a.ownDrag))
+		switch {
+		case yielded && f.pausedAt.IsZero():
+			f.pausedAt = now
+		case yielded:
+			d := now.Sub(f.pausedAt)
+			f.until, f.shownAt, f.pausedAt = f.until.Add(d), f.shownAt.Add(d), now
+		case !f.pausedAt.IsZero():
+			d := now.Sub(f.pausedAt)
+			f.until, f.shownAt = f.until.Add(d), f.shownAt.Add(d)
+			f.pausedAt = time.Time{}
+		}
+	}
 	a.fb.follow(a, now)
 	if f := &a.fb; f.text != "" && f.pillW == 0 {
 		f.pillW = f.measure(c)
@@ -214,9 +234,8 @@ func (a *shelf) view(c *ui.Context) {
 	// Keep one native drop target across all states. The transparent root does
 	// not paint the theme background; clipping contains every animation frame.
 	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center).Clip()
-	// The shell is drawn from values animated per display frame; the 30ms
-	// tick's progress/peekProgress only decide state (window frame, mouse
-	// pass-through). Headless tests draw the final shape directly.
+	// Draw springs at display cadence. Their last drawn values also drive
+	// native frame size and mouse pass-through.
 	openK, peekK := a.progress, a.peekProgress
 	if a.win == nil && !a.peeking {
 		openK = 1
@@ -227,34 +246,55 @@ func (a *shelf) view(c *ui.Context) {
 		peekAnim := peekSpring
 		if openTarget == 0 {
 			openAnim = closeSpring
+			// 展开中途关闭不得带着展开速度继续往外长：反向时重置为很小的
+			// 向内初速度（临界阻尼下初速度 ≤ 0 保证壳尺寸单调变小）。
+			openAnim.Spring.Velocity = -0.5
 		}
 		switch {
 		case capsule:
-			// The capsule grows with the panel's own spring.
+			// The capsule grows with the panel's own spring. A capsule that
+			// is needed again ends any fold-back in flight.
 			peekAnim, sizeAnim = openSpring, openSpring
-		case peekTarget == 0 && a.fb.drawn:
-			// The capsule leaves on a spring that never overshoots.
+			a.fb.retracting = false
+		case peekTarget == 0 && (a.fb.drawn || a.fb.retracting):
+			// The capsule leaves on a spring that never overshoots, for the
+			// whole fold — not only the fold's first frame.
 			peekAnim = retractSpring
 			a.fb.retracting = true
 		}
+		if peekTarget == 0 {
+			peekAnim.Spring.Velocity = -0.5 // 收起反向同样不带外冲速度
+		}
 		openK = zone.AnimateTo("open", openTarget, openAnim)
 		peekK = zone.AnimateTo("peek", peekTarget, peekAnim)
+		// AnimateTo first accounts for the time passed since the last frame
+		// along the OLD target: a close issued mid-flight would otherwise
+		// draw one more outward frame before turning. While closing, the
+		// drawn interpolation may only shrink.
+		if openTarget == 0 && openK > a.fx.openK {
+			openK = a.fx.openK
+		}
+		if peekTarget == 0 && peekK > a.fx.peekK {
+			peekK = a.fx.peekK
+		}
 		// A spring heading back to zero may overshoot its target; the shell
-		// never shrinks past the hardware notch it grows from. Growth under
-		// a point is not a shape: snap it, so the idle test matches the draw.
+		// never shrinks past the hardware notch it grows from. The rest snap
+		// stays under a point, so the fold visibly finishes instead of
+		// jumping the last points.
 		openK, peekK = max(openK, 0), max(peekK, 0)
-		if openK < 0.01 {
+		if openK < 0.002 {
 			openK = 0
 		}
-		if peekK < 0.01 {
+		if peekK < 0.002 {
 			peekK = 0
 		}
-		if a.peeking || peekK <= 0.01 {
+		if a.peeking || peekK == 0 {
 			a.fb.retracting = false
 		}
 	}
-	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。
-	idle := a.win != nil && !a.visible && a.progress <= 0.01 && openK <= 0.01 && !a.peeking && peekK <= 0.01
+	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。阈值与上面
+	// 的静止吸附一致（亚点级），收起最后一段平滑落位、看不出跳变。
+	idle := a.win != nil && !a.visible && a.progress <= 0.01 && openK <= 0.002 && !a.peeking && peekK <= 0.002
 	// Shelf's own drag-out never lands back on the shelf: the drop would
 	// add a second item pointing at the same file. Without a target the
 	// drag ends as if cancelled — nothing is added, the panel stays open
@@ -270,7 +310,9 @@ func (a *shelf) view(c *ui.Context) {
 		// the next state starts from is the notch's own box.
 		a.fx.w, a.fx.h = float32(max(180, a.notchW)), float32(max(32, a.notchH))
 		a.fx.peek, a.fx.openMoving, a.fx.sizeMoving, a.fb.drawn = false, false, false, false
+		a.fx.openK, a.fx.peekK = 0, 0
 		a.fb.clearExpired(now, true)
+		a.syncMousePassThrough()
 		if accepts {
 			if drop, ok := ui.DropData(zone, opts); ok {
 				a.drop.done = true
@@ -284,7 +326,7 @@ func (a *shelf) view(c *ui.Context) {
 	// the shell retracting: hide() has already reset the tab and search,
 	// and drawing that reset state on the way out would flip the content.
 	expanded := a.win == nil && !a.peeking || a.visible
-	closing := !expanded && openK > 0.01
+	closing := !expanded && openK > 0
 	// The panel's height eases between contents (tab switch, rows coming
 	// and going); the content itself is laid out at the target height.
 	// While closing, the shell keeps the height it was showing.
@@ -296,7 +338,8 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	targetH := float32(a.panelH())
 	shownH := targetH
-	if a.win != nil && (a.visible || a.progress > 0.01) {
+	// Keep the closing height until the drawn spring reaches the notch.
+	if a.win != nil && (a.visible || openK > 0) {
 		if closing && a.shownH > 0 {
 			targetH = a.shownH
 		}
@@ -319,8 +362,10 @@ func (a *shelf) view(c *ui.Context) {
 	// desiredFrame): the opening overshoots, and a shape morph can be larger
 	// than the shape it heads for.
 	a.fx.w, a.fx.h = shellW, shellH
+	a.fx.openK, a.fx.peekK = openK, peekK
 	a.fx.openMoving = a.win != nil && !zone.Settled("open")
 	a.fx.peek = !expanded && peeked && !closing
+	a.syncMousePassThrough()
 	// A failed job shakes the capsule, and only the capsule.
 	var shake float32
 	if capsule {
@@ -328,24 +373,25 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
-	// 刘海里长出来，而不是浮在菜单栏下方。
+	// 刘海里长出来，而不是浮在菜单栏下方。窗口宽度含两侧耳角（earR），
+	// 这里画出的耳角任何一帧都不会被裁。
 	zone.Draw(func(p *ui.Painter, r ui.Rect) {
 		x0 := (r.W - shellW) / 2
 		x1 := x0 + shellW
 		y1 := shellH
-		earR := float32(10)
+		ear := float32(earR)
 		// 底部圆角：探头胶囊半圆 → 展开 30pt。The opening's overshoot can
 		// push the drawn growth past its final value; the corner caps there.
 		botR := min(shellH/2, 12+18*min(openK, 1))
 		var path ui.Path
-		path.MoveTo(x0-earR+shake, 0)
+		path.MoveTo(x0-ear+shake, 0)
 		path.QuadTo(x0+shake, 0, x0+shake, earR)
 		path.LineTo(x0+shake, y1-botR)
 		path.QuadTo(x0+shake, y1, x0+shake+botR, y1)
 		path.LineTo(x1-botR+shake, y1)
 		path.QuadTo(x1+shake, y1, x1+shake, y1-botR)
 		path.LineTo(x1+shake, earR)
-		path.QuadTo(x1+shake, 0, x1+earR+shake, 0)
+		path.QuadTo(x1+shake, 0, x1+ear+shake, 0)
 		path.Close()
 		p.FillPath(&path, ui.Hex("#000000"))
 	})
@@ -379,8 +425,8 @@ func (a *shelf) view(c *ui.Context) {
 	// What this frame drew decides the next one's retraction spring and
 	// whether the capsule's pill takes clicks. Once the folded-back shell
 	// has fully retracted, the expired text is dropped for good.
-	a.fb.drawn = capsule
-	a.fb.clearExpired(now, peekK <= 0.01 && !capsule)
+	a.fb.drawn = capsule && !expanded && !closing && peeked
+	a.fb.clearExpired(now, peekK == 0 && !capsule)
 	if !accepts {
 		return
 	}
@@ -744,7 +790,7 @@ func (a *shelf) statusToast(c *ui.Context) {
 	}
 	p.Opacity(k)
 	p.Children(func() {
-		if a.statusErr {
+		if a.statusKind == statusErr {
 			ui.Box(c).Size(6, 6).Radius(3).Background(danger)
 		}
 		ui.Text(c, a.status).SingleLine().FontSize(11).TextColor(ink)
@@ -790,6 +836,13 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		// over a capsule on its way out.
 		return
 	}
+	// The completion capsule outranks the player: a status that is up is
+	// what the shell grew for (peekSize and desiredFrame agree), and the
+	// player takes the shape back when the toast is done.
+	if a.capsuleUp(now) {
+		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
+		return
+	}
 	if !over && a.np != nil && a.np.showsPlayer() {
 		pw, ph := a.playerSize()
 		clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
@@ -798,10 +851,6 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		if drew {
 			return
 		}
-	}
-	if a.capsuleUp(now) {
-		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
-		return
 	}
 	pw, ph := a.peekSize()
 	notchH := float32(max(32, a.notchH))

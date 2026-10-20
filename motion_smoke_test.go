@@ -6,7 +6,7 @@ package main
 // trace of the drawn shell, frame by frame, plus a shot), the completion
 // capsule in its three states, its yield to hover, and the progressive
 // blur on a scrolled clipboard list. Run with SHELF_BASKET_SMOKE=1; PNGs
-// land in /tmp/shelf-motion/. The instance reads the smoke data dir, never
+// land in /tmp/shelf-fix/motion/. The instance reads the smoke data dir, never
 // ~/Library/Application Support/Shelf.
 
 import (
@@ -23,9 +23,9 @@ import (
 	"shelf/internal/mac"
 )
 
-const motionShotDir = "/tmp/shelf-motion"
+const motionShotDir = "/tmp/shelf-fix/motion"
 
-// motionShot captures the notch window to /tmp/shelf-motion/name.png after
+// motionShot captures the notch window to motionShotDir after
 // letting wait pass, so a mid-animation or mid-shake state is what shows.
 func motionShot(t *testing.T, a *shelf, name string, wait time.Duration) string {
 	t.Helper()
@@ -74,7 +74,7 @@ func motionClosed(a *shelf) {
 		a.peekProgress, a.peekFrom = 0, 0
 		a.peekAnimStart = time.Time{}
 		a.fb = feedback{}
-		a.status, a.statusUntil, a.statusShown, a.statusErr = "", time.Time{}, time.Time{}, false
+		a.status, a.statusUntil, a.statusShown = "", time.Time{}, time.Time{}
 		a.place(mygo.Screen.CursorScreenPoint())
 		a.win.SetOpacity(1)
 		a.win.ShowInactive()
@@ -134,7 +134,7 @@ func TestSmokeCapsuleSuccess(t *testing.T) {
 	motionClosed(a)
 	time.Sleep(300 * time.Millisecond)
 	onMain(func() {
-		a.toastStatus("已压缩 3 张 · 4.6 MB → 1.8 MB", time.Now().Add(3*time.Second), false)
+		a.toastStatus("已压缩 3 张 · 4.6 MB → 1.8 MB", time.Now().Add(3*time.Second), statusOK)
 	})
 	// While the capsule is still a sliver, nothing it draws may reach past
 	// the shell's edge — opaque paint beside it would smear the menu bar.
@@ -217,7 +217,7 @@ func TestSmokeCapsuleFailure(t *testing.T) {
 	motionClosed(a)
 	time.Sleep(300 * time.Millisecond)
 	onMain(func() {
-		a.toastStatus("压缩包已加密，无法解压", time.Now().Add(4*time.Second), true)
+		a.toastStatus("压缩包已加密，无法解压", time.Now().Add(4*time.Second), statusErr)
 	})
 	motionShot(t, a, "capsule-failure-shake", 418*time.Millisecond)
 	motionShot(t, a, "capsule-failure-hold", 500*time.Millisecond)

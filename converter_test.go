@@ -318,8 +318,8 @@ func TestConvertFailureKeepsTheRest(t *testing.T) {
 	if got := outputNames(a); !slices.Equal(got, []string{"b.heic"}) {
 		t.Fatalf("outputs = %v", got)
 	}
-	if a.status != "1 项成功，1 项失败" || !a.statusErr {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.status != "1 项成功，1 项失败" || a.statusKind != statusErr {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 1 {
 		t.Fatalf("a failed output must not stay on disk: %v", entries)
@@ -708,8 +708,8 @@ func TestZipFailureLeavesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.startConvert(slices.Clone(a.store.Items), toZip)
-	if !a.statusErr || !strings.Contains(a.status, "压缩失败") {
-		t.Fatalf("status = %q err=%v", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "压缩失败") {
+		t.Fatalf("status = %q err=%v", a.status, a.statusKind == statusErr)
 	}
 	if entries, _ := os.ReadDir(a.store.ConvertedDir()); len(entries) != 0 {
 		t.Fatalf("a failed archive must leave nothing behind: %v", entries)

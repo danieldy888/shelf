@@ -101,9 +101,11 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 		}
 		view.CloseMenu()
 	}
-	// 缩略图在途解码必须在清空时作废。
-	if len(a.thumbPending) == 0 {
-		t.Fatal("expected in-flight thumbnail decodes for file and image items")
+	// 清空必须作废已经在途的缩略图；无窗口渲染不会启动后台解码。
+	for _, it := range s.Items {
+		if it.Kind != store.KindText {
+			a.thumbPending[it.ID] = true
+		}
 	}
 
 	if err := view.RightClick("note.txt"); err != nil {

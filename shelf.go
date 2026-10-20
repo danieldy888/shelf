@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -20,13 +21,15 @@ import (
 // UI、历史与本机 API 由 mygo 主线程串行拥有。
 type shelf struct {
 	win                                        *mygo.Window
+	winH                                       uintptr // cached on creation; zero for a headless surface
 	tray                                       *mygo.Tray
 	store                                      *store.Store
 	stop                                       chan struct{}
 	quitting, visible, edgeOpened, received    bool
 	status                                     string
-	statusUntil, statusShown                   time.Time // statusShown: 首次渲染时刻（toast 生命周期起点）
-	statusErr                                  bool      // report() 写入的错误状态（toast 带红点）
+	statusUntil, statusShown                   time.Time  // statusShown: 首次渲染时刻（toast 生命周期起点）
+	statusKind                                 statusKind // 提示级别：成功 / 普通信息 / 错误（pill 红点、胶囊配色）
+	statusCapsule                              bool       // 面板收起时是否转交刘海胶囊（后台信息不转交）
 	x, y                                       int
 	dispBounds                                 mygo.Rectangle
 	frame                                      mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
@@ -128,7 +131,7 @@ func (a *shelf) startMonitoring() {
 					a.syncWindowFrame()
 					a.tickUpdates(now)
 					if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
-						a.status, a.statusUntil, a.statusShown, a.statusErr = "", time.Time{}, time.Time{}, false
+						a.status, a.statusUntil, a.statusShown = "", time.Time{}, time.Time{}
 						if a.win != nil {
 							a.win.Invalidate()
 						}
@@ -137,7 +140,7 @@ func (a *shelf) startMonitoring() {
 					// 从首次渲染起 toastLife 后清掉。
 					if a.status != "" && a.statusUntil.IsZero() && !a.statusShown.IsZero() &&
 						now.After(a.statusShown.Add(toastLife)) {
-						a.status, a.statusShown, a.statusErr = "", time.Time{}, false
+						a.status, a.statusShown = "", time.Time{}
 						if a.win != nil {
 							a.win.Invalidate()
 						}
@@ -148,21 +151,76 @@ func (a *shelf) startMonitoring() {
 	}()
 }
 
+// statusKind 是提示的级别：做成的事情、普通信息、错误。面板底部 pill
+// 只给错误加红点；刘海胶囊按级别给状态点配色（DESIGN.md：成功绿
+// #30D158 ✓、普通信息中性白点、错误红 #FF453A !）。
+type statusKind int
+
+const (
+	statusOK   statusKind = iota // 做成的结果：绿 ✓
+	statusInfo                   // 普通信息：中性白点，无光晕
+	statusErr                    // 错误：红 !，无期限时至少停 4 秒
+)
+
 // toastStatus posts a transient status pill at the panel's bottom centre:
 // msg until the deadline (or toastLife from its first paint when until is
-// zero); isErr gives it the small red dot of error toasts. With the panel
-// closed there is no pill to read, so the same status grows out of the
-// notch as a capsule instead (feedback.go) — even while the panel is still
-// folding away, since the capsule's own clock starts when it can appear.
-func (a *shelf) toastStatus(msg string, until time.Time, isErr bool) {
+// zero); statusErr gives it the small red dot of error toasts. With the
+// panel closed there is no pill to read, so the result of a user action
+// grows out of the notch as a capsule instead (feedback.go) — even while
+// the panel is still folding away, since the capsule's own clock starts
+// when it can appear.
+func (a *shelf) toastStatus(msg string, until time.Time, kind statusKind) {
+	a.toast(msg, until, kind, true)
+}
+
+// toastQuiet posts a status that never grows the notch capsule: background
+// bookkeeping the user did not ask for (automatic cleanup) waits for the
+// panel's next opening in the bottom pill.
+func (a *shelf) toastQuiet(msg string, until time.Time, kind statusKind) {
+	a.toast(msg, until, kind, false)
+}
+
+func (a *shelf) toast(msg string, until time.Time, kind statusKind, capsule bool) {
 	a.status = msg
-	a.statusUntil, a.statusShown, a.statusErr = until, time.Time{}, isErr
-	if !a.visible {
-		a.fb.show(msg, isErr, time.Now())
+	a.statusUntil, a.statusShown, a.statusKind, a.statusCapsule = until, time.Time{}, kind, capsule
+	if !a.visible && capsule {
+		a.fb.show(msg, kind, until, time.Now())
 	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+}
+
+// handoffStatus moves a live status to the notch capsule when the panel
+// folds: a toast posted moments before a collapse (回车复制即收起) would
+// otherwise die with the pill after a single frame. A toast the panel
+// already showed long enough (its kind's floor) is not replayed; one the
+// capsule already holds simply plays out its remaining time. Background
+// bookkeeping (toastQuiet) never hands off.
+func (a *shelf) handoffStatus(now time.Time) {
+	if a.status == "" || !a.statusCapsule {
+		return
+	}
+	if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
+		return // expired with the panel
+	}
+	var seen time.Duration
+	if !a.statusShown.IsZero() {
+		seen = now.Sub(a.statusShown)
+	}
+	line, _, _ := strings.Cut(a.status, "\n")
+	if f := &a.fb; f.text == line && f.armed && f.up(now) {
+		// The capsule showed it and the panel pill showed it: enough
+		// exposure ends it, otherwise it plays out its remaining time.
+		if seen >= a.statusKind.holdFloor() {
+			f.text, f.job = "", nil
+		}
+		return
+	}
+	if seen >= a.statusKind.holdFloor() {
+		return // read in the panel: no replay in the capsule
+	}
+	a.fb.show(a.status, a.statusKind, a.statusUntil, now)
 }
 
 func (a *shelf) receive(data transfer.Data) error {
@@ -183,7 +241,7 @@ func (a *shelf) receive(data transfer.Data) error {
 	}
 	if err == nil {
 		a.received = true
-		a.toastStatus("已放入 · 拖出后仍会保留", time.Now().Add(3*time.Second), false)
+		a.toastStatus("已放入 · 拖出后仍会保留", time.Now().Add(3*time.Second), statusOK)
 	}
 	a.changed(err)
 	return err
@@ -202,7 +260,7 @@ func (a *shelf) changed(err error) {
 	}
 }
 func (a *shelf) report(err error) {
-	a.toastStatus("操作失败："+err.Error(), time.Time{}, true)
+	a.toastStatus("操作失败："+err.Error(), time.Time{}, statusErr)
 	log.Print(a.status)
 	if a.win != nil {
 		a.win.Invalidate()
@@ -218,7 +276,7 @@ func (a *shelf) notice(msg string) {
 	if a.status != "" {
 		a.status += "\n"
 	}
-	a.toastStatus(a.status+msg, time.Now().Add(8*time.Second), true)
+	a.toastQuiet(a.status+msg, time.Now().Add(8*time.Second), statusErr)
 }
 func (a *shelf) completed(r transfer.Result) {
 	a.ownDrag = false

@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -60,14 +61,30 @@ func (a *shelf) nearTrigger(p mygo.Point) bool {
 // stable transparent strip for idle/peek avoids resizing the backing surface
 // every time the pointer crosses the notch. Only opening the panel changes it.
 // The strip is always wide enough for the now-playing peek pill, so a track
-// coming or going changes the drawing without a native resize.
+// coming or going changes the drawing without a native resize. Every width
+// includes the two ear corners (earR): the shell's top edge reaches past its
+// flanks by that much on each side, and no frame may clip the arc.
 func (a *shelf) desiredFrame() mygo.Rectangle {
-	if a.visible || a.progress > 0.01 {
+	closing := !a.visible && a.fx.openK > 0
+	if a.visible || closing {
 		// A shrinking panel keeps its frame until the drawn shell has
 		// eased down to the new height, so the bottom is never cut off.
+		w := panelWidth + 2*earR
 		h := max(a.panelH(), int(a.shownH+0.5))
-		w, x := panelWidth, a.x
-		if a.fx.openMoving {
+		switch {
+		case closing:
+			// Follow the drawn shell through its fold, with room for the
+			// ears and two points below the bottom curve.
+			w = int(math.Ceil(float64(a.fx.w))) + 2*earR
+			h = int(a.fx.h+0.5) + 2
+			if a.fb.up(time.Now()) {
+				// Folding into the capsule: the shell may grow wider or
+				// taller than the panel sliver it starts from, and the
+				// glow reaches past it.
+				w = max(w, fbMaxW+2*fbGlowPad)
+				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+fbGlowPad)
+			}
+		case a.fx.openMoving:
 			// The opening spring overshoots its final size for a moment:
 			// the frame holds room for the whole flight (Bounce 0.28 ⇒
 			// about 4%, plus a tick of catch-up) and shrinks back once the
@@ -77,17 +94,20 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 				h = oh
 			}
 			if ow > w {
-				w, x = ow, a.stripCenter()-ow/2
+				w = ow
 			}
 		}
-		return mygo.Rectangle{X: x, Y: a.y, Width: w, Height: h}
+		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
 	// The resident strip holds the largest peek shape for the current
 	// state, so hovering only redraws; it resizes when a track comes or
 	// goes, while nothing is drawn.
 	pw, ph := a.peekSize()
 	if a.np != nil && a.np.hasTrack() && a.settings.IslandNowPlaying {
-		pw, ph = a.playerSize()
+		// The capsule and the player can alternate on the same strip: keep
+		// room for both so one hand-off never resizes the window.
+		mw, mh := a.playerSize()
+		pw, ph = max(pw, mw), max(ph, mh)
 	}
 	if a.fx.peek {
 		// The shell can still be the larger shape it is folding back from,
@@ -99,8 +119,8 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		// (Bounce 0.15); the strip keeps headroom so no frame is clipped.
 		pw, ph = pw*(1+openOvershoot), ph*(1+openOvershoot)
 	}
-	w := max(int(pw+0.5), notchTriggerWidth)
-	h := max(int(ph+0.5), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
+	w := max(int(math.Ceil(float64(pw))), notchTriggerWidth) + 2*earR
+	h := max(int(math.Ceil(float64(ph))), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	if a.capsuleUp(time.Now()) || a.fb.drawn {
 		// The completion capsule is another peek shape: while it shows, the
 		// strip holds room for it and its glow at the widest the text can
@@ -124,7 +144,7 @@ func (a *shelf) syncWindowFrame() {
 	}
 	a.settingFrame = true
 	defer func() { a.settingFrame = false }()
-	mac.SetWindowFrame(a.win.NativeHandle(), r.X, r.Y, r.Width, r.Height)
+	mac.SetWindowFrame(a.winH, r.X, r.Y, r.Width, r.Height)
 	a.frame = r
 	a.win.Invalidate()
 }
@@ -189,9 +209,14 @@ func (a *shelf) shellSize(openK, peekK, peekW, peekH, panelH float32) (w, h floa
 // peekPillRect is the on-screen box of the hovered notch capsule, matching
 // the shell drawn in view(): the now-playing pill while a track is
 // loaded, otherwise the chevron bulge. A press anywhere on it expands the
-// shelf — the design has no in-pill controls.
+// shelf — the design has no in-pill controls. While the completion capsule
+// is on the shell the box is the shell actually drawn, so a fold in flight
+// keeps its click box the same size as the picture.
 func (a *shelf) peekPillRect() mygo.Rectangle {
 	w, h := a.peekSize()
+	if (a.fb.drawn || a.fb.retracting) && a.fx.w > 0 {
+		w, h = a.fx.w, a.fx.h
+	}
 	return mygo.Rectangle{X: a.stripCenter() - int(w/2), Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
 }
 
@@ -216,8 +241,8 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// the player opens the shelf for presses elsewhere on it. The window
 	// keeps ignoring the mouse while the capsule shows, so every press
 	// there arrives through this monitor and clicks elsewhere pass through.
-	if (a.peeking || a.fb.drawn) && !a.visible && (inside || a.overPeekPill(p)) {
-		if inside && a.np != nil && a.np.showsPlayer() {
+	if (a.peeking || a.fb.drawn || a.fb.retracting) && !a.visible && a.overPeekPill(p) {
+		if inside && a.peeking && a.np != nil && a.np.showsPlayer() {
 			return
 		}
 		a.show(false)
@@ -261,15 +286,18 @@ func (a *shelf) windowLevel() int {
 // beside the notch reach whatever is below. Peeking, expanded and in-flight
 // drags take the whole window: file drags to the top of the notch must hit
 // a window, or WindowServer treats Y=0 as the Spaces edge (pointerDrag
-// flips this on the drag's first movement, long before the top).
+// flips this on the drag's first movement, long before the top). A closing
+// panel follows the drawn shell (fx.openK), not the tick's eased progress:
+// the moment the shell has folded back to the peek shape the window lets
+// clicks through again.
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
-	acceptAll := a.visible || a.progress > 0.01 || a.dragging || a.pointerDrag || a.peeking || a.peekProgress > 0.01
+	acceptAll := a.visible || a.fx.openK > 0.01 || a.dragging || a.pointerDrag || a.peeking || a.peekProgress > 0.01
 	a.ignoringMouse = !acceptAll
 	if a.win == nil {
 		return
 	}
-	h := a.win.NativeHandle()
+	h := a.winH
 	mac.SetOverlayAcceptsMouse(h, acceptAll)
 	mac.SetWindowLevel(h, a.windowLevel())
 }
@@ -310,10 +338,12 @@ func (a *shelf) show(edge bool) {
 		a.store.Refresh()
 	}
 	a.visible, a.edgeOpened, a.received = true, edge, false
-	// Each opening starts its height animation afresh at the panel's
-	// current height (see view): no easing from a previous session's size.
-	a.openGen++
-	a.shownH = 0
+	// A fresh opening starts at its own height. Reversing an in-flight
+	// close keeps the height channel so the shell cannot jump.
+	if a.fx.openK == 0 {
+		a.openGen++
+		a.shownH = 0
+	}
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.syncMousePassThrough()
 	if a.win != nil {
@@ -445,6 +475,7 @@ func (a *shelf) hide(exit hideExit) {
 	if !a.visible && !a.peeking {
 		return
 	}
+	a.handoffStatus(time.Now())
 	// Any hide — manual or the flash's own timer — ends service ownership
 	// so a queued timer can never reclaim a panel the user reopened.
 	a.takeServiceOwnership()

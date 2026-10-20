@@ -210,7 +210,7 @@ func (o *ocrIndex) finish(id string, lines []string, err error) {
 		// else is a save failure — don't retry every tick.
 		o.markFailed(id)
 		if !strings.Contains(err.Error(), "no item") {
-			a.report(err)
+			a.toastQuiet("操作失败："+err.Error(), time.Time{}, statusErr)
 		}
 		return
 	}
@@ -276,7 +276,7 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 		o = &ocrIndex{host: a}
 	}
 	if item.Missing || item.Path == "" {
-		a.toastStatus("图片文件已不可用", time.Now().Add(3*time.Second), true)
+		a.toastStatus("图片文件已不可用", time.Now().Add(3*time.Second), statusErr)
 		return
 	}
 	queued := !item.OCRDone && o.anyBusy() && !o.busy(item.ID)
@@ -285,17 +285,17 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 		case err != nil:
 			a.report(err)
 		case text == "":
-			a.toastStatus("没有识别到文字", time.Now().Add(3*time.Second), false)
+			a.toastStatus("没有识别到文字", time.Now().Add(3*time.Second), statusInfo)
 		case a.copyText(text):
 			a.toastStatus(fmt.Sprintf("已复制识别出的文字 · %d 字", utf8.RuneCountInString(text)),
-				time.Now().Add(3*time.Second), false)
+				time.Now().Add(3*time.Second), statusOK)
 		}
 	}) {
-		a.toastStatus("正在识别，请稍候", time.Now().Add(3*time.Second), false)
+		a.toastStatus("正在识别，请稍候", time.Now().Add(3*time.Second), statusInfo)
 		return
 	}
 	if queued {
-		a.toastStatus("正在识别，完成后自动复制", time.Now().Add(3*time.Second), false)
+		a.toastStatus("正在识别，完成后自动复制", time.Now().Add(3*time.Second), statusInfo)
 	}
 }
 

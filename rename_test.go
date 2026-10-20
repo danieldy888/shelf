@@ -589,8 +589,8 @@ func TestRenameUndoPillReportsTakenName(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.undo()
-	if !a.statusErr || !strings.Contains(a.status, "已被别的文件占用") {
-		t.Fatalf("status = %q err=%v, want the panel error naming the taken name", a.status, a.statusErr)
+	if a.statusKind != statusErr || !strings.Contains(a.status, "已被别的文件占用") {
+		t.Fatalf("status = %q err=%v, want the panel error naming the taken name", a.status, a.statusKind == statusErr)
 	}
 	if !strings.Contains(a.status, "a.txt") {
 		t.Fatalf("status %q must name the file", a.status)

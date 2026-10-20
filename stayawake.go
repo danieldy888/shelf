@@ -171,13 +171,10 @@ func (m *awakeModule) wantKind() mac.PowerAssertionKind {
 	return mac.PowerAssertSystemSleep
 }
 
-// fail surfaces a creation error: the panel opens first so the toast is
-// actually seen (a collapsed panel paints nothing and the deadline would
-// run out unseen), then the 4-second notice starts with the red dot. The
-// state reads off, so a re-opened menu shows nothing checked and 关闭 grey.
+// fail reports a user-requested assertion failure in the panel's toast or
+// the closed notch's capsule without opening the panel over another app.
 func (m *awakeModule) fail(err error) {
-	m.host.show(false)
-	m.host.toastStatus("无法开启保持唤醒："+err.Error(), m.clock().Add(4*time.Second), true)
+	m.host.toastStatus("无法开启保持唤醒："+err.Error(), m.clock().Add(4*time.Second), statusErr)
 }
 
 // tick releases a timed hold at its deadline and keeps the countdown

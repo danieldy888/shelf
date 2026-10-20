@@ -24,11 +24,15 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
 		os.Exit(m.Run())
 	}
-	s, err := store.Open(os.TempDir() + "/shelf-basket-smoke")
+	dir, err := os.MkdirTemp("", "shelf-fix-smoke-")
 	if err != nil {
 		panic(err)
 	}
-	smokeShelf = &shelf{store: s, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: map[string]bool{}}
+	s, err := store.Open(dir)
+	if err != nil {
+		panic(err)
+	}
+	smokeShelf = &shelf{store: s, dataDir: dir, stop: make(chan struct{}), thumbnails: make(map[string]*ui.Bitmap), thumbPending: map[string]bool{}}
 	mygo.App.SetName(appName)
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnWindowAllClosed(func() {})

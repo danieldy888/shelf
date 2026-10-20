@@ -157,10 +157,8 @@ func TestAwakeCreateFailure(t *testing.T) {
 	}
 }
 
-// A failure picked from the tray arrives while the panel is collapsed; the
-// toast would expire unseen, so the module must open the panel first and
-// start the notice from there.
-func TestAwakeFailureOpensPanel(t *testing.T) {
+// Assertion failures from the tray are visible without forcing the panel open.
+func TestAwakeFailureUsesTheCapsule(t *testing.T) {
 	p := newFakePower()
 	p.fail = errors.New("denied")
 	m := newAwakeStub(p)
@@ -168,11 +166,11 @@ func TestAwakeFailureOpensPanel(t *testing.T) {
 		t.Fatal("panel started visible")
 	}
 	m.start(time.Now(), 30*time.Minute)
-	if !m.host.visible {
-		t.Fatal("failure toast posted to a collapsed panel: never seen")
+	if m.host.visible || m.host.fb.text == "" || m.host.fb.color() != fbRed {
+		t.Fatal("the assertion failure did not reach the closed notch's error capsule")
 	}
-	if m.host.status == "" || !m.host.statusErr {
-		t.Fatalf("toast = %q err=%v, want the error notice", m.host.status, m.host.statusErr)
+	if m.host.status == "" || m.host.statusKind != statusErr {
+		t.Fatalf("toast = %q err=%v, want the error notice", m.host.status, m.host.statusKind == statusErr)
 	}
 	if left := time.Until(m.host.statusUntil); left < 3*time.Second {
 		t.Fatalf("notice expires in %v, want the full 4s from opening", left)

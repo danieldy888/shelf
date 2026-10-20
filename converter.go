@@ -683,17 +683,17 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 	case len(paths) == 0 && failed > 0:
 		a.report(fmt.Errorf("%s失败：%v", verb, firstErr))
 	case failed > 0:
-		a.toastStatus(fmt.Sprintf("%d 项成功，%d 项失败", len(paths), failed), time.Now().Add(4*time.Second), true)
+		a.toastStatus(fmt.Sprintf("%d 项成功，%d 项失败", len(paths), failed), time.Now().Add(4*time.Second), statusErr)
 	case job.cancel.Load():
-		a.toastStatus(fmt.Sprintf("已取消 · 已完成 %d 项", len(paths)), time.Now().Add(3*time.Second), false)
+		a.toastStatus(fmt.Sprintf("已取消 · 已完成 %d 项", len(paths)), time.Now().Add(3*time.Second), statusInfo)
 	case noText > 0 && noText == len(paths) && job.unit == "个":
-		a.toastStatus("没有找到文字，Word 文件是空白的", time.Now().Add(4*time.Second), false)
+		a.toastStatus("没有找到文字，Word 文件是空白的", time.Now().Add(4*time.Second), statusInfo)
 	case noText > 0 && noText == len(paths):
-		a.toastStatus("没有识别到文字，只放入了图片", time.Now().Add(4*time.Second), false)
+		a.toastStatus("没有识别到文字，只放入了图片", time.Now().Add(4*time.Second), statusInfo)
 	case job.target == toZip:
-		a.toastStatus(fmt.Sprintf("已压缩 · %s · 已选中，可直接拖出", formatBytes(fileSize(paths[0]))), time.Now().Add(3*time.Second), false)
+		a.toastStatus(fmt.Sprintf("已压缩 · %s · 已选中，可直接拖出", formatBytes(fileSize(paths[0]))), time.Now().Add(3*time.Second), statusOK)
 	case job.target == toExtract:
-		a.toastStatus(fmt.Sprintf("已解压 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), false)
+		a.toastStatus(fmt.Sprintf("已解压 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), statusOK)
 	case fitLimit(job.target) > 0:
 		var before, after int64
 		for _, o := range outs {
@@ -710,15 +710,19 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		if len(paths) > 0 {
 			msg += fmt.Sprintf(" · %s → %s", formatBytes(before), formatBytes(after))
 		}
-		a.toastStatus(msg, time.Now().Add(5*time.Second), over > 0)
+		kind := statusOK
+		if over > 0 {
+			kind = statusErr
+		}
+		a.toastStatus(msg, time.Now().Add(5*time.Second), kind)
 	case resizePx(job.target) > 0:
 		var before, after int64
 		for _, o := range outs {
 			before, after = before+o.before, after+o.after
 		}
-		a.toastStatus(fmt.Sprintf("已缩小 %d 张 · %s → %s", len(paths), formatBytes(before), formatBytes(after)), time.Now().Add(4*time.Second), false)
+		a.toastStatus(fmt.Sprintf("已缩小 %d 张 · %s → %s", len(paths), formatBytes(before), formatBytes(after)), time.Now().Add(4*time.Second), statusOK)
 	case len(paths) > 0:
-		a.toastStatus(fmt.Sprintf("已转换 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), false)
+		a.toastStatus(fmt.Sprintf("已转换 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), statusOK)
 	}
 	a.syncWindowFrame()
 	if a.win != nil {
