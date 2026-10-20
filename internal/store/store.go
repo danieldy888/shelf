@@ -80,6 +80,11 @@ type Item struct {
 	OffTray   bool      `json:"offTray,omitempty"`
 	Converted bool      `json:"converted,omitempty"`
 	Missing   bool      `json:"-"`
+	// OCRText is what text recognition found in the image (empty when it
+	// found none); OCRDone marks it recognized so it is never processed
+	// twice. SetOCR writes both.
+	OCRText string `json:"ocrText,omitempty"`
+	OCRDone bool   `json:"ocrDone,omitempty"`
 }
 
 // Store holds the shelf contents. Items is newest-first; the zero Item

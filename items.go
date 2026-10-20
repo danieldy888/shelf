@@ -192,7 +192,14 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 				text = "截图 " + item.CreatedAt.Local().Format("01-02 15:04")
 			}
 			ui.Text(c, text).SingleLine().FontSize(13).TextColor(ink)
-			ui.Text(c, a.clipRowMeta(item)).SingleLine().FontSize(11).TextColor(ink3)
+			// An image the search matched through its recognized text
+			// shows the hit snippet instead of 「应用 · 时间」.
+			if item.Kind == store.KindImage && item.OCRDone && item.OCRText != "" &&
+				strings.TrimSpace(a.search) != "" {
+				a.ocrSnippetLine(c, item)
+			} else {
+				ui.Text(c, a.clipRowMeta(item)).SingleLine().FontSize(11).TextColor(ink3)
+			}
 		})
 		if selected && a.focusMode {
 			ui.Text(c, "↩ 复制").SingleLine().FontSize(11).TextColor(ink3)

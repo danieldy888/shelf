@@ -150,7 +150,7 @@ func (a *shelf) ready(show bool) {
 	a.np = &nowPlayingModule{host: a}
 	a.modules = append(a.modules, a.np)
 	a.conv = &converter{host: a}
-	a.modules = append(a.modules, a.conv, &leavingModule{host: a})
+	a.modules = append(a.modules, a.conv, &leavingModule{host: a}, &ocrIndex{host: a})
 	// After the converter: the strip keeps the first two activities, and a
 	// running conversion's only cancel control must not be displaced.
 	a.awake = newAwakeModule(a)

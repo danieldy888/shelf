@@ -104,6 +104,12 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 	if m.Item("复制图片").Disabled(!image).Chosen() {
 		a.copyItem(items[0])
 	}
+	// 单张图片（截图或图片文件）：复用已识别的结果或当场识别。
+	if image {
+		if m.Item("识别文字并复制").Disabled(a.ocrBusy(items[0])).Chosen() {
+			a.copyRecognizedText(items[0])
+		}
+	}
 	// 置顶：作用于右键的行（或多选的全部）；全部已置顶时改为取消置顶。
 	pinned := len(items) > 0
 	for _, it := range items {

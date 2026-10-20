@@ -813,10 +813,14 @@ func (a *shelf) itemsFor(id pageID) []store.Item {
 
 // clipboardItemMatches reports whether a clipboard-list row matches the
 // (already lowercased) search text: text items by case-insensitive
-// substring, images only while the search is empty.
+// substring, images while the search is empty or by case-insensitive
+// substring of their recognized text once recognition ran.
 func clipboardItemMatches(it store.Item, query string) bool {
 	if query == "" {
 		return true
+	}
+	if it.Kind == store.KindImage && it.OCRDone && it.OCRText != "" {
+		return strings.Contains(strings.ToLower(it.OCRText), query)
 	}
 	if it.Kind != store.KindText {
 		return false
