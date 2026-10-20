@@ -143,10 +143,10 @@ func DefaultRoot() (string, error) {
 // is never overwritten. File/image items whose paths are genuinely
 // nonexistent are dropped; items whose paths exist but cannot be
 // statted (e.g. permission errors) are kept with Missing=true.
-// Leftover files inside a real <root>/converted that no loaded item
-// references (e.g. from a conversion interrupted before AddConverted)
-// are deleted best-effort; nothing outside <root>/converted is ever
-// touched.
+// Leftover files and folders inside a real <root>/converted that no
+// loaded item references (e.g. from a conversion interrupted before it
+// was registered) are deleted best-effort; nothing outside
+// <root>/converted is ever touched.
 func Open(root string) (*Store, error) {
 	if root == "" {
 		return nil, fmt.Errorf("store: empty root path")
@@ -319,14 +319,14 @@ func (s *Store) resolveConvertedPath(stored string) string {
 
 // cleanOrphanedConverted deletes unreferenced direct children of
 // <root>/converted — leftovers from a conversion interrupted between
-// writing the file and AddConverted. It runs on Open only, is
-// best-effort (errors are ignored; a future Open retries), and only
-// ever unlinks entries inside a real <root>/converted: if converted is
-// a symlink (or anything but a real directory) cleanup is skipped so a
-// foreign directory's contents are never touched. Only entries that
-// lstat as regular files or symlinks are removed — symlinks are
-// unlinked themselves, never followed — and directories or special
-// files are left alone.
+// writing the output and registering it. It runs on Open only, is
+// best-effort (errors are ignored; a future Open retries), and only ever
+// touches entries directly inside a real <root>/converted: if converted
+// is a symlink (or anything but a real directory) cleanup is skipped so a
+// foreign directory's contents are never touched. Regular files and
+// symlinks are unlinked themselves (never followed); folders — extracted
+// archives — are removed with os.RemoveAll, which likewise never follows
+// a link inside them; other special entries are left alone.
 func (s *Store) cleanOrphanedConverted() {
 	if !s.convertedDirReal() {
 		return
@@ -338,7 +338,7 @@ func (s *Store) cleanOrphanedConverted() {
 	}
 	for _, ent := range ents {
 		fi, err := ent.Info() // lstat 语义：软链接按链接本身判定。
-		if err != nil || (!fi.Mode().IsRegular() && fi.Mode()&os.ModeSymlink == 0) {
+		if err != nil {
 			continue
 		}
 		p := filepath.Join(dir, ent.Name())
@@ -349,8 +349,14 @@ func (s *Store) cleanOrphanedConverted() {
 				break
 			}
 		}
-		if !referenced {
+		if referenced {
+			continue
+		}
+		switch {
+		case fi.Mode().IsRegular() || fi.Mode()&os.ModeSymlink != 0:
 			_ = os.Remove(p)
+		case fi.IsDir():
+			_ = os.RemoveAll(p)
 		}
 	}
 }
@@ -947,18 +953,42 @@ func (s *Store) managedFile(it Item) string {
 	switch {
 	case it.Kind == KindImage && it.Path != "" && s.managedPath(it.Path):
 		return it.Path
-	case it.Kind == KindFile && it.Converted && it.Path != "" && s.convertedPath(it.Path):
+	case it.Kind == KindFile && it.Converted && it.Path != "" && s.convertedEntryPath(it.Path):
 		return it.Path
 	}
 	return ""
+}
+
+// convertedEntryPath reports whether p names an entry directly inside a
+// real <root>/converted, judged by where the path is spelled, never by
+// where p itself resolves: a symlink there is shelf-owned as a link and is
+// unlinked without following it. The parent is resolved so a converted
+// folder reached through a symlinked spelling is still recognised.
+func (s *Store) convertedEntryPath(p string) bool {
+	if p == "" || !s.convertedDirReal() {
+		return false
+	}
+	p = filepath.Clean(p)
+	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return false
+	}
+	dir, err := filepath.EvalSymlinks(s.convertedDir())
+	if err != nil {
+		return false
+	}
+	return parent == dir && p != dir
 }
 
 // deleteManagedFiles deletes the managed file each item in removed owns
 // (see managedFile) — only paths inside the managed directories, each
 // distinct path once, and only when no remaining item still references
 // the same file (kept items, including pinned ones, always protect their
-// files). Returns the path of the first deletion error for callers to
-// embed in their message; the other files are still removed.
+// files). A converted entry that is a real folder directly inside
+// <root>/converted (an extracted archive) is removed with os.RemoveAll,
+// tree and all; everything else is unlinked. Returns the path of the
+// first deletion error for callers to embed in their message; the other
+// files are still removed.
 func (s *Store) deleteManagedFiles(removed []Item) (string, error) {
 	var firstErr error
 	var failedPath string
@@ -976,20 +1006,51 @@ func (s *Store) deleteManagedFiles(removed []Item) (string, error) {
 		if s.pathReferenced(it.Path) {
 			continue
 		}
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+		var err error
+		if s.removableConvertedDir(p) {
+			err = os.RemoveAll(p)
+		} else {
+			err = os.Remove(p)
+		}
+		if err != nil && !os.IsNotExist(err) && firstErr == nil {
 			firstErr, failedPath = err, it.Path
 		}
 	}
 	return failedPath, firstErr
 }
 
+// removableConvertedDir reports whether p is a real folder sitting
+// directly inside a real <root>/converted, so deleting it may take the
+// whole tree with os.RemoveAll. The check never follows a symlink: p
+// itself must lstat as a directory (a link is unlinked instead) and its
+// parent must resolve to converted itself. Nothing outside converted can
+// ever satisfy both.
+func (s *Store) removableConvertedDir(p string) bool {
+	if !s.convertedDirReal() {
+		return false
+	}
+	fi, err := os.Lstat(p)
+	if err != nil || !fi.IsDir() {
+		return false
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return false
+	}
+	dir, err := filepath.EvalSymlinks(s.convertedDir())
+	if err != nil {
+		return false
+	}
+	return parent == dir
+}
+
 // Clear removes every unpinned item and persists atomically (memory
 // rolls back on save failure); pinned items and the managed files they
 // reference are kept. When everything is pinned or the store is empty
-// it is a no-op. After the save succeeds, managed image and converted
-// files the cleared items owned are deleted — only paths inside
-// <root>/images or <root>/converted are ever touched, and a plain
-// KindFile item's path is never deleted even if it points there.
+// it is a no-op. After the save succeeds, managed image files and
+// converted files or folders the cleared items owned are deleted — only
+// paths inside <root>/images or <root>/converted are ever touched, and a
+// plain KindFile item's path is never deleted even if it points there.
 // Cleanup failures are reported while still removing the rest.
 func (s *Store) Clear() error {
 	_, err := s.removeMatching(func(it Item) bool { return !it.Pinned }, "cleared")

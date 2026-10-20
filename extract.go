@@ -8,13 +8,14 @@ package main
 // exact uncompressed sizes for the free-space check, and refuses
 // encrypted, absolute-path and ../ archives without running a tool that
 // could prompt for a passphrase. Tar-family archives (tar, tgz, tar.gz,
-// tar.bz2, tar.xz — and 7z / rar, which this machine's bsdtar 3.7.4
-// reads) go through /usr/bin/bsdtar -xf: it refuses ../ entries and
-// never writes through a symlink (both verified). Extraction lands in a
-// hidden staging folder inside converted/ and is renamed into place only
-// on success, so a failed or cancelled run leaves nothing behind. An
-// archive holding one top-level folder yields that folder itself, like
-// 归档实用工具.
+// tar.bz2/tbz, tar.xz) and 7z / rar go through /usr/bin/bsdtar -xf; it
+// refuses ../ entries and does not write through a symlink. bsdtar reads
+// RAR4/RAR5, but not RAR4 solid archives, encrypted archives, or archive
+// parts, so those are reported in plain language instead of surfacing the
+// tool's English. Extraction lands in a hidden staging folder inside
+// converted/ and is renamed into place only on success, so a failed or
+// cancelled run leaves nothing behind. An archive holding one top-level
+// folder yields that folder itself, like 归档实用工具.
 
 import (
 	"archive/tar"
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,9 +40,8 @@ import (
 )
 
 // archiveExt recognizes the archive filename extensions extraction
-// supports: the set verified against this machine's /usr/bin/bsdtar —
-// which includes 7z and rar even though Finder's own archiver does not
-// read them.
+// supports: zips, the tar family, and 7z / rar (Finder's own archiver
+// reads none of the last two).
 func archiveExt(path string) string {
 	lower := strings.ToLower(filepath.Base(path))
 	for _, ext := range []string{".tar.gz", ".tar.bz2", ".tar.xz"} {
@@ -49,17 +50,26 @@ func archiveExt(path string) string {
 		}
 	}
 	switch filepath.Ext(lower) {
-	case ".zip", ".tar", ".tgz", ".tbz2", ".txz", ".7z", ".rar":
+	case ".zip", ".tar", ".tgz", ".tbz", ".tbz2", ".txz", ".7z", ".rar":
 		return filepath.Ext(lower)
 	}
 	return ""
 }
 
 // archiveStem is the result folder's name: the file name minus one archive
-// extension (「备份.tar.gz」 → 「备份」).
+// extension (「备份.tar.gz」 → 「备份」). A name that is only the extension
+// (「.zip」) would leave nothing, so its leading dots are dropped instead
+// (「zip」) — never an empty or hidden folder name.
 func archiveStem(path string) string {
 	base := filepath.Base(path)
-	return strings.TrimSuffix(base, archiveExt(path))
+	stem := strings.TrimSuffix(base, archiveExt(path))
+	if strings.Trim(stem, ".") == "" {
+		stem = strings.TrimLeft(base, ".")
+	}
+	if stem == "" {
+		return "解压结果"
+	}
+	return stem
 }
 
 // isArchive reports whether item is a regular archive file the extractor
@@ -97,13 +107,15 @@ func safeEntry(name string) bool {
 	return true
 }
 
-// junkEntry reports whether a member name is Finder noise to drop:
-// __MACOSX/ branches and AppleDouble ._ files.
+// junkEntry reports whether a member name is Finder noise to drop: any
+// __MACOSX/ branch at any depth, and AppleDouble ._ files.
 func junkEntry(name string) bool {
 	name = strings.ReplaceAll(name, "\\", "/")
 	parts := strings.Split(name, "/")
-	if parts[0] == "__MACOSX" {
-		return true
+	for _, part := range parts {
+		if part == "__MACOSX" {
+			return true
+		}
 	}
 	return strings.HasPrefix(parts[len(parts)-1], "._")
 }
@@ -240,7 +252,7 @@ func extractArchive(src, dst string, job *convertJob) (final string, err error) 
 	}
 	final = dst
 	if len(tops) == 1 && tops[0].IsDir() {
-		final = uniqueDir(dir, tops[0].Name(), nil)
+		final = job.extractName(dir, tops[0].Name(), dst)
 		if err := os.Rename(filepath.Join(stage, tops[0].Name()), final); err != nil {
 			return "", err
 		}
@@ -312,7 +324,7 @@ func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
 func listArchive(src string, job *convertJob) (total int64, err error) {
 	out, err := bsdtarRun(job, "-tf", src)
 	if err != nil {
-		return 0, archiveErr(err)
+		return 0, archiveErr(src, err)
 	}
 	for _, name := range strings.Split(string(out), "\n") {
 		name = strings.TrimRight(name, "\r")
@@ -329,13 +341,15 @@ func listArchive(src string, job *convertJob) (total int64, err error) {
 // untarFiles extracts a non-zip archive into stage with bsdtar.
 func untarFiles(src, stage string, job *convertJob) error {
 	if _, err := bsdtarRun(job, "-xf", src, "-C", stage); err != nil {
-		return archiveErr(err)
+		return archiveErr(src, err)
 	}
 	return nil
 }
 
-// archiveErr maps a bsdtar failure to a plain-language error.
-func archiveErr(err error) error {
+// archiveErr maps a bsdtar failure on src to a plain-language error: the
+// RAR cases bsdtar cannot handle get their own wording, and anything else
+// falls back to its (stderr-derived) message.
+func archiveErr(src string, err error) error {
 	if errors.Is(err, errConvertCanceled) {
 		return err
 	}
@@ -343,7 +357,12 @@ func archiveErr(err error) error {
 	switch {
 	case strings.Contains(lower, "encrypt") || strings.Contains(lower, "passphrase") || strings.Contains(lower, "password"):
 		return errEncrypted
-	case strings.Contains(lower, "truncated") || strings.Contains(lower, "damaged") || strings.Contains(lower, "checksum"):
+	case strings.Contains(lower, "solid archive support unavailable"):
+		return errors.New("这个 RAR 用了固实压缩，系统自带工具解不了")
+	case multipartRar(src):
+		return errors.New("这是分卷压缩包的一部分")
+	case strings.Contains(lower, "truncated") || strings.Contains(lower, "damaged") ||
+		strings.Contains(lower, "checksum") || strings.Contains(lower, "too small block"):
 		return errors.New("无法解压：压缩包已损坏")
 	case strings.Contains(lower, "unrecognized archive format") || strings.Contains(lower, "not supported"):
 		return errors.New("无法解压：不支持的压缩格式")
@@ -351,8 +370,28 @@ func archiveErr(err error) error {
 	return fmt.Errorf("无法解压：%s", err.Error())
 }
 
+// multipartRar reports whether the file name marks one part of a split
+// RAR archive: 「x.part1.rar」, or a later volume 「x.r00」/「x.z01」.
+func multipartRar(path string) bool {
+	if archiveExt(path) != ".rar" {
+		ext := filepath.Ext(strings.ToLower(path))
+		if len(ext) != 4 || (ext[1] != 'r' && ext[1] != 'z') {
+			return false
+		}
+		_, err := strconv.Atoi(ext[2:])
+		return err == nil
+	}
+	lower := strings.ToLower(filepath.Base(path))
+	if i := strings.LastIndex(lower, ".part"); i >= 0 {
+		_, err := strconv.Atoi(strings.TrimSuffix(lower[i+5:], ".rar"))
+		return err == nil
+	}
+	return false
+}
+
 // tarUncompressedSize sums member sizes of a plain/gzip/bzip2 tar with the
-// standard library; anything else reports 0 so the space check is skipped.
+// standard library. xz tars, 7z and rar cannot be read here, so they report
+// 0 and the caller skips the free-space check for them.
 func tarUncompressedSize(src string) (total int64) {
 	f, err := os.Open(src)
 	if err != nil {
@@ -365,7 +404,7 @@ func tarUncompressedSize(src string) (total int64) {
 		if r, err = gzip.NewReader(f); err != nil {
 			return 0
 		}
-	case ".tbz2", ".tar.bz2":
+	case ".tbz", ".tbz2", ".tar.bz2":
 		r = bzip2.NewReader(f)
 	case ".tar":
 	default:
@@ -381,25 +420,24 @@ func tarUncompressedSize(src string) (total int64) {
 	}
 }
 
-// pruneJunk removes __MACOSX branches and ._ AppleDouble files that made
-// it into stage (zips are filtered at scan time; this is for tar).
+// pruneJunk removes __MACOSX branches at any depth and ._ AppleDouble
+// files that made it into stage (zips are filtered at scan time; this is
+// for tar).
 func pruneJunk(stage string) error {
-	ents, err := os.ReadDir(stage)
-	if err != nil {
-		return err
-	}
-	for _, e := range ents {
-		if e.Name() == "__MACOSX" {
-			if err := os.RemoveAll(filepath.Join(stage, e.Name())); err != nil {
-				return err
-			}
-		}
-	}
 	return filepath.WalkDir(stage, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasPrefix(d.Name(), "._") {
+		if d.IsDir() {
+			if p != stage && d.Name() == "__MACOSX" {
+				if err := os.RemoveAll(p); err != nil {
+					return err
+				}
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), "._") {
 			return os.Remove(p)
 		}
 		return nil
@@ -433,6 +471,24 @@ func dropEscapedLinks(stage string) error {
 	})
 }
 
+// extractName picks the result folder's name for a single-top-folder
+// archive: it avoids every name the rest of this batch already reserved
+// (the archive's own planned folder aside — the result may take that very
+// name) as well as what is already on disk.
+func (j *convertJob) extractName(dir, name, dst string) string {
+	taken := j.taken
+	if taken == nil {
+		return uniqueDir(dir, name, nil)
+	}
+	own := taken[dst]
+	delete(taken, dst)
+	final := uniqueDir(dir, name, taken)
+	if own {
+		taken[dst] = true
+	}
+	return final
+}
+
 // uniqueDir reserves dir/name — or 「name 2」, … when taken — and returns
 // the full path without creating it.
 func uniqueDir(dir, name string, taken map[string]bool) string {
@@ -455,13 +511,16 @@ func uniqueDir(dir, name string, taken map[string]bool) string {
 	}
 }
 
-// runBsdtar runs /usr/bin/bsdtar with its output captured; a cancelled
-// job kills the process. Stdin stays closed so a passphrase request can
-// never block (encrypted archives are refused before this runs).
+// runBsdtar runs /usr/bin/bsdtar with its streams captured separately: a
+// listing goes to stdout and is returned, while an error comes from stderr
+// only, so a failed listing never turns its file names into the message.
+// A cancelled job kills the process. Stdin stays closed so a passphrase
+// request can never block (encrypted archives are refused before this
+// runs).
 func runBsdtar(job *convertJob, args ...string) ([]byte, error) {
 	cmd := exec.Command("/usr/bin/bsdtar", args...)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -485,16 +544,16 @@ func runBsdtar(job *convertJob, args ...string) ([]byte, error) {
 	err := cmd.Wait()
 	close(done)
 	if job != nil && job.cancel.Load() {
-		return out.Bytes(), errConvertCanceled
+		return stdout.Bytes(), errConvertCanceled
 	}
 	if err != nil {
-		msg := strings.TrimSpace(out.String())
+		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
-		return out.Bytes(), errors.New(msg)
+		return stdout.Bytes(), errors.New(msg)
 	}
-	return out.Bytes(), nil
+	return stdout.Bytes(), nil
 }
 
 // realFreeDiskSpace reports the free bytes on the volume holding dir.

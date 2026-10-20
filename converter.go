@@ -74,6 +74,8 @@ func convertExt(t convertTarget) string {
 		return "docx"
 	case toZip:
 		return "zip"
+	case toFit500, toFit1M, toFit2M, toFit5M, toExtract:
+		return "" // chosen per source in planConvert
 	default:
 		return "pdf"
 	}
@@ -183,9 +185,10 @@ type convertJob struct {
 	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs), 个文件 (archive entries)
 	total   atomic.Int32
 	done    atomic.Int32
-	skipped atomic.Int32 // 「压缩到」sources already under the byte budget
-	over    atomic.Int32 // 「压缩到」outputs that still exceed it
-	ocr     atomic.Bool  // the current step is text recognition
+	skipped atomic.Int32    // 「压缩到」sources already under the byte budget
+	over    atomic.Int32    // 「压缩到」outputs that still exceed it
+	taken   map[string]bool // output names this job reserved (worker only)
+	ocr     atomic.Bool     // the current step is text recognition
 	cancel  atomic.Bool
 	started time.Time
 }
@@ -282,7 +285,7 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 
 // convertOut is one finished output (or failure) of a job.
 type convertOut struct {
-	path          string
+	src, path     string // the source (an archive, for 解压) and the output
 	err           error
 	noText        bool  // a Word output for which nothing was recognized
 	before, after int64 // a resized image's source and output sizes
@@ -377,7 +380,7 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 				break
 			}
 			job.ocr.Store(false)
-			out := convertOut{path: t.dst, err: t.err}
+			out := convertOut{src: t.src, path: t.dst, err: t.err}
 			switch {
 			case out.err != nil:
 			case target == toZip:
@@ -407,9 +410,6 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 				out.path, out.err = extractArchive(t.src, t.dst, job)
 			default:
 				out.err = convertImage(t.src, t.dst, format)
-			}
-			if out.err != nil && t.err == nil {
-				_ = os.Remove(t.dst)
 			}
 			if errors.Is(out.err, errConvertCanceled) {
 				break
@@ -480,6 +480,7 @@ func zipRoots(items []store.Item) []string {
 // failed task. Counting stops when the job is cancelled.
 func planConvert(dir string, srcs, names, exts []string, pdf bool, target convertTarget, job *convertJob) []convertTask {
 	taken := map[string]bool{}
+	job.taken = taken
 	var tasks []convertTask
 	switch {
 	case target == toZip:
@@ -634,7 +635,11 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 			if firstErr == nil {
 				firstErr = o.err
 			}
-			log.Printf("Shelf: 转换失败 %s：%v", filepath.Base(o.path), o.err)
+			verb, name := "转换失败", filepath.Base(o.path)
+			if job.target == toExtract {
+				verb, name = "解压失败", filepath.Base(o.src)
+			}
+			log.Printf("Shelf: %s %s：%v", verb, name, o.err)
 			continue
 		}
 		if o.noText {

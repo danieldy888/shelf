@@ -2839,6 +2839,35 @@ func convertedFile(t *testing.T, s *Store, name, content string) string {
 	return p
 }
 
+// convertedFolder creates <converted>/name holding files (relative name →
+// content) and registers it as a Converted folder item, the shape an
+// extracted archive takes.
+func convertedFolder(t *testing.T, s *Store, name string, files map[string]string) string {
+	t.Helper()
+	dir := filepath.Join(s.ConvertedDir(), name)
+	for rel, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatalf("mkdir fixture: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+	if err := s.AddFiles([]string{dir}); err != nil {
+		t.Fatalf("AddFiles: %v", err)
+	}
+	for i := range s.Items {
+		if s.Items[i].Path == dir {
+			s.Items[i].Converted = true
+		}
+	}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	return dir
+}
+
 // AddConverted 把 converted 目录里既有的文件逐个登记为 KindFile +
 // Converted 项，按给定顺序排到最前（paths[0] 成为 Items[0]），返回同序 ID；
 // 重开后顺序、Converted 标记与 Missing 状态都持久化。
@@ -3125,24 +3154,29 @@ func TestRemoveFileItemInsideConvertedKeepsFile(t *testing.T) {
 	}
 }
 
-// Open 只清理 converted 目录里无人引用的文件（转换中断的残留），被引用的
-// 文件、子目录及目录之外的一切都原样保留。
+// Open 清理 converted 目录里无人引用的文件与文件夹（转换中断的残留），
+// 被引用的文件、文件夹及目录之外的一切都原样保留。
 func TestOpenCleansOrphanedConverted(t *testing.T) {
 	s, root := newStore(t)
 	kept := convertedFile(t, s, "kept.pdf", "k")
 	if _, err := s.AddConverted([]string{kept}); err != nil {
 		t.Fatalf("AddConverted: %v", err)
 	}
+	keptDir := convertedFolder(t, s, "kept-folder", map[string]string{"inner.txt": "i"})
 	orphan := filepath.Join(s.ConvertedDir(), "orphan.tmp")
 	if err := os.WriteFile(orphan, []byte("o"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sub := filepath.Join(s.ConvertedDir(), "subdir")
-	if err := os.MkdirAll(sub, 0o700); err != nil {
+	orphanDir := filepath.Join(s.ConvertedDir(), "orphan-folder")
+	if err := os.MkdirAll(filepath.Join(orphanDir, "nested"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	subFile := filepath.Join(sub, "inner.txt")
-	if err := os.WriteFile(subFile, []byte("i"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(orphanDir, "nested", "stale.txt"), []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 目录之外的同名文件夹绝不被清理。
+	outside := filepath.Join(t.TempDir(), "orphan-folder")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -3157,11 +3191,122 @@ func TestOpenCleansOrphanedConverted(t *testing.T) {
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatalf("orphaned converted file kept: %v", err)
 	}
+	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+		t.Fatalf("orphaned converted folder kept: %v", err)
+	}
 	if _, err := os.Stat(kept); err != nil {
 		t.Fatalf("referenced converted file cleaned: %v", err)
 	}
-	if _, err := os.Stat(subFile); err != nil {
-		t.Fatalf("subdirectory contents touched: %v", err)
+	if _, err := os.Stat(filepath.Join(keptDir, "inner.txt")); err != nil {
+		t.Fatalf("referenced converted folder cleaned: %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("folder outside converted cleaned: %v", err)
+	}
+}
+
+// Remove 删除解压结果这类转换文件夹：整棵树消失且不报错，文件夹里的
+// 符号链接不被跟随（目标原样保留），converted 之外的同名文件夹不受影响。
+func TestRemoveDeletesConvertedFolder(t *testing.T) {
+	s, _ := newStore(t)
+	outside := filepath.Join(t.TempDir(), "precious")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	treasure := filepath.Join(outside, "keep.txt")
+	if err := os.WriteFile(treasure, []byte("t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := convertedFolder(t, s, "包", map[string]string{"a.txt": "a", "sub/b.txt": "b"})
+	if err := os.Symlink(outside, filepath.Join(dir, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	// 同一根下普通文件项也不能被误解为拥有整个目录。
+	user := filepath.Join(t.TempDir(), "user.txt")
+	if err := os.WriteFile(user, []byte("u"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{user}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for _, it := range s.Items {
+		if it.Converted && it.Path == dir {
+			id = it.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("converted folder item not found")
+	}
+	if err := s.Remove(id); err != nil {
+		t.Fatalf("Remove converted folder: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("converted folder kept: %v", err)
+	}
+	if _, err := os.Stat(treasure); err != nil {
+		t.Fatalf("symlink target deleted with the folder: %v", err)
+	}
+	if _, err := os.Stat(user); err != nil {
+		t.Fatalf("plain user file deleted: %v", err)
+	}
+	if len(s.Items) != 1 || s.Items[0].Path != user {
+		t.Fatalf("items after remove: %+v", s.Items)
+	}
+}
+
+// 标记为 Converted、路径却在 converted 之外的文件夹绝不删除。
+func TestRemoveConvertedFolderOutsideUntouched(t *testing.T) {
+	s, _ := newStore(t)
+	outside := filepath.Join(t.TempDir(), "包")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inner := filepath.Join(outside, "a.txt")
+	if err := os.WriteFile(inner, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Items = append([]Item{{
+		ID: newID(), Kind: KindFile, Path: outside, CreatedAt: time.Now(), Converted: true,
+	}}, s.Items...)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(s.Items[0].ID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(inner); err != nil {
+		t.Fatalf("folder outside converted deleted: %v", err)
+	}
+}
+
+// converted 目录里的软链接即使名字像文件夹也只是被 unlink，绝不跟随
+// 到目标目录里删除内容。
+func TestRemoveConvertedSymlinkNotFollowed(t *testing.T) {
+	s, _ := newStore(t)
+	target := t.TempDir()
+	treasure := filepath.Join(target, "keep.txt")
+	if err := os.WriteFile(treasure, []byte("t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(s.ConvertedDir(), "out")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	s.Items = append([]Item{{
+		ID: newID(), Kind: KindFile, Path: link, CreatedAt: time.Now(), Converted: true,
+	}}, s.Items...)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(s.Items[0].ID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("converted symlink kept: %v", err)
+	}
+	if _, err := os.Stat(treasure); err != nil {
+		t.Fatalf("symlink target deleted: %v", err)
 	}
 }
 
