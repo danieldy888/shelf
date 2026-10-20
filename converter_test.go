@@ -38,6 +38,12 @@ type convertFakes struct {
 	// pixel size every image reports.
 	resized []int
 	size    [2]int
+	// Compressing: the (src, format) pairs asked for, per-source alpha,
+	// and the bytes the fake encoder writes (a size over the limit
+	// reports over).
+	fit      [][2]string
+	alpha    map[string]bool
+	fitBytes int
 }
 
 func fakeConverters(t *testing.T) *convertFakes {
@@ -46,11 +52,25 @@ func fakeConverters(t *testing.T) *convertFakes {
 	oImage, oToPDF, oOCR, oSize := convertImage, imagesToPDF, recognizeText, imageSize
 	oCount, oText, oRender, oResize := pdfPageCount, pdfText, renderPDFPage, resizeImage
 	oDocx, oPages, oWork, oDispatch := writeDocx, writeDocxPages, convertWork, convertDispatch
+	oFit, oAlpha := fitImage, imageAlpha
 	t.Cleanup(func() {
 		convertImage, imagesToPDF, recognizeText, imageSize = oImage, oToPDF, oOCR, oSize
 		pdfPageCount, pdfText, renderPDFPage, resizeImage = oCount, oText, oRender, oResize
 		writeDocx, writeDocxPages, convertWork, convertDispatch = oDocx, oPages, oWork, oDispatch
+		fitImage, imageAlpha = oFit, oAlpha
 	})
+	fitImage = func(src, dst string, format mac.ImageFormat, limit int64) (bool, error) {
+		f.fit = append(f.fit, [2]string{src, dst})
+		f.formats = append(f.formats, format)
+		n := f.fitBytes
+		if n <= 0 {
+			n = 1
+		}
+		return int64(n) > limit, os.WriteFile(dst, make([]byte, n), 0o600)
+	}
+	imageAlpha = func(src string) (bool, error) {
+		return f.alpha[filepath.Base(src)], nil
+	}
 	f.size = [2]int{40, 20}
 	convertImage = func(src, dst string, format mac.ImageFormat) error {
 		if f.onConver != nil {

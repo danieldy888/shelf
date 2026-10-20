@@ -40,6 +40,11 @@ const (
 	toLarge     // each image's longer side at most 2560 px
 	toMedium    // … 1600 px
 	toSmall     // … 800 px
+	toFit500    // each image compressed under 500 KB
+	toFit1M     // … 1 MB
+	toFit2M     // … 2 MB
+	toFit5M     // … 5 MB
+	toExtract   // each archive unpacked into its own folder
 )
 
 // resizePx is the longer-side cap of a resize target, 0 for the others.
@@ -178,7 +183,9 @@ type convertJob struct {
 	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs), 个文件 (archive entries)
 	total   atomic.Int32
 	done    atomic.Int32
-	ocr     atomic.Bool // the current step is text recognition
+	skipped atomic.Int32 // 「压缩到」sources already under the byte budget
+	over    atomic.Int32 // 「压缩到」outputs that still exceed it
+	ocr     atomic.Bool  // the current step is text recognition
 	cancel  atomic.Bool
 	started time.Time
 }
@@ -232,6 +239,10 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 		title = "正在压缩为 zip"
 	case toLarge, toMedium, toSmall:
 		title = "正在缩小图片"
+	case toFit500, toFit1M, toFit2M, toFit5M:
+		title = "正在压缩图片"
+	case toExtract:
+		title = "正在解压"
 	}
 	step := fmt.Sprintf("第 %d / %d %s", min(done+1, total), total, j.unit)
 	if j.ocr.Load() {
@@ -308,9 +319,15 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 	px := resizePx(target)
 	for i, it := range items {
 		srcs[i], names[i], exts[i] = it.Path, convertBaseName(it), convertExt(target)
-		if px > 0 {
+		switch {
+		case px > 0:
 			names[i] = fmt.Sprintf("%s %dpx", names[i], px)
 			exts[i] = resizeExt(it)
+		case fitLimit(target) > 0:
+			names[i] += "（压缩）"
+			exts[i] = "" // compressOutExt decides in planConvert (worker side)
+		case target == toExtract:
+			names[i] = archiveStem(it.Path)
 		}
 	}
 	var roots []string
@@ -327,11 +344,13 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 			names[0] = fmt.Sprintf("%s 等 %d 项", first, len(items))
 		}
 	}
-	pdf := isPDF(items[0]) && target != toZip
+	pdf := isPDF(items[0]) && target != toZip && target != toExtract
 	unit := "张"
 	switch {
 	case target == toZip:
 		unit = "个文件"
+	case target == toExtract:
+		unit = "个"
 	case pdf && target == toWord:
 		unit = "个"
 	case pdf:
@@ -377,6 +396,15 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 			case px > 0:
 				out.err = resizeImage(t.src, t.dst, extFormat(strings.TrimPrefix(filepath.Ext(t.dst), ".")), px)
 				out.before, out.after = fileSize(t.src), fileSize(t.dst)
+			case fitLimit(target) > 0:
+				over, ferr := fitImage(t.src, t.dst, compressFormat(t.dst), fitLimit(target))
+				out.err = ferr
+				if over {
+					job.over.Add(1)
+				}
+				out.before, out.after = fileSize(t.src), fileSize(t.dst)
+			case target == toExtract:
+				out.path, out.err = extractArchive(t.src, t.dst, job)
 			default:
 				out.err = convertImage(t.src, t.dst, format)
 			}
@@ -462,6 +490,24 @@ func planConvert(dir string, srcs, names, exts []string, pdf bool, target conver
 			name = fmt.Sprintf("%s 等 %d 张", name, len(srcs))
 		}
 		return []convertTask{{dst: uniquePath(dir, name, "pdf", taken)}}
+	case target == toExtract:
+		for i, src := range srcs {
+			tasks = append(tasks, convertTask{src: src, dst: uniqueDir(dir, names[i], taken)})
+		}
+	case fitLimit(target) > 0:
+		for i, src := range srcs {
+			if job.cancel.Load() {
+				break
+			}
+			ext := compressOutExt(src)
+			if fi, err := os.Stat(src); err != nil {
+				tasks = append(tasks, convertTask{src: src, dst: filepath.Join(dir, names[i]+"."+ext), err: err})
+			} else if fi.Size() <= fitLimit(target) {
+				job.skipped.Add(1) // already under the budget: no output
+			} else {
+				tasks = append(tasks, convertTask{src: src, dst: uniquePath(dir, names[i], ext, taken)})
+			}
+		}
 	case pdf && target == toWord:
 		for i, src := range srcs {
 			tasks = append(tasks, convertTask{src: src, pdf: true, dst: uniquePath(dir, names[i], "docx", taken)})
@@ -597,10 +643,21 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		paths = append(paths, o.path)
 	}
 	if len(paths) > 0 {
-		ids, err := a.store.AddConverted(paths)
+		var ids []string
+		var err error
+		if job.target == toExtract {
+			ids, err = addExtracted(a.store, paths)
+		} else {
+			ids, err = a.store.AddConverted(paths)
+		}
 		if err != nil {
 			for _, p := range paths {
-				_ = os.Remove(p)
+				if job.target == toExtract {
+					// Extracted folders are this job's own new results.
+					_ = os.RemoveAll(p)
+				} else {
+					_ = os.Remove(p)
+				}
 			}
 			a.report(err)
 			return
@@ -611,8 +668,11 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		a.selection.onlyAll(ids)
 	}
 	verb := "转换"
-	if job.target == toZip {
+	switch job.target {
+	case toZip, toFit500, toFit1M, toFit2M, toFit5M:
 		verb = "压缩"
+	case toExtract:
+		verb = "解压"
 	}
 	switch {
 	case len(paths) == 0 && failed > 0:
@@ -627,6 +687,25 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		a.toastStatus("没有识别到文字，只放入了图片", time.Now().Add(4*time.Second), false)
 	case job.target == toZip:
 		a.toastStatus(fmt.Sprintf("已压缩 · %s · 已选中，可直接拖出", formatBytes(fileSize(paths[0]))), time.Now().Add(3*time.Second), false)
+	case job.target == toExtract:
+		a.toastStatus(fmt.Sprintf("已解压 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), false)
+	case fitLimit(job.target) > 0:
+		var before, after int64
+		for _, o := range outs {
+			before, after = before+o.before, after+o.after
+		}
+		skipped, over := int(job.skipped.Load()), int(job.over.Load())
+		msg := fmt.Sprintf("已压缩 %d 张", len(paths))
+		if skipped > 0 {
+			msg += fmt.Sprintf("，%d 张本来就小于目标", skipped)
+		}
+		if over > 0 {
+			msg += fmt.Sprintf("，%d 张没能压到 %s 以内", over, formatBytes(fitLimit(job.target)))
+		}
+		if len(paths) > 0 {
+			msg += fmt.Sprintf(" · %s → %s", formatBytes(before), formatBytes(after))
+		}
+		a.toastStatus(msg, time.Now().Add(5*time.Second), over > 0)
 	case resizePx(job.target) > 0:
 		var before, after int64
 		for _, o := range outs {
@@ -668,18 +747,20 @@ func uniquePath(dir, name, ext string, taken map[string]bool) string {
 // converted: images get 「转换为 ▸」 (「转换 N 张为 ▸」) JPEG / HEIC / PNG /
 // PDF / Word, the format every target already has greyed as 「当前格式」,
 // for several 「合并为一个 PDF」, and 「缩小图片 ▸」 by longer side, a size
-// no target exceeds greyed; PDFs get 「转换为 ▸」 (「转换 N 个为 ▸」) Word,
-// PNG, JPEG. Any files, folders and pictures still on disk get 「压缩为
-// zip」. Everything is disabled while a job runs.
+// no target exceeds greyed, then 「压缩到 ▸」 by byte budget; PDFs get
+// 「转换为 ▸」 (「转换 N 个为 ▸」) Word, PNG, JPEG. Archives get 「解压」,
+// and any files, folders and pictures still on disk get 「压缩为 zip」.
+// Everything is disabled while a job runs.
 func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 	if a.conv == nil || a.store == nil || len(items) == 0 {
 		return
 	}
-	allImages, allPDFs, allFiles := true, true, true
+	allImages, allPDFs, allFiles, allArchives := true, true, true, true
 	for _, it := range items {
 		allImages = allImages && convertible(it)
 		allPDFs = allPDFs && isPDF(it)
 		allFiles = allFiles && !it.Missing && (it.Kind == store.KindFile || it.Kind == store.KindImage)
+		allArchives = allArchives && isArchive(it)
 	}
 	if !allFiles {
 		return
@@ -706,6 +787,15 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 		}).Disabled(busy)
 	case allImages:
 		a.imageConvertMenu(m, items, busy)
+	}
+	if allArchives {
+		label := "解压"
+		if len(items) > 1 {
+			label = fmt.Sprintf("解压 %d 项", len(items))
+		}
+		if m.Item(label).Disabled(busy).Chosen() {
+			a.startConvert(items, toExtract)
+		}
 	}
 	label := "压缩为 zip"
 	if len(items) > 1 {
@@ -778,4 +868,5 @@ func (a *shelf) imageConvertMenu(m *ui.Menu, items []store.Item, busy bool) {
 			}
 		}
 	}).Disabled(busy || longest <= resizePx(toSmall))
+	a.compressMenu(m, items, busy)
 }
