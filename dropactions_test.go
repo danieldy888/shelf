@@ -1,0 +1,440 @@
+//go:build darwin
+
+package main
+
+import (
+	"archive/zip"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/mac"
+	"shelf/internal/store"
+)
+
+// writeFile makes a real file under dir so classification stats it.
+func writeFile(t *testing.T, dir, name string, data []byte) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func testPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	return testPNG(t)
+}
+
+// actionIDs labels the actions a rule row picked, for assertions.
+func actionIDs(acts []dropAction) []string {
+	out := make([]string, len(acts))
+	for i, a := range acts {
+		out[i] = a.id
+	}
+	return out
+}
+
+func actionTargets(acts []dropAction) []convertTarget {
+	out := make([]convertTarget, len(acts))
+	for i, a := range acts {
+		out[i] = a.target
+	}
+	return out
+}
+
+func TestDropActionsImageRules(t *testing.T) {
+	dir := t.TempDir()
+	png := writeFile(t, dir, "截图.png", testPNGBytes(t))
+
+	one := dropActions([]string{png})
+	if got := actionIDs(one); !slices.Equal(got, []string{"fit1m", "topdf", "tojpeg", "airdrop"}) {
+		t.Fatalf("one image got %v", got)
+	}
+	if one[1].label != "转成 PDF" || one[1].target != toPDF {
+		t.Fatalf("single image's PDF cell = %q target %v", one[1].label, one[1].target)
+	}
+
+	png2 := writeFile(t, dir, "b.png", testPNGBytes(t))
+	two := dropActions([]string{png, png2})
+	if two[1].label != "合成一个 PDF" || two[1].target != toMergedPDF {
+		t.Fatalf("multi-image PDF cell = %q target %v", two[1].label, two[1].target)
+	}
+}
+
+func TestDropActionsAllJPEGSwapsToPNG(t *testing.T) {
+	dir := t.TempDir()
+	a := writeFile(t, dir, "a.jpg", []byte("jpeg"))
+	b := writeFile(t, dir, "b.jpeg", []byte("jpeg"))
+	acts := dropActions([]string{a, b})
+	if got := actionIDs(acts); !slices.Equal(got, []string{"fit1m", "topdf", "topng", "airdrop"}) {
+		t.Fatalf("all-JPEG got %v", got)
+	}
+	// A PNG among JPEGs keeps 转 JPEG — the swap is all-or-nothing.
+	c := writeFile(t, dir, "c.png", testPNGBytes(t))
+	mixed := dropActions([]string{a, c})
+	if !slices.Contains(actionIDs(mixed), "tojpeg") {
+		t.Fatalf("jpeg+png got %v, want tojpeg", actionIDs(mixed))
+	}
+}
+
+func TestDropActionsPDFRules(t *testing.T) {
+	dir := t.TempDir()
+	pdf := writeFile(t, dir, "报告.pdf", []byte("%PDF-1.4"))
+	acts := dropActions([]string{pdf})
+	if got := actionIDs(acts); !slices.Equal(got, []string{"toword", "topng", "zip", "airdrop"}) {
+		t.Fatalf("pdf got %v", got)
+	}
+	if acts[0].target != toWord || acts[1].target != toPNG {
+		t.Fatalf("pdf targets = %v", actionTargets(acts))
+	}
+}
+
+func TestDropActionsArchiveAndMixed(t *testing.T) {
+	dir := t.TempDir()
+	z := writeFile(t, dir, "素材.zip", []byte("PK"))
+	r := writeFile(t, dir, "备份.tar.gz", []byte("x"))
+	if got := actionIDs(dropActions([]string{z, r})); !slices.Equal(got, []string{"extract", "airdrop"}) {
+		t.Fatalf("archives got %v", got)
+	}
+	folder := filepath.Join(dir, "文件夹")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	txt := writeFile(t, dir, "备忘.txt", []byte("x"))
+	if got := actionIDs(dropActions([]string{folder, txt})); !slices.Equal(got, []string{"zip", "airdrop"}) {
+		t.Fatalf("folder+file got %v", got)
+	}
+	// Folder named like an archive is still a folder, not an archive.
+	zipDir := filepath.Join(dir, "形如.zip")
+	if err := os.Mkdir(zipDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := actionIDs(dropActions([]string{zipDir})); !slices.Equal(got, []string{"zip", "airdrop"}) {
+		t.Fatalf("folder ending .zip got %v", got)
+	}
+	// Image mixed with a plain file is a mixed drop: zip + airdrop only.
+	img := writeFile(t, dir, "img.png", testPNGBytes(t))
+	if got := actionIDs(dropActions([]string{img, txt})); !slices.Equal(got, []string{"zip", "airdrop"}) {
+		t.Fatalf("image+text got %v", got)
+	}
+	// An unreadable path counts as mixed.
+	gone := filepath.Join(dir, "不存在.jpg")
+	if got := actionIDs(dropActions([]string{img, gone})); !slices.Equal(got, []string{"zip", "airdrop"}) {
+		t.Fatalf("missing file got %v", got)
+	}
+}
+
+func TestDropCountText(t *testing.T) {
+	dir := t.TempDir()
+	png := writeFile(t, dir, "a.png", testPNGBytes(t))
+	jpg := writeFile(t, dir, "b.jpg", []byte("x"))
+	pdf := writeFile(t, dir, "c.pdf", []byte("x"))
+	z := writeFile(t, dir, "d.zip", []byte("x"))
+	txt := writeFile(t, dir, "e.txt", []byte("x"))
+	cases := []struct {
+		paths []string
+		want  string
+	}{
+		{[]string{png, jpg}, "2 张图片"},
+		{[]string{png}, "1 张图片"},
+		{[]string{pdf}, "1 个 PDF"},
+		{[]string{z}, "1 个压缩包"},
+		{[]string{txt}, "1 项"},
+		{[]string{png, txt}, "2 项"},
+		{nil, ""},
+	}
+	for i, tc := range cases {
+		if got := dropCountText(tc.paths); got != tc.want {
+			t.Fatalf("case %d: dropCountText = %q, want %q", i, got, tc.want)
+		}
+	}
+}
+
+// dropShelf returns a shelf with a real store and a synchronous converter.
+func dropShelf(t *testing.T) (*shelf, *convertFakes, string) {
+	t.Helper()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	a.conv = &converter{host: a}
+	a.modules = []module{a.conv}
+	return a, fakeConverters(t), t.TempDir()
+}
+
+// fileDrop builds the transfer a file drop hands us.
+func fileDrop(t *testing.T, paths ...string) transfer.Data {
+	t.Helper()
+	d, err := transfer.FileData(paths...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestRunDropActionConvertDoesNotShelveSources(t *testing.T) {
+	a, f, dir := dropShelf(t)
+	png := writeFile(t, dir, "截图.png", testPNGBytes(t))
+	act := dropActions([]string{png})[2] // 转 JPEG
+	if act.id != "tojpeg" {
+		t.Fatalf("picked %v", act.id)
+	}
+	a.runDropAction(act, fileDrop(t, png))
+	if !slices.Equal(f.formats, []mac.ImageFormat{mac.FormatJPEG}) {
+		t.Fatalf("formats = %v, want one JPEG", f.formats)
+	}
+	if len(a.store.Items) != 1 {
+		t.Fatalf("tray has %d items, want just the output", len(a.store.Items))
+	}
+	got := a.store.Items[0]
+	if got.Path == png {
+		t.Fatal("the dropped source file was shelved")
+	}
+	if !got.Converted || filepath.Ext(got.Path) != ".jpg" {
+		t.Fatalf("output item = %+v", got)
+	}
+	if !a.received || a.tab != pageTray {
+		t.Fatalf("received=%v tab=%q", a.received, a.tab)
+	}
+}
+
+func TestRunDropActionMergedPDFAndFit(t *testing.T) {
+	a, f, dir := dropShelf(t)
+	imgA := writeFile(t, dir, "a.png", testPNGBytes(t))
+	imgB := writeFile(t, dir, "b.png", testPNGBytes(t))
+	acts := dropActions([]string{imgA, imgB})
+	if acts[1].id != "topdf" {
+		t.Fatalf("acts = %v", actionIDs(acts))
+	}
+	a.runDropAction(acts[1], fileDrop(t, imgA, imgB))
+	if len(f.pdfSrcs) != 1 || !slices.Equal(f.pdfSrcs[0], []string{imgA, imgB}) {
+		t.Fatalf("merged pdf sources = %v", f.pdfSrcs)
+	}
+	// 压缩到 1 MB rides the fit pipeline.
+	a2, f3, dir3 := dropShelf(t)
+	img := writeFile(t, dir3, "big.png", make([]byte, 1_500_000))
+	a2.runDropAction(dropActions([]string{img})[0], fileDrop(t, img))
+	if len(f3.fit) != 1 || f3.fit[0][0] != img {
+		t.Fatalf("fit jobs = %v", f3.fit)
+	}
+}
+
+func TestRunDropActionZipAndExtract(t *testing.T) {
+	a, _, dir := dropShelf(t)
+	x := writeFile(t, dir, "甲.txt", []byte("甲"))
+	y := writeFile(t, dir, "乙.txt", []byte("乙"))
+	a.runDropAction(dropActions([]string{x, y})[0], fileDrop(t, x, y))
+	if len(a.store.Items) != 1 || filepath.Ext(a.store.Items[0].Path) != ".zip" {
+		t.Fatalf("tray = %+v, want one zip", a.store.Items)
+	}
+	zr, err := zip.OpenReader(a.store.Items[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	var names []string
+	for _, e := range zr.File {
+		names = append(names, e.Name)
+	}
+	if !slices.Contains(names, "甲.txt") || !slices.Contains(names, "乙.txt") {
+		t.Fatalf("zip entries = %v", names)
+	}
+
+	// 解压: build a zip first, then drop it on the extract cell.
+	arc := filepath.Join(dir, "包.zip")
+	if err := writeZip(arc, []string{x}, []string{"甲.txt"}, &convertJob{}); err != nil {
+		t.Fatal(err)
+	}
+	a2, _, _ := dropShelf(t)
+	act := dropActions([]string{arc})[0]
+	if act.id != "extract" {
+		t.Fatalf("archive actions = %v", actionIDs(dropActions([]string{arc})))
+	}
+	a2.runDropAction(act, fileDrop(t, arc))
+	if len(a2.store.Items) != 1 || !a2.store.Items[0].Converted {
+		t.Fatalf("extracted tray = %+v", a2.store.Items)
+	}
+	out := a2.store.Items[0].Path
+	if got, err := os.ReadFile(filepath.Join(out, "甲.txt")); err != nil || string(got) != "甲" {
+		t.Fatalf("extracted content: %q %v", got, err)
+	}
+}
+
+func TestRunDropActionAirDropShelveNothing(t *testing.T) {
+	a, _, dir := dropShelf(t)
+	png := writeFile(t, dir, "a.png", testPNGBytes(t))
+	var got [][]string
+	old := airDrop
+	airDrop = func(paths, texts []string) error {
+		got = append(got, append(append([]string{}, paths...), texts...))
+		return nil
+	}
+	t.Cleanup(func() { airDrop = old })
+	for _, act := range dropActions([]string{png}) {
+		if act.isAirDrop {
+			a.runDropAction(act, fileDrop(t, png))
+		}
+	}
+	if len(got) != 1 || !slices.Equal(got[0], []string{png}) {
+		t.Fatalf("airdrop calls = %v", got)
+	}
+	if len(a.store.Items) != 0 {
+		t.Fatalf("airdrop shelved %+v", a.store.Items)
+	}
+}
+
+func TestRunDropActionBusyFallsBackToTray(t *testing.T) {
+	a, f, dir := dropShelf(t)
+	png := writeFile(t, dir, "a.png", testPNGBytes(t))
+	// A conversion in flight greys the cells; a drop on one still lands,
+	// on the tray this time.
+	a.conv.job = &convertJob{}
+	a.runDropAction(dropActions([]string{png})[2], fileDrop(t, png))
+	if len(f.formats) != 0 {
+		t.Fatalf("busy converter still ran: %v", f.formats)
+	}
+	if len(a.store.Items) != 1 || a.store.Items[0].Path != png || a.store.Items[0].Converted {
+		t.Fatalf("busy drop = %+v, want the source shelved plain", a.store.Items)
+	}
+}
+
+func TestRunDropActionNonFilesFallsBackToTray(t *testing.T) {
+	a, _, _ := dropShelf(t)
+	// A text drop on a cell is unreachable in the UI (cells only accept
+	// files), but the runner defends: no file paths means plain receive.
+	a.runDropAction(dropActions([]string{"/x.png"})[0], transfer.TextData("只是文字"))
+	if len(a.store.Items) != 1 || a.store.Items[0].Kind != store.KindText {
+		t.Fatalf("text drop = %+v", a.store.Items)
+	}
+}
+
+// dropViewShelf builds a headless shelf as if a file drag hovered: the
+// pasteboard read is stubbed to the given paths and the drag flag is on.
+func dropViewShelf(t *testing.T, paths []string) (*shelf, *ui.Tester) {
+	t.Helper()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	a := &shelf{
+		store: s, dragging: true, visible: true,
+		notchW: 180, notchH: 32,
+		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{},
+	}
+	a.conv = &converter{host: a}
+	old := dragFiles
+	dragFiles = func() []string { return paths }
+	t.Cleanup(func() { dragFiles = old })
+	return a, ui.NewTester(a.view, panelWidth, panelHeight)
+}
+
+func TestDropZoneShowsForImageDrag(t *testing.T) {
+	dir := t.TempDir()
+	imgs := []string{
+		writeFile(t, dir, "1.png", testPNGBytes(t)),
+		writeFile(t, dir, "2.png", testPNGBytes(t)),
+		writeFile(t, dir, "3.png", testPNGBytes(t)),
+	}
+	_, view := dropViewShelf(t, imgs)
+	for _, want := range []string{"投放", "3 张图片", "松开放入托盘，或拖到动作上", "放入托盘", "保存引用，随时拖出", "压缩到 1 MB", "合成一个 PDF", "转 JPEG", "隔空投送"} {
+		if !view.HasText(want) {
+			t.Fatalf("drop zone missing %q; texts %v", want, view.Texts())
+		}
+	}
+}
+
+func TestDropZoneHiddenForOwnDragAndNonFiles(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, view := dropViewShelf(t, []string{img})
+	a.ownDrag = true
+	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	if view.HasText("投放") || view.HasText("放入托盘") {
+		t.Fatal("own drag-out showed the drop zone")
+	}
+	// No drag at all → no zone either.
+	a.ownDrag = false
+	a.dragging = false
+	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	if view.HasText("投放") {
+		t.Fatal("no drag still showed the drop zone")
+	}
+}
+
+func TestDropZoneHiddenWhenPathsUnreadable(t *testing.T) {
+	// Promised files expose no paths while hovering: the zone stays the
+	// normal stage and the whole-panel target still takes the drop.
+	_, view := dropViewShelf(t, nil)
+	if view.HasText("投放") {
+		t.Fatal("pathless drag showed the drop zone")
+	}
+	if !view.HasText("托盘") {
+		t.Fatalf("plain stage missing; texts %v", view.Texts())
+	}
+}
+
+func TestDropZoneFilesPointerGates(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, _ := dropViewShelf(t, []string{img})
+	// With a window (simulated by win != nil impossible headless), the
+	// pointer must be inside the panel: over is the zone's own hover.
+	if got := a.dropZoneFiles(true); len(got) != 1 {
+		t.Fatal("hovering the window lost the drag's files")
+	}
+	// Not over and headless (a.win == nil) still answers: tests draw the
+	// final state without a pointer.
+	if got := a.dropZoneFiles(false); len(got) != 1 {
+		t.Fatal("headless render lost the files")
+	}
+	// The pointer-inside branch needs the seam.
+	old := cursorPoint
+	defer func() { cursorPoint = old }()
+	a2 := &shelf{dragging: true, visible: true, notchW: 180, notchH: 32, h: 500}
+	a2.x, a2.y = 400, 0
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 10, Y: 500} }
+	// a2.win == nil keeps the headless shortcut; exercise the math itself.
+	p := cursorPoint()
+	inside := p.X >= a2.x && p.X < a2.x+panelWidth && p.Y >= a2.y && p.Y < a2.y+a2.panelH()
+	if inside {
+		t.Fatal("point left of the panel counted as inside")
+	}
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 400 + panelWidth/2, Y: 100} }
+	p = cursorPoint()
+	inside = p.X >= a2.x && p.X < a2.x+panelWidth && p.Y >= a2.y && p.Y < a2.y+a2.panelH()
+	if !inside {
+		t.Fatal("point inside the panel counted as outside")
+	}
+}
+
+func TestDropZoneModuleBarCounts(t *testing.T) {
+	dir := t.TempDir()
+	z := writeFile(t, dir, "素材.zip", []byte("PK"))
+	_, view := dropViewShelf(t, []string{z})
+	for _, want := range []string{"投放", "1 个压缩包", "解压", "隔空投送"} {
+		if !view.HasText(want) {
+			t.Fatalf("archive zone missing %q; texts %v", want, view.Texts())
+		}
+	}
+	folder := filepath.Join(dir, "文件夹")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	txt := writeFile(t, dir, "x.txt", []byte("x"))
+	_, view2 := dropViewShelf(t, []string{folder, txt})
+	for _, want := range []string{"2 项", "打成 zip"} {
+		if !view2.HasText(want) {
+			t.Fatalf("mixed zone missing %q; texts %v", want, view2.Texts())
+		}
+	}
+}

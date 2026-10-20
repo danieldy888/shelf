@@ -364,7 +364,7 @@ func (a *shelf) view(c *ui.Context) {
 			content.Children(func() {
 				a.earBar(c)
 				a.activityStrip(c)
-				a.tabBody(c, over)
+				a.dropBody(c, over)
 				a.toastLayer(c, over)
 			})
 		})
