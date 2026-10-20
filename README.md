@@ -42,6 +42,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 
 **A shelf in the notch**
 - Drag files, folders, images or text toward the notch — it shows "release to drop" (松开放入), and the shelf opens as you let go.
+- Drag files onto the open shelf and pick what happens on the spot: drop on 放入托盘 (Add to Tray), or on an action tile that fits the files — compress pictures to 1 MB, turn them into a PDF or JPEG, convert PDFs to Word or images, extract archives, zip anything, or AirDrop it. Results land on the shelf; originals stay where they are.
 - Files show as thumbnails. Drag one or several (⌘/⇧ to select) straight into any app.
 - Press Space for Quick Look; right-click to open, reveal in Finder, AirDrop, copy, pin or remove — pictures get an extra "复制图片" (Copy Image) entry that copies the image itself.
 - Tidy files where they sit: right-click a picture → 压缩到 (Compress To) to fit it under 500 KB, 1 MB, 2 MB or 5 MB; right-click a zip, tar, 7z or rar archive → 解压 (Extract); right-click files → 重新命名… (Rename…) to rename a batch the way Finder does — replace text, add text, or name plus number — with a live preview and undo.
@@ -49,7 +50,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 
 **Clipboard history**
 - Text you copy is kept automatically, along with the app it came from. Screenshots and copied images land on the shelf too.
-- Press `⌃⌥V` to search: type to filter, ↑/↓ to choose, ⏎ copies it and takes you back to the app you were in.
+- Press `⌃⌥V` to search: type to filter, ↑/↓ to choose, ⏎ copies it and takes you back to the app you were in. Text inside screenshots and copied pictures is recognized on this Mac and searchable too; right-click a picture → 识别文字并复制 (Copy Recognized Text) to copy what it says.
 - Pin what matters. Exclude apps you never want recorded. Passwords that password managers mark as private are skipped.
 
 **Now playing**
@@ -169,11 +170,12 @@ MIT — see [LICENSE](LICENSE).
 - 按空格快速查看；右键可以打开、在 Finder 中显示、隔空投送、复制（图片多一项「复制图片」，复制图片数据本身）、置顶或移除。
 - 图片和 PDF 可以直接转换：右键图片 →「转换为」JPEG、HEIC、PNG、PDF，或识别图里的文字生成 Word，多张还能合并成一个 PDF；大图可以一键缩小；右键 PDF 可以提取文字生成 Word，或每页存成一张图片。文件和文件夹可以压缩成 zip。全部在本机完成，原文件不动，做好的文件放在托盘最前面。
 - 文件整理也能就地完成：右键图片 →「压缩到」500 KB / 1 MB / 2 MB / 5 MB 以内；右键 zip、tar、7z、rar 压缩包 →「解压」；右键托盘里的文件 →「重新命名…」，像 Finder 一样替换文字、添加文字或按序号命名，改之前先预览，改完可以撤销。
+- 拖文件到刘海时可以直接选择怎么处理：松在「放入托盘」就收进托盘；松在下方的动作格上，就按文件类型直接压缩到 1 MB、转成 PDF 或 JPEG、PDF 转 Word 或图片、解压、打成 zip，或隔空投送。结果放进托盘，原文件不动。
 - 还有别的放法：拖着东西时左右晃动指针，光标旁会出现一个暂存篮；也可以在 Finder 或其他应用里右键 →「服务」→「添加到 Shelf」。
 
 **剪贴板记录**
 - 复制过的文字会自动收好，并记住来自哪个应用；截图和复制的图片也会进托盘。
-- 按 `⌃⌥V` 搜索：输入即筛选，`↑`/`↓` 选择，回车复制并回到你原来的应用。
+- 按 `⌃⌥V` 搜索：输入即筛选，`↑`/`↓` 选择，回车复制并回到你原来的应用。截图和复制的图片里的文字会在本机识别，也能搜到；右键图片 →「识别文字并复制」可以直接复制图中文字。
 - 重要的内容可以置顶；不想被记录的应用可以排除；密码管理器标记为隐私的密码不会被记录。
 
 **正在播放**
