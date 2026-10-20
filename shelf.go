@@ -41,6 +41,7 @@ type shelf struct {
 	conv                                       *converter            // image conversion jobs; nil until the app starts
 	usage                                      *usageFeature         // nil until the AI usage page registers itself
 	clip                                       *clipboardModule      // nil while clipboard history is off
+	awake                                      *awakeModule          // nil until the app starts
 	pages                                      []panelPage           // registered pages in ear order (built-ins first)
 	pagesReady                                 bool                  // built-in pages have been registered
 	tab                                        pageID                // current page of the expanded panel (registry in pages.go)

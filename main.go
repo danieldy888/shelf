@@ -150,6 +150,8 @@ func (a *shelf) ready(show bool) {
 	a.np = &nowPlayingModule{host: a}
 	a.modules = append(a.modules, a.np)
 	a.conv = &converter{host: a}
+	a.awake = newAwakeModule(a)
+	a.modules = append(a.modules, a.awake)
 	a.modules = append(a.modules, a.conv, &leavingModule{host: a})
 
 	// AI 用量页：额度查询与本地用量扫描都注入为可替换的实现，页面只认
@@ -237,6 +239,7 @@ func (a *shelf) trayMenu() *mygo.Menu {
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = !s.IslandNowPlaying })
 			}},
+		{Label: "保持唤醒", Type: mygo.MenuItemSubmenu, Submenu: a.awakeMenu()},
 		mygo.Separator(),
 		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		a.updateMenu(),
