@@ -11,6 +11,8 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +53,16 @@ func motionShot(t *testing.T, a *shelf, name string, wait time.Duration) string 
 	return shot
 }
 
+// pngDecode reads a screenshot back into pixels for extent checks.
+func pngDecode(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return png.Decode(f)
+}
+
 // motionClosed puts the real window into the resting closed state.
 func motionClosed(a *shelf) {
 	onMain(func() {
@@ -80,6 +92,12 @@ func TestSmokeOpeningIsElasticAndNotClipped(t *testing.T) {
 	motionClosed(a)
 	time.Sleep(300 * time.Millisecond)
 	onMain(func() { a.show(false) })
+	// A screenshot mid-flight proves the look; it takes its own opening so
+	// its frame-sync sleep cannot sit on the trace's peak.
+	motionShot(t, a, "open-mid", 90*time.Millisecond)
+	motionClosed(a)
+	time.Sleep(200 * time.Millisecond)
+	onMain(func() { a.show(false) })
 	final := float32(0)
 	peak := float32(0)
 	for i := range 80 {
@@ -90,11 +108,9 @@ func TestSmokeOpeningIsElasticAndNotClipped(t *testing.T) {
 		})
 		peak = max(peak, h)
 		final = h
-		if float64(frame.Width) < float64(w) && frame.Height < int(h+0.5) {
-			t.Fatalf("frame %d: window %+v cuts the shell %.1f tall", i, frame, h)
-		}
-		if i == 9 {
-			motionShot(t, a, "open-mid", 0)
+		if float64(frame.Width) < float64(w) || frame.Height < int(h+0.5) {
+			// Either dimension alone clipping counts: the shell must fit.
+			t.Fatalf("frame %d: window %+v cuts the shell %.1fx%.1f", i, frame, w, h)
 		}
 		// Sampling by hopping to the main thread starves the window's own
 		// frames if it is too tight; 10 ms keeps both the trace and the draw
@@ -120,7 +136,34 @@ func TestSmokeCapsuleSuccess(t *testing.T) {
 	onMain(func() {
 		a.toastStatus("已压缩 3 张 · 4.6 MB → 1.8 MB", time.Now().Add(3*time.Second), false)
 	})
-	shot := motionShot(t, a, "capsule-success", 500*time.Millisecond)
+	// While the capsule is still a sliver, nothing it draws may reach past
+	// the shell's edge — opaque paint beside it would smear the menu bar.
+	// This shot skips motionShot's frame-sync sleep: it wants a mid-grow
+	// frame, taken as the window stands right now.
+	time.Sleep(50 * time.Millisecond)
+	grow := filepath.Join(motionShotDir, "capsule-grow.png")
+	var num int
+	onMain(func() { num = mac.WindowNumber(a.win.NativeHandle()) })
+	if num != 0 {
+		if out, err := exec.Command("screencapture", "-x", "-o", fmt.Sprintf("-l%d", num), grow).CombinedOutput(); err != nil {
+			t.Fatalf("capsule-grow: screencapture failed (%v): %s", err, out)
+		}
+		t.Logf("shot capsule-grow -> %s", grow)
+	}
+	var gw float32
+	onMain(func() { gw = a.fx.w })
+	if img, err := pngDecode(grow); err == nil {
+		box := opaqueBounds(img)
+		// The opaque extent can never be wider than the capsule's final
+		// width; the pre-fix bug painted the full-width glow box from the
+		// first frame, so a narrow shell with a wide opaque bar fails here.
+		cw, _ := a.fb.capsule(180, 32)
+		if img2w := box.Dx(); gw > 0 && gw < 200 && img2w > int(cw)+8 {
+			t.Fatalf("capsule-grow: opaque paint %dpx wide while the shell is %.1fpt", img2w, gw)
+		}
+		t.Logf("capsule-grow: shell %.1fpt wide at capture, opaque extent %dpx", gw, box.Dx())
+	}
+	shot := motionShot(t, a, "capsule-success", 400*time.Millisecond)
 	if shot == "" {
 		t.Fatal("no shot")
 	}
@@ -297,5 +340,41 @@ func TestSmokeProgressiveBlur(t *testing.T) {
 		a.tab = pageTray
 		a.store.Clear()
 	})
+	motionClosed(a)
+}
+
+// TestSmokePeekMorphNeverClipped grows the chevron pill into the now-playing
+// player mid-strip: the morph spring overshoots, and the resident strip must
+// hold every frame of it.
+func TestSmokePeekMorphNeverClipped(t *testing.T) {
+	a := redesignShelf(t)
+	motionClosed(a)
+	time.Sleep(300 * time.Millisecond)
+	onMain(func() {
+		a.settings.IslandNowPlaying = true
+		mod := &nowPlayingModule{host: a}
+		mod.have = true
+		mod.last = mac.NowPlayingState{Playing: true, Title: "Fashion Killa", Duration: 200, Elapsed: 30, Received: time.Now()}
+		a.np = mod
+		a.peeking = true
+		a.peekProgress, a.peekFrom = 1, 1
+		a.peekAnimStart = time.Time{}
+		a.syncMousePassThrough()
+		a.win.Invalidate()
+	})
+	t.Cleanup(func() { onMain(func() { a.np = nil; a.peeking = false }) })
+	for i := range 40 {
+		var w, h float32
+		var frame mygo.Rectangle
+		onMain(func() {
+			a.syncWindowFrame()
+			w, h, frame = a.fx.w, a.fx.h, a.desiredFrame()
+		})
+		if frame.Width < int(w+0.5) || frame.Height < int(h+0.5) {
+			t.Fatalf("frame %d: strip %+v cuts the morphing shell %.1fx%.1f", i, frame, w, h)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	motionShot(t, a, "peek-player", 100*time.Millisecond)
 	motionClosed(a)
 }

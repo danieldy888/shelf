@@ -151,13 +151,13 @@ func (a *shelf) startMonitoring() {
 // msg until the deadline (or toastLife from its first paint when until is
 // zero); isErr gives it the small red dot of error toasts. With the panel
 // closed there is no pill to read, so the same status grows out of the
-// notch as a capsule instead (feedback.go).
+// notch as a capsule instead (feedback.go) — even while the panel is still
+// folding away, since the capsule's own clock starts when it can appear.
 func (a *shelf) toastStatus(msg string, until time.Time, isErr bool) {
-	now := time.Now()
 	a.status = msg
-	a.statusUntil, a.statusShown, a.statusErr = until, now, isErr
-	if !a.visible && a.progress <= 0.01 {
-		a.fb.show(msg, isErr, now)
+	a.statusUntil, a.statusShown, a.statusErr = until, time.Time{}, isErr
+	if !a.visible {
+		a.fb.show(msg, isErr, time.Now())
 	}
 	if a.win != nil {
 		a.win.Invalidate()

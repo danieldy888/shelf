@@ -197,7 +197,9 @@ func (a *shelf) view(c *ui.Context) {
 	// What a closed panel has to say grows out of the notch (feedback.go);
 	// the text is measured before the shell is sized around it.
 	a.fb.follow(a, now)
-	a.fb.pillW = a.fb.measure(c)
+	if f := &a.fb; f.text != "" && f.pillW == 0 {
+		f.pillW = f.measure(c)
+	}
 	capsule := a.capsuleUp(now)
 	if capsule {
 		a.fb.schedule(c, now)
@@ -267,7 +269,8 @@ func (a *shelf) view(c *ui.Context) {
 		// The mesh is the hardware notch: nothing is drawn, and the frame
 		// the next state starts from is the notch's own box.
 		a.fx.w, a.fx.h = float32(max(180, a.notchW)), float32(max(32, a.notchH))
-		a.fx.peek, a.fx.openMoving, a.fb.drawn = false, false, false
+		a.fx.peek, a.fx.openMoving, a.fx.sizeMoving, a.fb.drawn = false, false, false, false
+		a.fb.clearExpired(now, true)
 		if accepts {
 			if drop, ok := ui.DropData(zone, opts); ok {
 				a.receive(drop.Data)
@@ -300,6 +303,7 @@ func (a *shelf) view(c *ui.Context) {
 		peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
 		peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
 	}
+	a.fx.sizeMoving = a.win != nil && (!zone.Settled("peek-w") || !zone.Settled("peek-h"))
 	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板
 	// （shellSize 是几何的唯一来源）。
 	shellW, shellH := a.shellSize(openK, peekK, peekW, peekH, shownH)
@@ -311,10 +315,9 @@ func (a *shelf) view(c *ui.Context) {
 	a.fx.openMoving = a.win != nil && !zone.Settled("open")
 	a.fx.peek = !expanded && peeked && !closing
 	// A failed job shakes the capsule, and only the capsule.
-	shake := float32(0)
+	var shake float32
 	if capsule {
 		shake = a.fb.shake(now, c.Preferences().ReduceMotion)
-		c.AnimationFrame()
 	}
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
@@ -367,8 +370,10 @@ func (a *shelf) view(c *ui.Context) {
 		})
 	})
 	// What this frame drew decides the next one's retraction spring and
-	// whether the capsule's pill takes clicks.
+	// whether the capsule's pill takes clicks. Once the folded-back shell
+	// has fully retracted, the expired text is dropped for good.
 	a.fb.drawn = capsule
+	a.fb.clearExpired(now, peekK <= 0.01 && !capsule)
 	if !accepts {
 		return
 	}
@@ -769,8 +774,13 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 // notch, where the screen has pixels.
 func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, over bool) {
 	now := c.Now()
-	hoverShape := a.peeking || (a.dragging && !a.ownDrag)
-	if !over && a.peeking && a.np != nil && a.np.showsPlayer() {
+	if a.fb.retracting && !a.peeking && !(a.dragging && !a.ownDrag) {
+		// The shell is still folding back from the capsule: only the frame
+		// moves, as when the panel closes. The hover player is not drawn
+		// over a capsule on its way out.
+		return
+	}
+	if !over && a.np != nil && a.np.showsPlayer() {
 		pw, ph := a.playerSize()
 		clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
 		drew := false
@@ -781,11 +791,6 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	}
 	if a.capsuleUp(now) {
 		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
-		return
-	}
-	if !hoverShape && a.fb.retracting {
-		// The shell is still folding back from the capsule: only the frame
-		// moves, as when the panel closes.
 		return
 	}
 	pw, ph := a.peekSize()
@@ -817,38 +822,47 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 // outside the shell; the content is clipped to the shell while it grows.
 func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, now time.Time) {
 	f := &a.fb
+	// The first drawn frame starts the capsule's clock: a status posted while
+	// the panel was still closing is held for its full span from here.
+	f.arm(now)
+
 	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
 	cw, ch := f.capsule(baseW, baseH)
 	col := f.color()
-	glow := f.glow(now, c.Preferences().ReduceMotion)
-	r := 0.9 * glow
+	alpha := f.glow(now, c.Preferences().ReduceMotion)
 	botR := min(shellH/2, 12+18*min(openK, 1))
 	textW := cw - fbDot - fbGap - 2*fbPadX
-	label := "展开 Shelf · " + f.text
-	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label(label)
+	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label("展开 Shelf · " + f.text)
 	if shake != 0 {
 		box.Translate(shake, 0)
 	}
 	box.Children(func() {
-		// Two absolute layers in document order: the glow's black box and
-		// shadow first, then the words over it. An absolute child paints
-		// after the flow, so the order here is the only stacking there is.
-		ui.Box(c.Key("fb-glow")).Absolute().Top(shellH-ch).Left((shellW-cw)/2).
-			Width(cw).Height(ch).Radius(0, 0, botR, botR).
+		// The glow box hugs the shell actually drawn this frame: while the
+		// capsule is still a sliver growing out of the notch it is a sliver
+		// too, so nothing ever reaches past the shell's edge. Its shadow is
+		// painted outside the clipped body, where it can ring the capsule.
+		gw, gh := min(cw, shellW), min(ch, shellH)
+		ui.Box(c.Key("fb-glow")).Absolute().Top(shellH-gh).Left((shellW-gw)/2).
+			Width(gw).Height(gh).Radius(0, 0, min(botR, gh/2), min(botR, gh/2)).
 			Background(ui.Hex("#000000")).
-			Shadow(0, 6, 26, -2, col.Alpha(r)).
-			Border(0.5, col.Alpha(r)).PassThrough()
-		body := ui.Column(c.Key("fb-body")).Absolute().Top(shellH - ch).Left((shellW - cw) / 2).
-			Width(cw).Height(ch).Justify(ui.End).PassThrough().
-			Opacity(min(max(peekK, 0), 1))
-		body.Children(func() {
-			ui.Row(c.Key("fb-msg")).Height(fbBody).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(fbGap).Children(func() {
-				dot := ui.Row(c.Key("fb-dot")).Size(fbDot, fbDot).Radius(fbDot / 2).Background(col).Center()
-				if g := f.glyph(); g != "" {
-					dot.Children(func() { ui.Text(c, g).FontSize(10).FontWeight(800).TextColor(ui.Hex("#000000")) })
-				}
-				ui.Text(c.Key("fb-text"), f.text).SingleLine().FontSize(12).FontWeight(600).
-					TextColor(ink).MaxWidth(textW)
+			Shadow(0, 6, 26, -2, col.Alpha(alpha)).
+			Border(0.5, col.Alpha(alpha)).PassThrough()
+		// The words keep their final size but are clipped to the drawn
+		// shell, uncovered as it grows — the same reveal as the panel's.
+		clip := ui.Column(c.Key("fb-clip")).Absolute().Top(0).Left(0).
+			Width(shellW).Height(shellH).Clip().Justify(ui.End).AlignItems(ui.Center).PassThrough()
+		clip.Children(func() {
+			body := ui.Column(c.Key("fb-body")).Width(cw).Height(ch).Justify(ui.End).
+				Opacity(min(max(peekK, 0), 1))
+			body.Children(func() {
+				ui.Row(c.Key("fb-msg")).Height(fbBody).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(fbGap).Children(func() {
+					dot := ui.Row(c.Key("fb-dot")).Size(fbDot, fbDot).Radius(fbDot / 2).Background(col).Center()
+					if g := f.glyph(); g != "" {
+						dot.Children(func() { ui.Text(c, g).FontSize(10).FontWeight(800).TextColor(ui.Hex("#000000")) })
+					}
+					ui.Text(c.Key("fb-text"), f.text).SingleLine().FontSize(12).FontWeight(600).
+						TextColor(ink).MaxWidth(textW)
+				})
 			})
 		})
 	})

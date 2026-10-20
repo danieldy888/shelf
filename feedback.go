@@ -60,11 +60,12 @@ var (
 const openOvershoot = 0.045
 
 // shellMotion is what view() drew last: the drawn shell's size, for the
-// window frame to hold while the springs are in flight, and whether the
-// opening spring has come to rest.
+// window frame to hold while the springs are in flight, and whether a
+// spring is still on its way (the frame keeps overshoot room until then).
 type shellMotion struct {
 	w, h       float32
 	openMoving bool // the opening spring has not come to rest
+	sizeMoving bool // a peek-shape morph has not come to rest
 	peek       bool // w and h are the peek shape's, not the panel's
 }
 
@@ -79,6 +80,7 @@ type feedback struct {
 	pillW      float32
 	drawn      bool        // drawn in the last frame (the window's command-line tests read it)
 	retracting bool        // the shell is folding back from the capsule
+	armed      bool        // its clock (hold, shake) has started on the first drawn frame
 	job        *convertJob // the job whose progress the capsule shows
 }
 
@@ -113,9 +115,10 @@ func (f *feedback) glyph() string {
 	return "✓"
 }
 
-// show turns a toast into a capsule: a success holds fbHoldOK and a failure
-// fbHoldErr, both counted from the moment it has grown out of the notch.
-// The text is measured again by the next frame.
+// show turns a toast into a capsule. The hold is not counted from here: the
+// panel may still be folding away, so the capsule arms its own clock the
+// first frame it actually draws (see arm), giving a full grow plus hold.
+// until is a posting-side deadline so a toast that never shows still dies.
 func (f *feedback) show(text string, isErr bool, now time.Time) {
 	f.text, f.isErr, f.live = text, isErr, false
 	f.shownAt = now
@@ -123,7 +126,23 @@ func (f *feedback) show(text string, isErr bool, now time.Time) {
 	if isErr {
 		f.until = now.Add(fbExpand + fbHoldErr)
 	}
+	f.armed = false
 	f.pillW = 0
+}
+
+// arm starts the capsule's own clock when its first frame draws — the hold
+// and the shake are measured from the grow-out the user can see, not from
+// the post, which can precede the end of the panel's close.
+func (f *feedback) arm(now time.Time) {
+	if f.armed || f.live {
+		return
+	}
+	f.shownAt = now
+	f.until = now.Add(fbExpand + fbHoldOK)
+	if f.isErr {
+		f.until = now.Add(fbExpand + fbHoldErr)
+	}
+	f.armed = true
 }
 
 // follow points the capsule at the running conversion job, so a panel that
@@ -141,9 +160,11 @@ func (f *feedback) follow(a *shelf, now time.Time) {
 		if !ok {
 			return
 		}
+		// Re-entering after a transient toast has expired keeps the same
+		// job but must drop the toast's stale deadline — live has none.
+		f.until = time.Time{}
 		if f.job != job {
 			f.shownAt = now
-			f.until = time.Time{}
 		}
 		f.job = job
 		f.text, f.isErr, f.live = text, false, true
@@ -194,8 +215,8 @@ func measureFallback(text string) float32 {
 	return w
 }
 
-// shake is the capsule's horizontal offset now: one decaying swing, left
-// first, that starts once it has grown out.
+// shake is the capsule's horizontal offset now: one decaying left-right
+// pass, left then right, that starts once it has grown out.
 func (f *feedback) shake(now time.Time, reduceMotion bool) float32 {
 	if !f.isErr || reduceMotion {
 		return 0
@@ -205,19 +226,33 @@ func (f *feedback) shake(now time.Time, reduceMotion bool) float32 {
 		return 0
 	}
 	t := float32(d) / float32(fbShake)
-	// One swing left first, then right, each 0.2 of the run apart, losing a
-	// tenth of its size every step: the design's decaying keyframes.
-	return -fbShakeX * (1 - t) * float32(math.Sin(2*math.Pi*float64(t)/0.4))
+	// One cycle, left first, its second swing at about half height —
+	// the design's decaying keyframes in one pass.
+	return -fbShakeX * (1 - 0.6*t) * float32(math.Sin(2*math.Pi*float64(t)))
 }
 
-// glow is the glow's opacity: a steady 0.9 for a verdict, a slow breath for
-// a job that is still running.
+// glow is the glow's alpha: a steady 0.9 for a verdict, a slow breath
+// (0.3–0.9) for a job that is still running.
 func (f *feedback) glow(now time.Time, reduceMotion bool) float32 {
 	if !f.live || reduceMotion {
 		return 0.9
 	}
 	k := float32((now.UnixNano() % int64(fbBreathe))) / float32(fbBreathe)
-	return 0.35 + 0.65*(0.5-0.5*float32(math.Cos(2*math.Pi*float64(k))))
+	return 0.3 + 0.6*(0.5-0.5*float32(math.Cos(2*math.Pi*float64(k))))
+}
+
+// animating reports whether the capsule still moves by itself — the glow
+// breathing or the failure shake — so the caller requests per-frame redraws
+// only then. A capsule holding still costs nothing.
+func (f *feedback) animating(now time.Time, reduceMotion bool) bool {
+	if reduceMotion {
+		return false
+	}
+	if f.live {
+		return true
+	}
+	d := now.Sub(f.shownAt.Add(fbExpand))
+	return f.isErr && d >= 0 && d < fbShake
 }
 
 // settle is the time the capsule's fate changes by itself: the end of its
@@ -237,20 +272,23 @@ func (a *shelf) capsuleUp(now time.Time) bool {
 		!(a.dragging && !a.ownDrag) && a.fb.up(now)
 }
 
-// schedule keeps frames coming while the capsule moves, and wakes the view
-// when its hold runs out.
+// schedule wakes the view when the capsule's hold runs out, and keeps
+// per-frame redraws coming only while the capsule still moves (the glow's
+// breath, the failure shake). A capsule holding still draws once and idles.
 func (f *feedback) schedule(c *ui.Context, now time.Time) {
 	if t := f.settle(now); !t.IsZero() {
 		c.After(max(t.Sub(now), 0) + 10*time.Millisecond)
 	}
-	if c.Preferences().ReduceMotion {
-		return
+	if f.animating(now, c.Preferences().ReduceMotion) {
+		c.AnimationFrame()
 	}
-	if f.live {
-		c.AnimationFrame() // the glow breathes
-	}
-	if d := now.Sub(f.shownAt.Add(fbExpand)); f.isErr && d >= 0 && d < fbShake {
-		c.AnimationFrame() // one decaying shake
+}
+
+// clearExpired drops a toast whose time ran out once the shell has folded
+// all the way back, so nothing is measured or said about it afterwards.
+func (f *feedback) clearExpired(now time.Time, folded bool) {
+	if folded && !f.up(now) {
+		f.text, f.job = "", nil
 	}
 }
 

@@ -94,6 +94,11 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		// e.g. the capsule just expired or a track stopped playing.
 		pw, ph = max(pw, a.fx.w), max(ph, a.fx.h)
 	}
+	if a.fx.sizeMoving {
+		// A morph in flight overshoots its target by a couple of points
+		// (Bounce 0.15); the strip keeps headroom so no frame is clipped.
+		pw, ph = pw*(1+openOvershoot), ph*(1+openOvershoot)
+	}
 	w := max(int(pw+0.5), notchTriggerWidth)
 	h := max(int(ph+0.5), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	if a.capsuleUp(time.Now()) || a.fb.drawn {
