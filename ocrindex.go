@@ -291,11 +291,11 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 				time.Now().Add(3*time.Second), statusOK)
 		}
 	}) {
-		a.toastStatus("正在识别，请稍候", time.Now().Add(3*time.Second), statusInfo)
+		a.toastProgress("正在识别，请稍候", time.Now().Add(3*time.Second))
 		return
 	}
 	if queued {
-		a.toastStatus("正在识别，完成后自动复制", time.Now().Add(3*time.Second), statusInfo)
+		a.toastProgress("正在识别，完成后自动复制", time.Now().Add(3*time.Second))
 	}
 }
 

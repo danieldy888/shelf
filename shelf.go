@@ -27,9 +27,10 @@ type shelf struct {
 	stop                                       chan struct{}
 	quitting, visible, edgeOpened, received    bool
 	status                                     string
-	statusUntil, statusShown                   time.Time  // statusShown: 首次渲染时刻（toast 生命周期起点）
-	statusKind                                 statusKind // 提示级别：成功 / 普通信息 / 错误（pill 红点、胶囊配色）
-	statusCapsule                              bool       // 面板收起时是否转交刘海胶囊（后台信息不转交）
+	statusUntil, statusShown                   time.Time     // statusShown: 首次渲染时刻（toast 生命周期起点）
+	statusKind                                 statusKind    // 提示级别：成功 / 普通信息 / 错误（pill 红点、胶囊配色）
+	statusCapsule                              bool          // 面板收起时是否转交刘海胶囊（后台信息不转交）
+	statusCapsuleLimit                         time.Duration // progress notes must not occupy the notch for the whole operation
 	x, y                                       int
 	dispBounds                                 mygo.Rectangle
 	frame                                      mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
@@ -131,6 +132,7 @@ func (a *shelf) startMonitoring() {
 					a.syncWindowFrame()
 					a.tickUpdates(now)
 					if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
+						a.dismissReadFeedback(now)
 						a.status, a.statusUntil, a.statusShown = "", time.Time{}, time.Time{}
 						if a.win != nil {
 							a.win.Invalidate()
@@ -140,6 +142,7 @@ func (a *shelf) startMonitoring() {
 					// 从首次渲染起 toastLife 后清掉。
 					if a.status != "" && a.statusUntil.IsZero() && !a.statusShown.IsZero() &&
 						now.After(a.statusShown.Add(toastLife)) {
+						a.dismissReadFeedback(now)
 						a.status, a.statusShown = "", time.Time{}
 						if a.win != nil {
 							a.win.Invalidate()
@@ -170,25 +173,40 @@ const (
 // the panel is still folding away, since the capsule's own clock starts
 // when it can appear.
 func (a *shelf) toastStatus(msg string, until time.Time, kind statusKind) {
-	a.toast(msg, until, kind, true)
+	a.toast(msg, until, kind, true, 0)
+}
+
+// toastProgress preserves the panel deadline but caps the capsule's visible
+// span. Completion and failure post their own unrestricted result.
+func (a *shelf) toastProgress(msg string, until time.Time) {
+	a.toast(msg, until, statusInfo, true, 4*time.Second)
 }
 
 // toastQuiet posts a status that never grows the notch capsule: background
 // bookkeeping the user did not ask for (automatic cleanup) waits for the
 // panel's next opening in the bottom pill.
 func (a *shelf) toastQuiet(msg string, until time.Time, kind statusKind) {
-	a.toast(msg, until, kind, false)
+	a.toast(msg, until, kind, false, 0)
 }
 
-func (a *shelf) toast(msg string, until time.Time, kind statusKind, capsule bool) {
+func (a *shelf) toast(msg string, until time.Time, kind statusKind, capsule bool, limit time.Duration) {
 	a.status = msg
 	a.statusUntil, a.statusShown, a.statusKind, a.statusCapsule = until, time.Time{}, kind, capsule
+	a.statusCapsuleLimit = limit
 	if !a.visible && capsule {
-		a.fb.show(msg, kind, until, time.Now())
+		a.showStatusFeedback(time.Now())
 	}
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+}
+
+func (a *shelf) showStatusFeedback(now time.Time) {
+	until := a.statusUntil
+	if limit := a.statusCapsuleLimit; limit > 0 && (until.IsZero() || until.After(now.Add(limit))) {
+		until = now.Add(limit)
+	}
+	a.fb.show(a.status, a.statusKind, until, now)
 }
 
 // handoffStatus moves a live status to the notch capsule when the panel
@@ -201,26 +219,30 @@ func (a *shelf) handoffStatus(now time.Time) {
 	if a.status == "" || !a.statusCapsule {
 		return
 	}
-	if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
-		return // expired with the panel
+	if a.dismissReadFeedback(now) {
+		return
 	}
-	var seen time.Duration
-	if !a.statusShown.IsZero() {
-		seen = now.Sub(a.statusShown)
+	if !a.statusUntil.IsZero() && now.After(a.statusUntil) {
+		return
 	}
 	line, _, _ := strings.Cut(a.status, "\n")
 	if f := &a.fb; f.text == line && f.armed && f.up(now) {
-		// The capsule showed it and the panel pill showed it: enough
-		// exposure ends it, otherwise it plays out its remaining time.
-		if seen >= a.statusKind.holdFloor() {
-			f.text, f.job = "", nil
-		}
-		return
+		return // continue only the capsule's original remaining time
 	}
-	if seen >= a.statusKind.holdFloor() {
-		return // read in the panel: no replay in the capsule
+	a.showStatusFeedback(now)
+}
+
+// dismissReadFeedback also runs before the panel expires its text, so an
+// unseen capsule cannot outlive the acknowledgement already read there.
+func (a *shelf) dismissReadFeedback(now time.Time) bool {
+	if a.statusShown.IsZero() || now.Sub(a.statusShown) < a.statusKind.holdFloor() {
+		return false
 	}
-	a.fb.show(a.status, a.statusKind, a.statusUntil, now)
+	line, _, _ := strings.Cut(a.status, "\n")
+	if f := &a.fb; f.text == line {
+		f.text, f.job, f.pausedAt = "", nil, time.Time{}
+	}
+	return true
 }
 
 func (a *shelf) receive(data transfer.Data) error {

@@ -280,7 +280,7 @@ func (f *usageFeature) requestRefresh() {
 	case wait > 0:
 		f.host.toastStatus("刚查过，"+usageWait(wait)+"后可再刷新", time.Time{}, statusInfo)
 	case started:
-		f.host.toastStatus("正在刷新…", time.Time{}, statusInfo)
+		f.host.toastProgress("正在刷新…", time.Time{})
 	default:
 		f.host.toastStatus("没有可刷新的来源", time.Time{}, statusInfo)
 	}

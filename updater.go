@@ -98,7 +98,7 @@ func (a *shelf) checkUpdates(user bool) {
 	a.updateChecking = true
 	if user {
 		// In-progress note: the check is fast, so the toast outlives it rarely.
-		a.toastStatus("正在检查更新…", time.Now().Add(6*time.Second), statusInfo)
+		a.toastProgress("正在检查更新…", time.Now().Add(6*time.Second))
 	}
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
@@ -163,7 +163,7 @@ func (a *shelf) installUpdate() {
 		return
 	}
 	a.updateInstalling, a.updateProgress = true, 0
-	a.toastStatus(fmt.Sprintf("正在下载更新 v%s…", up.Version), time.Now().Add(updateInstallTimeout), statusInfo)
+	a.toastProgress(fmt.Sprintf("正在下载更新 v%s…", up.Version), time.Now().Add(updateInstallTimeout))
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), updateInstallTimeout)
 		defer cancel()

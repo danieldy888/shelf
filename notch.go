@@ -214,7 +214,7 @@ func (a *shelf) shellSize(openK, peekK, peekW, peekH, panelH float32) (w, h floa
 // keeps its click box the same size as the picture.
 func (a *shelf) peekPillRect() mygo.Rectangle {
 	w, h := a.peekSize()
-	if (a.fb.drawn || a.fb.retracting) && a.fx.w > 0 {
+	if (a.peeking || a.fb.drawn || a.fb.retracting) && a.fx.w > 0 {
 		w, h = a.fx.w, a.fx.h
 	}
 	return mygo.Rectangle{X: a.stripCenter() - int(w/2), Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
@@ -241,8 +241,8 @@ func (a *shelf) mouseDown(inside bool, p mygo.Point) {
 	// the player opens the shelf for presses elsewhere on it. The window
 	// keeps ignoring the mouse while the capsule shows, so every press
 	// there arrives through this monitor and clicks elsewhere pass through.
-	if (a.peeking || a.fb.drawn || a.fb.retracting) && !a.visible && a.overPeekPill(p) {
-		if inside && a.peeking && a.np != nil && a.np.showsPlayer() {
+	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && (inside || a.overPeekPill(p)) {
+		if inside && a.overPeekPill(p) && a.peeking && a.np != nil && a.np.showsPlayer() {
 			return
 		}
 		a.show(false)
@@ -293,6 +293,11 @@ func (a *shelf) windowLevel() int {
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
 	acceptAll := a.visible || a.fx.openK > 0.01 || a.dragging || a.pointerDrag || a.peeking || a.peekProgress > 0.01
+	// A hovered shape only takes the mouse over its drawn body. Native
+	// shadow/ear margins must not block menu-bar items or windows below.
+	if a.winH != 0 && !a.visible && a.fx.openK <= 0.01 && !a.dragging && !a.pointerDrag {
+		acceptAll = acceptAll && a.overPeekPill(cursorPoint())
+	}
 	a.ignoringMouse = !acceptAll
 	if a.win == nil {
 		return

@@ -19,11 +19,16 @@ import (
 // Run with SHELF_BASKET_SMOKE=1.
 func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 	a := redesignShelf(t)
+	oldCursor := cursorPoint
+	t.Cleanup(func() { onMain(func() { cursorPoint = oldCursor }) })
 	onMain(func() {
 		a.settings.IslandNowPlaying = true
 		fakeTrack(a, true) // the strip reserves the hover player's size
 		a.modules = []module{a.np}
 		a.place(mygo.Screen.CursorScreenPoint())
+		cursorPoint = func() mygo.Point {
+			return mygo.Point{X: a.stripCenter(), Y: a.y + a.notchH + 20}
+		}
 		a.peeking, a.peekProgress, a.visible, a.progress = false, 0, false, 0
 		a.syncMousePassThrough()
 		a.win.Invalidate()
