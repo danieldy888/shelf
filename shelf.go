@@ -62,6 +62,7 @@ type shelf struct {
 	settingsPrevPID                            int            // app to hand the keyboard back to when it closes
 	loginOn                                    bool           // 开机时自动启动，read back each time the window opens
 	loginErr                                   string         // last SetOpenAtLogin failure, shown inline
+	rn                                         *renameUI      // 重新命名 window session; nil until first use
 	settingsScroll                             ui.ScrollState // the Settings window's scroll position
 	update                                     *mygo.Update   // version the feed offers, waiting for the user
 	updateChecking, updateInstalling           bool

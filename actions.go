@@ -76,6 +76,18 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 		}
 	}
 	a.convertMenu(m, items)
+	// 批量改名：全部目标都还存在于磁盘上的真实文件/文件夹时可用
+	//（Shelf 自己管的截图、剪贴板图片、文字项和转换产物不可改名）。
+	allRenameable := len(items) > 0
+	for _, it := range items {
+		if !a.renameable(it) {
+			allRenameable = false
+			break
+		}
+	}
+	if m.Item(renameTitle(len(items)) + "…").Disabled(!allRenameable).Chosen() {
+		a.openRename(items)
+	}
 	m.Separator()
 	copyLabel := "复制文字"
 	if files {

@@ -1,0 +1,356 @@
+//go:build darwin
+
+package main
+
+// Tests for the 重新命名 window: the headless view drives the real controls
+// (mode segments, inputs, preview, 改名, 撤销) against a real store and
+// real files in a temporary directory; the menu tests prove where the
+// entry appears and when it is greyed.
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/store"
+)
+
+// renameShelf is a headless shelf whose tray holds the named files in
+// display order (first frontmost), plus the real store behind it.
+func renameShelf(t *testing.T, names ...string) (*shelf, *ui.Tester, string) {
+	t.Helper()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	dir := t.TempDir()
+	for i := len(names) - 1; i >= 0; i-- {
+		p := filepath.Join(dir, names[i])
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AddFiles([]string{p}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &shelf{store: s, dataDir: s.Root,
+		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	return a, ui.NewTester(func(c *ui.Context) { a.renameView(c) }, renameWidth, renameHeight), dir
+}
+
+// openHeadlessRename starts a rename session without a native window:
+// the view is what a real open renders, so tests drive it directly.
+func openHeadlessRename(t *testing.T, a *shelf) *renameUI {
+	t.Helper()
+	if a.rn == nil {
+		a.rn = &renameUI{host: a}
+	}
+	r := a.rn
+	r.items = a.visibleItems()
+	r.mode, r.find, r.replace = int(modeReplace), "", ""
+	r.addText, r.addSeg = "", 1
+	r.fmtName, r.fmtStartText, r.digitsSeg, r.posSeg = "", "1", 0, 1
+	r.done, r.err, r.booted = nil, "", false
+	return r
+}
+
+func selectAllTray(t *testing.T, a *shelf) {
+	t.Helper()
+	var ids []string
+	for _, it := range a.visibleItems() {
+		ids = append(ids, it.ID)
+	}
+	a.selection.onlyAll(ids)
+}
+
+// The menu carries 重新命名 … before the copy group, enabled only when
+// every target is a real file still on disk; Shelf's own items grey it.
+func TestRenameMenuItem(t *testing.T) {
+	a, _, _ := renameShelf(t, "a.txt", "b.txt")
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	a.ensurePages()
+	view.Frame()
+	if err := view.RightClick("a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	menu := view.Menu()
+	i := slices.Index(menu, "重新命名…")
+	if i < 0 {
+		t.Fatalf("single file menu lacks 重新命名…: %v", menu)
+	}
+	if copyIdx := slices.Index(menu, "复制路径"); copyIdx >= 0 && copyIdx < i {
+		t.Fatalf("rename must come before the copy group: %v", menu)
+	}
+	view.CloseMenu()
+
+	selectAllTray(t, a)
+	view.Frame()
+	if err := view.RightClick("a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(view.Menu(), "重新命名 2 项…") {
+		t.Fatalf("multi-selection label: %v", view.Menu())
+	}
+	view.CloseMenu()
+
+	// A text item disables the entry: mixed selections never rename half.
+	if err := a.store.AddText("hello"); err != nil {
+		t.Fatal(err)
+	}
+	selectAllTray(t, a)
+	view.Frame()
+	if err := view.RightClick("hello"); err != nil {
+		t.Fatal(err)
+	}
+	view.CloseMenu()
+	if err := view.RightClick("a.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := view.ChooseMenuItem("重新命名 3 项…"); err == nil {
+		t.Fatal("a mixed selection must not start a rename")
+	}
+	view.CloseMenu()
+}
+
+// Only plain on-disk files qualify: screenshots, clipboard images,
+// text and converted outputs are Shelf-managed.
+func TestRenameableExcludesManagedItems(t *testing.T) {
+	a, _, _ := renameShelf(t, "keep.txt")
+	if !a.renameable(a.visibleItems()[0]) {
+		t.Fatal("a real file must be renameable")
+	}
+	shot := store.Item{Kind: store.KindImage, Path: filepath.Join(a.dataDir, "images", "x.png")}
+	if a.renameable(shot) {
+		t.Fatal("a managed screenshot must not be renameable")
+	}
+	if a.renameable(store.Item{Kind: store.KindText, Text: "hi"}) {
+		t.Fatal("text must not be renameable")
+	}
+	conv := store.Item{Kind: store.KindFile, Path: filepath.Join(a.dataDir, "converted", "x.jpg"), Converted: true}
+	if a.renameable(conv) {
+		t.Fatal("a converted output must not be renameable")
+	}
+	inside := store.Item{Kind: store.KindFile, Path: filepath.Join(a.dataDir, "state.json")}
+	if a.renameable(inside) {
+		t.Fatal("a file inside the data directory must not be renameable")
+	}
+	if a.renameable(store.Item{Kind: store.KindFile, Path: filepath.Join(a.dataDir, "a.txt"), Missing: true}) {
+		t.Fatal("a missing file must not be renameable")
+	}
+}
+
+// The preview updates live from the inputs and the same controls apply
+// the batch: replace text, then the tray paths follow the disk.
+func TestRenameViewReplaceApplies(t *testing.T) {
+	a, view, dir := renameShelf(t, "IMG 1.jpg", "IMG 2.jpg")
+	selectAllTray(t, a)
+	view.Frame()
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	view.Frame()
+	if !view.HasText("IMG 1.jpg") || !view.HasText("IMG 2.jpg") {
+		t.Fatalf("preview lacks the old names: %v", view.Texts())
+	}
+	if !view.HasText("名字没有变化") {
+		t.Fatalf("an empty find must report no change: %v", view.Texts())
+	}
+	// The order of the segment labels decides default placement (after).
+	if err := view.Click("要替换的文字"); err != nil {
+		t.Fatal(err)
+	}
+	view.Type("IMG")
+	view.Frame()
+	if err := view.Click("替换后的文字"); err != nil {
+		t.Fatal(err)
+	}
+	view.Type("照片")
+	view.Frame()
+	if !view.HasText("照片 1.jpg") || !view.HasText("将重新命名 2 项") {
+		t.Fatalf("live preview did not update: %v", view.Texts())
+	}
+	if err := view.Click("应用改名"); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"照片 1.jpg", "照片 2.jpg"} {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Fatalf("disk lacks %s: %v", n, err)
+		}
+	}
+	got := []string{a.store.Items[1].Path, a.store.Items[0].Path}
+	want := []string{filepath.Join(dir, "照片 2.jpg"), filepath.Join(dir, "照片 1.jpg")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("tray paths = %v, want %v", got, want)
+	}
+	view.Frame()
+	if !view.HasText("已重新命名 2 项") || !view.HasText("撤销") {
+		t.Fatalf("done view missing: %v", view.Texts())
+	}
+	// Undo puts the disk and the tray back.
+	if err := view.Click("撤销这次改名"); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"IMG 1.jpg", "IMG 2.jpg"} {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Fatalf("undo lost %s: %v", n, err)
+		}
+	}
+	if data, _ := os.ReadFile(a.store.Items[0].Path); string(data) != "x" || !strings.HasSuffix(a.store.Items[0].Path, "IMG 1.jpg") {
+		t.Fatalf("undo did not restore the tray path: %q", a.store.Items[0].Path)
+	}
+}
+
+// Mode 添加文字 adds on the chosen side; 名称加序号 numbers with the
+// requested start and padding. Extensions never enter the name math.
+func TestRenameViewAddAndFormat(t *testing.T) {
+	a, view, dir := renameShelf(t, "a.txt", "b.txt")
+	selectAllTray(t, a)
+	view.Frame()
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	view.Frame()
+	if err := view.Click("添加文字"); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if err := view.Click("要添加的文字"); err != nil {
+		t.Fatal(err)
+	}
+	view.Type("新-")
+	r.addSeg = 0 // 名称前
+	view.Frame()
+	if !view.HasText("新-a.txt") {
+		t.Fatalf("add-before preview: %v", view.Texts())
+	}
+	r.addSeg = 1 // 名称后
+	view.Frame()
+	if !view.HasText("a新-.txt") {
+		t.Fatalf("add-after preview: %v", view.Texts())
+	}
+	if err := view.Click("名称加序号"); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if err := view.Click("自定名称（可留空）"); err != nil {
+		t.Fatal(err)
+	}
+	view.Type("旅行")
+	if err := view.Click("1"); err != nil { // the start input's placeholder
+		t.Fatal(err)
+	}
+	// Select all and retype the start number.
+	view.Command("selectAll")
+	view.Type("7")
+	if err := view.Click("2"); err != nil { // two digits
+		t.Fatal(err)
+	}
+	view.Frame()
+	if !view.HasText("旅行 07.txt") || !view.HasText("旅行 08.txt") {
+		t.Fatalf("format preview: %v", view.Texts())
+	}
+	if err := view.Click("应用改名"); err != nil {
+		t.Fatal(err)
+	}
+	ents, _ := os.ReadDir(dir)
+	var got []string
+	for _, e := range ents {
+		got = append(got, e.Name())
+	}
+	for _, n := range []string{"旅行 07.txt", "旅行 08.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Fatalf("disk lacks %s: %v (have %v, err=%q)", n, err, got, r.err)
+		}
+	}
+}
+
+// A conflict shows its reason in the preview, 改名 stays disabled and
+// nothing on disk moves.
+func TestRenameViewConflictBlocksApply(t *testing.T) {
+	a, view, dir := renameShelf(t, "a.txt")
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	selectAllTray(t, a)
+	view.Frame()
+	// An occupied target: another file already named a-new.txt.
+	if err := os.WriteFile(filepath.Join(dir, "taken.txt"), []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.find, r.replace = "a", "taken"
+	view.Frame()
+	if !view.HasText("已存在同名文件") || !view.HasText("有 1 项冲突") {
+		t.Fatalf("conflict row missing: %v", view.Texts())
+	}
+	// The button is disabled: a click is ignored, so nothing applies.
+	if err := view.Click("应用改名"); err == nil {
+		if r.done != nil {
+			t.Fatal("apply must be disabled while a row conflicts")
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(data) != "x" {
+		t.Fatal("a blocked apply moved a file")
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "taken.txt")); string(data) != "y" {
+		t.Fatal("a blocked apply touched the occupied target")
+	}
+	// Fixing the conflict re-enables the apply.
+	r.replace = "renamed"
+	view.Frame()
+	if !view.HasText("将重新命名 1 项") {
+		t.Fatalf("resolved conflict must re-enable: %v", view.Texts())
+	}
+}
+
+// Undo refuses to overwrite a name taken since the rename, and says so.
+func TestRenameUndoOccupied(t *testing.T) {
+	a, view, dir := renameShelf(t, "a.txt")
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	r.find, r.replace = "a", "b"
+	view.Frame()
+	r.apply()
+	if r.done == nil {
+		t.Fatalf("apply failed: %s", r.err)
+	}
+	// Somebody takes the original name after the rename.
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	r.undo()
+	if r.done == nil {
+		t.Fatal("a failed undo must keep the batch undoable")
+	}
+	if !strings.Contains(r.err, "已存在同名文件") {
+		t.Fatalf("undo error = %q", r.err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(data) != "new" {
+		t.Fatal("undo overwrote the newer file")
+	}
+}
+
+// Cancel and Enter are the window's keys; the view registers them on the
+// window's shortcut scope (proven through the headless shortcuts).
+func TestRenameTitleAndFrame(t *testing.T) {
+	if got := renameTitle(1); got != "重新命名" {
+		t.Fatalf("single title = %q", got)
+	}
+	if got := renameTitle(3); got != "重新命名 3 项" {
+		t.Fatalf("plural title = %q", got)
+	}
+	work := rectHelper(0, 0, 1440, 900)
+	f := centeredFrame(renameWidth, renameHeight, work)
+	if f.Width != renameWidth || f.Height != renameHeight ||
+		f.X != (1440-renameWidth)/2 || f.Y != (900-renameHeight)/2 {
+		t.Fatalf("frame = %+v", f)
+	}
+	// Clamped into a small display's work area, never off-screen.
+	small := centeredFrame(renameWidth, renameHeight, rectHelper(0, 0, 300, 200))
+	if small.X != 0 || small.Y != 0 {
+		t.Fatalf("small frame = %+v", small)
+	}
+}
