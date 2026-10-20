@@ -11,6 +11,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -171,6 +172,40 @@ func (r *renameUI) setErr(msg string) {
 	r.repaint()
 }
 
+// fail shows msg where the user is looking: inline while the window is
+// open, and in the panel's error pill when it is closed — the 撤销 pill's
+// own case, where an inline message would be invisible.
+func (r *renameUI) fail(msg string) {
+	r.err = msg
+	if r.win != nil {
+		r.repaint()
+		return
+	}
+	r.host.toastStatus(msg, time.Now().Add(8*time.Second), true)
+}
+
+// undoBlockedName names an original name a batch's undo cannot go back to
+// because something else holds it now.
+func undoBlockedName(ops []renameOp) string {
+	for _, op := range ops {
+		st, err := os.Lstat(op.dst)
+		if err != nil || sameFile(op.src, st) {
+			continue
+		}
+		return filepath.Base(op.dst)
+	}
+	return ""
+}
+
+// undoErr words a failed undo: a taken original name is named outright,
+// everything else keeps the executor's explanation.
+func undoErr(ops []renameOp, err error) string {
+	if name := undoBlockedName(ops); name != "" {
+		return fmt.Sprintf("无法撤销：「%s」这个名字已被别的文件占用", name)
+	}
+	return "无法撤销：" + err.Error()
+}
+
 // repaint redraws the rename window and the panel (the 撤销 pill lives
 // there), skipping whichever is not up.
 func (r *renameUI) repaint() {
@@ -277,7 +312,7 @@ func (r *renameUI) undo() {
 		return
 	}
 	if err := execRename(d.ops); err != nil {
-		r.setErr("无法撤销：" + err.Error())
+		r.fail(undoErr(d.ops, err))
 		return
 	}
 	if _, err := r.host.store.UpdatePaths(d.paths); err != nil {

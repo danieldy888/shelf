@@ -326,7 +326,8 @@ func TestRenameUndoOccupied(t *testing.T) {
 	if r.done == nil {
 		t.Fatal("a failed undo must keep the batch undoable")
 	}
-	if !strings.Contains(r.err, "已存在同名文件") {
+	// With the window open the message stays inline, naming the file.
+	if !strings.Contains(r.err, "已被别的文件占用") || !strings.Contains(r.err, "a.txt") {
 		t.Fatalf("undo error = %q", r.err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(data) != "new" {
@@ -565,5 +566,39 @@ func TestRenameableDataDirSpellings(t *testing.T) {
 		if got := a.renameable(it); got != c.want {
 			t.Fatalf("%s: renameable(%q) = %v, want %v", c.name, c.p, got, c.want)
 		}
+	}
+}
+
+// 撤销 from the panel pill can fail after the window closed (an original
+// name was taken since). The failure must reach the user through the
+// panel's error pill, and the file holding the name must stay untouched.
+func TestRenameUndoPillReportsTakenName(t *testing.T) {
+	a, view, dir := renameShelf(t, "a.txt")
+	selectAllTray(t, a)
+	view.Frame()
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	r.find, r.replace = "a", "b"
+	view.Frame()
+	r.apply()
+	if r.done == nil {
+		t.Fatalf("apply failed: %s", r.err)
+	}
+	a.renameClosed() // the pill is the only surface left
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.undo()
+	if !a.statusErr || !strings.Contains(a.status, "已被别的文件占用") {
+		t.Fatalf("status = %q err=%v, want the panel error naming the taken name", a.status, a.statusErr)
+	}
+	if !strings.Contains(a.status, "a.txt") {
+		t.Fatalf("status %q must name the file", a.status)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "a.txt")); string(data) != "new" {
+		t.Fatal("the failed undo overwrote the file that holds the original name")
+	}
+	if r.done == nil {
+		t.Fatal("a failed undo must keep the batch undoable")
 	}
 }

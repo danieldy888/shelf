@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -508,8 +509,8 @@ func TestPlanRenameFullPathTooLong(t *testing.T) {
 	}
 	item := fileItem(filepath.Join(deep, strings.Repeat("n", 220)+".txt"))
 	pl := planRename([]store.Item{item}, renameParams{mode: modeReplace, find: "x", replace: "y"})
-	if pl.rows[0].warn != "路径过长" {
-		t.Fatalf("warn = %q, want 路径过长 (path %d bytes)", pl.rows[0].warn, len(pl.rows[0].newPath))
+	if pl.rows[0].warn != "路径太长" {
+		t.Fatalf("warn = %q, want 路径太长 (path %d bytes)", pl.rows[0].warn, len(pl.rows[0].newPath))
 	}
 	// A path just under the limit plans on (the file itself is absent, so
 	// the row reports that instead — proof the length check passed).
@@ -542,5 +543,53 @@ func TestDiskConflictRecognizesMovingBatchItem(t *testing.T) {
 	}
 	if got := diskConflict(rows, 1); got != "" {
 		t.Fatalf("a target that is the batch's own moving file must be free, got %q", got)
+	}
+}
+
+// The phase-1 temp name is longer than most targets, so the preview must
+// refuse a path that would only fail once the rename starts.
+func TestPlanRenameTempPathTooLong(t *testing.T) {
+	dir := t.TempDir()
+	for len(dir) < 985 {
+		need := 985 - len(dir) - 1
+		if need > 250 {
+			need = 250
+		}
+		if need < 1 {
+			break
+		}
+		dir = filepath.Join(dir, strings.Repeat("q", need))
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Skipf("cannot build the boundary directory: %v", err)
+		}
+	}
+	if n := len(dir); n < 982 || n > 1010 {
+		t.Skipf("boundary directory is %d bytes, outside 982–1010", n)
+	}
+	f := mkFile(t, dir, "a.txt")
+	pl := planRename([]store.Item{fileItem(f)}, renameParams{mode: modeReplace, find: "a", replace: "b"})
+	if pl.rows[0].warn != "路径太长" || pl.conflicts != 1 || len(pl.ops) != 0 {
+		t.Fatalf("temp path must be refused: warn=%q path=%d temp=%d",
+			pl.rows[0].warn, len(pl.rows[0].newPath), len(dir)+1+renameTempNameLen(0))
+	}
+	if len(pl.rows[0].newPath) > renamePathMax {
+		t.Fatal("the target itself already exceeded the limit; test setup is wrong")
+	}
+	// A directory with room for the temp name plans clean.
+	short := mkFile(t, t.TempDir(), "a.txt")
+	pl = planRename([]store.Item{fileItem(short)}, renameParams{mode: modeReplace, find: "a", replace: "b"})
+	if pl.conflicts != 0 || pl.changed != 1 {
+		t.Fatalf("a short path must plan: %+v", pl.rows[0])
+	}
+}
+
+// The preview's temp-name length must be the real thing: the executor
+// builds prefix + index, and renameTempNameLen sizes the check.
+func TestRenameTempNameLengthMatches(t *testing.T) {
+	prefix := renameTempPrefix()
+	for _, i := range []int{0, 9, 10, 99, 999} {
+		if got, want := len(prefix+strconv.Itoa(i)), renameTempNameLen(i); got != want {
+			t.Fatalf("temp name %d is %d bytes, preview sizes %d", i, got, want)
+		}
 	}
 }

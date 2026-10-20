@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -121,7 +122,7 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 		case len(row.newName) > renameNameMax:
 			row.warn = "名字过长"
 		case len(row.newPath) > renamePathMax:
-			row.warn = "路径过长"
+			row.warn = "路径太长"
 		}
 		pl.rows = append(pl.rows, row)
 	}
@@ -163,15 +164,25 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 		}
 		pl.rows[i] = row
 	}
-	for _, row := range pl.rows {
+	for i := range pl.rows {
+		row := &pl.rows[i]
 		if row.warn != "" {
 			pl.conflicts++
 			continue
 		}
-		if row.newPath != row.oldPath {
-			pl.changed++
-			pl.ops = append(pl.ops, renameOp{src: row.oldPath, dst: row.newPath})
+		if row.newPath == row.oldPath {
+			continue
 		}
+		// The phase-1 temp name is longer than most targets, so a path
+		// that only fits until the rename starts must be refused here —
+		// the executor would fail on it after the plan said it was fine.
+		if len(filepath.Dir(row.oldPath))+1+renameTempNameLen(len(pl.ops)) > renamePathMax {
+			row.warn = "路径太长"
+			pl.conflicts++
+			continue
+		}
+		pl.changed++
+		pl.ops = append(pl.ops, renameOp{src: row.oldPath, dst: row.newPath})
 	}
 	return pl
 }
@@ -288,14 +299,27 @@ func formatSeq(n, digits int) string {
 	return fmt.Sprintf("%0*d", digits, n)
 }
 
-// renameTempPrefix is the marker the phase-1 temp names carry, random per
-// batch so a leftover from a crashed run can never collide.
+const (
+	// renameTempMarker starts every phase-1 temp name; the name is the
+	// marker, renameTempRandomHex hex digits, a dash and the move's index.
+	renameTempMarker    = ".shelf-renaming-"
+	renameTempRandomHex = 16
+)
+
+// renameTempPrefix is the marker with the batch's random digits, so a
+// leftover from a crashed run can never collide with a new batch.
 func renameTempPrefix() string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "shelf-renaming-"
+		return renameTempMarker
 	}
-	return ".shelf-renaming-" + hex.EncodeToString(b[:]) + "-"
+	return renameTempMarker + hex.EncodeToString(b[:]) + "-"
+}
+
+// renameTempNameLen is the length of the temp name the i-th move gets;
+// the preview checks the whole temp path against renamePathMax with it.
+func renameTempNameLen(i int) int {
+	return len(renameTempMarker) + renameTempRandomHex + 1 + len(strconv.Itoa(i))
 }
 
 // stagedMove is one op tracked through the two-phase executor.
@@ -346,7 +370,7 @@ func execRename(ops []renameOp) error {
 		// The temp name is short on purpose: a 250-byte source name must
 		// still fit under NAME_MAX after the marker is added.
 		moves[i] = stagedMove{src: op.src, dst: op.dst,
-			tmp: filepath.Join(filepath.Dir(op.src), fmt.Sprintf("%s%d", prefix, i))}
+			tmp: filepath.Join(filepath.Dir(op.src), prefix+strconv.Itoa(i))}
 	}
 	// Phase 1: everyone to its temp name.
 	for i := range moves {
