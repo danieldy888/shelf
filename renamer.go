@@ -2,10 +2,9 @@
 
 package main
 
-// Batch rename (PLAN.md C): the pure logic — computing new names, checking
-// conflicts, and the two-phase executor — lives here so unit tests can run
-// it without a window. The window and menus are in rename.go and
-// actions.go.
+// Batch rename: the pure logic — computing new names, checking conflicts,
+// and the two-phase executor — lives here so unit tests can run it without
+// a window. The window and menus are in rename.go and actions.go.
 
 import (
 	"crypto/rand"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/text/unicode/norm"
 
 	"shelf/internal/store"
 )
@@ -75,6 +76,11 @@ type renamePlan struct {
 // (NAME_MAX on APFS/HFS+), in bytes.
 const renameNameMax = 255
 
+// renamePathMax is the longest full path accepted, in bytes. PATH_MAX is
+// 1024 including the terminator and macOS accepts 1016 bytes but not 1017
+// (measured on this machine), so that is the limit the preview checks.
+const renamePathMax = 1016
+
 // splitName splits a file name into the base the rename rules act on and
 // the extension that is always kept, as Finder treats it: the last dot
 // starts the extension, except a leading dot alone (.gitignore) which is
@@ -88,11 +94,11 @@ func splitName(name string) (base, ext string) {
 }
 
 // planRename computes every row's new path and flags the conflicts that
-// block 改名: an empty or illegal name, a name over the limit, a target
-// another row also wants, a target already on disk that no row in the
-// batch gives up, or a source that is no longer there. Names that collide
-// are compared case-insensitively because the volumes users rename on
-// almost always are.
+// block 改名: a name or path over the limit, an illegal name, one item
+// sitting inside another, a target another row also wants, a target
+// already on disk that no row in the batch gives up, or a source that is
+// no longer there. Names are compared case-insensitively and in NFC,
+// because that is how APFS treats them.
 func planRename(items []store.Item, p renameParams) renamePlan {
 	pl := renamePlan{rows: make([]renameRow, 0, len(items))}
 	// First pass: new names and the checks that need only the name.
@@ -114,13 +120,31 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 			row.warn = "名字不能包含 / 或 :"
 		case len(row.newName) > renameNameMax:
 			row.warn = "名字过长"
+		case len(row.newPath) > renamePathMax:
+			row.warn = "路径过长"
 		}
 		pl.rows = append(pl.rows, row)
 	}
-	// Second pass: batch-internal duplicates and on-disk targets.
-	// Second pass: batch-internal duplicates and on-disk targets. Rows
-	// converge in pairs — flag both sides of a collision.
+	// Second pass: rows that cannot move together, batch-internal
+	// duplicates and on-disk targets.
 	for i, row := range pl.rows {
+		if row.warn != "" {
+			continue
+		}
+		// A folder and something inside it cannot be renamed at once:
+		// the folder's move takes the inner item's path away with it, so
+		// the inner move would neither land nor be restorable.
+		for j, other := range pl.rows {
+			if j == i || !pathInside(other.oldPath, row.oldPath) {
+				continue
+			}
+			pl.rows[i].warn = "不能同时改文件夹和它里面的项目"
+			if other.warn == "" {
+				pl.rows[j].warn = "不能同时改文件夹和它里面的项目"
+			}
+			break
+		}
+		row = pl.rows[i]
 		if row.warn != "" {
 			continue
 		}
@@ -152,14 +176,33 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 	return pl
 }
 
+// normName folds a file name to Unicode NFC, the form APFS compares by.
+func normName(s string) string { return norm.NFC.String(s) }
+
 // sameNameInDir reports whether two paths are the same file name in the
-// same directory, case-insensitively on the name (APFS's default).
+// same directory, as APFS sees them: case-insensitively and after
+// normalizing both names and their directories.
 func sameNameInDir(a, b string) bool {
 	if a == b {
 		return true
 	}
-	return filepath.Dir(a) == filepath.Dir(b) &&
-		strings.EqualFold(filepath.Base(a), filepath.Base(b))
+	da, db := filepath.Dir(a), filepath.Dir(b)
+	if da != db && normName(filepath.Clean(da)) != normName(filepath.Clean(db)) {
+		return false
+	}
+	return strings.EqualFold(normName(filepath.Base(a)), normName(filepath.Base(b)))
+}
+
+// pathInside reports whether child sits strictly inside parent.
+func pathInside(parent, child string) bool {
+	p, c := filepath.Clean(parent), filepath.Clean(child)
+	if p == c {
+		return false
+	}
+	if p == string(filepath.Separator) {
+		return strings.HasPrefix(c, p)
+	}
+	return strings.HasPrefix(c, p+string(filepath.Separator))
 }
 
 // diskConflict reports why row self's target cannot be taken, "" when it
@@ -258,6 +301,7 @@ func renameTempPrefix() string {
 // stagedMove is one op tracked through the two-phase executor.
 type stagedMove struct {
 	src, tmp, dst string
+	staged        bool // the file sits at tmp
 	done          bool // tmp→dst finished
 }
 
@@ -310,6 +354,7 @@ func execRename(ops []renameOp) error {
 		if err := renameNoClobber(m.src, m.tmp); err != nil {
 			return rollback(moves, fmt.Errorf("无法移动「%s」：%s", filepath.Base(m.src), renameErr(err)))
 		}
+		m.staged = true
 	}
 	// Phase 2: temp names to targets.
 	for i := range moves {
@@ -317,17 +362,19 @@ func execRename(ops []renameOp) error {
 		if err := renameNoClobber(m.tmp, m.dst); err != nil {
 			return rollback(moves, fmt.Errorf("无法命名为「%s」：%s", filepath.Base(m.dst), renameErr(err)))
 		}
-		m.done = true
+		m.staged, m.done = false, true
 	}
 	return nil
 }
 
-// rollback undoes the finished moves after a phase failed. Targets that
-// already moved go back to their sources in reverse order first — a later
-// op's dst may be an earlier op's src, so files return newest first —
-// then the temps still holding files go home. A rollback failure is
-// reported alongside the original error; the file is left where it is,
-// never overwritten away.
+// rollback restores a failed batch. Finished targets first go back to
+// their own temp names, newest first: a later op's target may be an
+// earlier op's original name (the chain a→xa→xxa→xxxa), so returning
+// straight home would hit a file still sitting there. Then every temp
+// that holds a file returns to the name it started with. Moves that never
+// began are neither touched nor reported. A rollback failure is reported
+// alongside the original error; the file is left where it is, never
+// overwritten away.
 func rollback(moves []stagedMove, cause error) error {
 	var stranded []string
 	for i := len(moves) - 1; i >= 0; i-- {
@@ -335,18 +382,22 @@ func rollback(moves []stagedMove, cause error) error {
 		if !m.done {
 			continue
 		}
-		if err := renameNoClobber(m.dst, m.src); err != nil {
+		if err := renameNoClobber(m.dst, m.tmp); err != nil {
 			stranded = append(stranded, filepath.Base(m.dst))
+			continue
 		}
+		m.done, m.staged = false, true
 	}
-	for i := range moves {
+	for i := len(moves) - 1; i >= 0; i-- {
 		m := &moves[i]
-		if m.done {
+		if !m.staged {
 			continue
 		}
 		if err := renameNoClobber(m.tmp, m.src); err != nil {
 			stranded = append(stranded, filepath.Base(m.tmp))
+			continue
 		}
+		m.staged = false
 	}
 	if len(stranded) > 0 {
 		return fmt.Errorf("%v；恢复原状时 %d 项未能改回：%s", cause, len(stranded), strings.Join(stranded, "、"))

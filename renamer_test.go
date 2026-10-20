@@ -164,29 +164,99 @@ func TestPlanRenameConflicts(t *testing.T) {
 	}
 }
 
+// writePuts writes names with distinct contents so a move can be checked
+// by what ended up where, not just by which names exist.
+func writePuts(t *testing.T, dir string, puts map[string]string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for name, body := range puts {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out[name] = p
+	}
+	return out
+}
+
+// readPuts reads the named files back by name.
+func readPuts(t *testing.T, dir string, names ...string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, n := range names {
+		data, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil {
+			t.Fatalf("read %s: %v", n, err)
+		}
+		out[n] = string(data)
+	}
+	return out
+}
+
 // execRename moves the whole batch through temp names, so a↔b and a→b,
 // b→c chains land without overwriting; the tray's order is the op order.
+// Each file holds its own letter so every move can be checked by content.
 func TestExecRenameSwapAndChain(t *testing.T) {
 	dir := t.TempDir()
-	a := mkFile(t, dir, "a.txt")
-	b := mkFile(t, dir, "b.txt")
-	if err := execRename([]renameOp{{a, b}, {b, a}}); err != nil {
+	p := writePuts(t, dir, map[string]string{"a.txt": "A", "b.txt": "B"})
+	if err := execRename([]renameOp{{p["a.txt"], p["b.txt"]}, {p["b.txt"], p["a.txt"]}}); err != nil {
 		t.Fatalf("swap: %v", err)
 	}
-	if data, _ := os.ReadFile(a); string(data) != "x" {
-		t.Fatal("swap clobbered a")
+	if got := readPuts(t, dir, "a.txt", "b.txt"); got["a.txt"] != "B" || got["b.txt"] != "A" {
+		t.Fatalf("swap contents = %v, want a=B b=A", got)
 	}
-	if names := namesIn(t, dir); len(names) != 2 || !names["a.txt"] || !names["b.txt"] {
+	if names := namesIn(t, dir); len(names) != 2 {
 		t.Fatalf("swap left %v", names)
 	}
 
-	// Chain: a→b, b→c where b is taken by the batch.
-	c := mkFile(t, dir, "c.txt")
-	if err := execRename([]renameOp{{a, b}, {b, c}, {c, a}}); err != nil {
+	// Chain: a→b, b→c, c→a (a rotation; every target is a batch source).
+	p["c.txt"] = writePuts(t, dir, map[string]string{"c.txt": "C"})["c.txt"]
+	if err := execRename([]renameOp{
+		{p["a.txt"], p["b.txt"]},
+		{p["b.txt"], p["c.txt"]},
+		{p["c.txt"], p["a.txt"]},
+	}); err != nil {
 		t.Fatalf("chain: %v", err)
+	}
+	if got := readPuts(t, dir, "a.txt", "b.txt", "c.txt"); got["a.txt"] != "C" || got["b.txt"] != "B" || got["c.txt"] != "A" {
+		t.Fatalf("chain contents = %v, want a=C b=B c=A", got)
 	}
 	if names := namesIn(t, dir); len(names) != 3 {
 		t.Fatalf("chain left %v", names)
+	}
+}
+
+// A chain that fails midway restores every original name with its own
+// content: finished targets first return to their temp names (their
+// original name is still held by the next file in the chain), then all
+// temps go home. Nothing may be left under a hidden temp name.
+func TestExecRenameChainFailureRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	p := writePuts(t, dir, map[string]string{
+		"a.txt": "A", "xa.txt": "B", "xxa.txt": "C", "xxxa.txt": "blocked",
+	})
+	err := execRename([]renameOp{
+		{p["a.txt"], p["xa.txt"]},
+		{p["xa.txt"], p["xxa.txt"]},
+		{p["xxa.txt"], p["xxxa.txt"]},
+	})
+	if err == nil {
+		t.Fatal("the occupied chain end must fail")
+	}
+	if !strings.Contains(err.Error(), "已全部恢复原状") {
+		t.Fatalf("error should say everything was restored: %v", err)
+	}
+	got := readPuts(t, dir, "a.txt", "xa.txt", "xxa.txt", "xxxa.txt")
+	want := map[string]string{"a.txt": "A", "xa.txt": "B", "xxa.txt": "C", "xxxa.txt": "blocked"}
+	for name, body := range want {
+		if got[name] != body {
+			t.Fatalf("%s = %q, want %q (all: %v)", name, got[name], body, got)
+		}
+	}
+	for name := range namesIn(t, dir) {
+		if strings.Contains(name, ".shelf-renaming-") {
+			t.Fatalf("rollback left a temp name %q", name)
+		}
 	}
 }
 
@@ -377,5 +447,100 @@ func TestExecRenameFolder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "inner.txt")); err != nil {
 		t.Fatalf("contents must follow the folder: %v", err)
+	}
+}
+
+// A folder and an item inside it cannot be renamed together: the folder's
+// move takes the inner path away, so the batch would strand a file under
+// its temp name.
+func TestPlanRenameRejectsFolderAndInnerItem(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "资料 夹")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inner := mkFile(t, folder, "里面.txt")
+	pl := planRename([]store.Item{fileItem(folder), fileItem(inner)},
+		renameParams{mode: modeAdd, addText: "新-"})
+	if pl.conflicts != 2 || len(pl.ops) != 0 {
+		t.Fatalf("folder + inner must conflict: %+v", pl.rows)
+	}
+	const want = "不能同时改文件夹和它里面的项目"
+	for _, row := range pl.rows {
+		if row.warn != want {
+			t.Fatalf("%s: warn = %q, want %q", row.oldName, row.warn, want)
+		}
+	}
+	// Siblings in the same folder still rename fine.
+	sib := mkFile(t, folder, "旁边.txt")
+	pl = planRename([]store.Item{fileItem(inner), fileItem(sib)},
+		renameParams{mode: modeAdd, addText: "新-"})
+	if pl.conflicts != 0 || pl.changed != 2 {
+		t.Fatalf("siblings must plan clean: %+v", pl.rows)
+	}
+}
+
+// Names are compared in NFC: two rows whose targets differ only by how a
+// character is composed are the same name to APFS, so they conflict.
+func TestPlanRenameNormalizedDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	// Both rows keep their own spelling and shed the same tail, so their
+	// targets are byte-different but the same name to APFS.
+	nfd := fileItem(filepath.Join(dir, "cafe\u0301 1.txt"))
+	nfc := fileItem(filepath.Join(dir, "café 1.txt"))
+	pl := planRename([]store.Item{nfd, nfc}, renameParams{mode: modeReplace, find: " 1", replace: ""})
+	if pl.conflicts != 2 {
+		t.Fatalf("NFC/NFD targets must conflict: %+v", pl.rows)
+	}
+	if pl.rows[0].warn != "和本批其他项目重名" || pl.rows[1].warn != "和本批其他项目重名" {
+		t.Fatalf("warnings = %q %q", pl.rows[0].warn, pl.rows[1].warn)
+	}
+}
+
+// A target name that fits but makes the whole path too long is refused:
+// PATH_MAX is 1024 bytes including the terminator.
+func TestPlanRenameFullPathTooLong(t *testing.T) {
+	dir := t.TempDir()
+	deep := filepath.Join(dir, strings.Repeat("d", 200), strings.Repeat("e", 200),
+		strings.Repeat("f", 200), strings.Repeat("g", 200))
+	if len(deep) < 800 {
+		t.Fatalf("test path unexpectedly short: %d", len(deep))
+	}
+	item := fileItem(filepath.Join(deep, strings.Repeat("n", 220)+".txt"))
+	pl := planRename([]store.Item{item}, renameParams{mode: modeReplace, find: "x", replace: "y"})
+	if pl.rows[0].warn != "路径过长" {
+		t.Fatalf("warn = %q, want 路径过长 (path %d bytes)", pl.rows[0].warn, len(pl.rows[0].newPath))
+	}
+	// A path just under the limit plans on (the file itself is absent, so
+	// the row reports that instead — proof the length check passed).
+	short := fileItem(filepath.Join(dir, strings.Repeat("n", 200)+".txt"))
+	pl = planRename([]store.Item{short}, renameParams{mode: modeReplace, find: "x", replace: "y"})
+	if pl.rows[0].warn != "原文件不存在" {
+		t.Fatalf("short path warn = %q, want 原文件不存在", pl.rows[0].warn)
+	}
+}
+
+// A target already on disk is no conflict when it is a batch item that
+// is moving away, even when the two spellings differ only in Unicode
+// normalization: APFS resolves both to the same file.
+func TestDiskConflictRecognizesMovingBatchItem(t *testing.T) {
+	dir := t.TempDir()
+	nfd := filepath.Join(dir, "cafe\u0301.txt")
+	if err := os.WriteFile(nfd, []byte("nfd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "y.txt"), []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nfc := filepath.Join(dir, "café.txt") // same file as nfd on APFS
+	if _, err := os.Lstat(nfc); err != nil {
+		t.Skipf("this volume does not equate NFC and NFD: %v", err)
+	}
+	rows := []renameRow{
+		{oldPath: nfd, newName: "gone.txt", newPath: filepath.Join(dir, "gone.txt")},
+		{oldPath: filepath.Join(dir, "y.txt"), newName: "café.txt", newPath: nfc},
+	}
+	if got := diskConflict(rows, 1); got != "" {
+		t.Fatalf("a target that is the batch's own moving file must be free, got %q", got)
 	}
 }

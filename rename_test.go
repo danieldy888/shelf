@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -352,5 +353,217 @@ func TestRenameTitleAndFrame(t *testing.T) {
 	small := centeredFrame(renameWidth, renameHeight, rectHelper(0, 0, 300, 200))
 	if small.X != 0 || small.Y != 0 {
 		t.Fatalf("small frame = %+v", small)
+	}
+}
+
+// Renaming a folder carries the tray paths of items inside it, so a later
+// refresh never flags them missing; undo puts both back, and the cached
+// thumbnails are dropped so they decode at the new path.
+func TestRenameNestedItemsFollowFolder(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	root := t.TempDir()
+	folder := filepath.Join(root, "资料 夹")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inner := filepath.Join(folder, "里面.txt")
+	if err := os.WriteFile(inner, []byte("in"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddFiles([]string{inner, folder}); err != nil { // folder newest
+		t.Fatal(err)
+	}
+	a := &shelf{store: s, dataDir: s.Root,
+		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	var folderItem, innerItem store.Item
+	for _, it := range s.Items {
+		if filepath.Base(it.Path) == "资料 夹" {
+			folderItem = it
+		} else {
+			innerItem = it
+		}
+	}
+	view := ui.NewTester(func(c *ui.Context) { a.renameView(c) }, renameWidth, renameHeight)
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	r.items = []store.Item{folderItem} // only the folder is renamed
+	r.find, r.replace = "资料", "资料A"
+	view.Frame()
+	a.thumbnails[innerItem.ID] = &ui.Bitmap{}
+	r.apply()
+	if r.done == nil {
+		t.Fatalf("apply failed: %s", r.err)
+	}
+	folderNew := filepath.Join(root, "资料A 夹")
+	innerNew := filepath.Join(folderNew, "里面.txt")
+	if _, err := os.Stat(innerNew); err != nil {
+		t.Fatalf("nested file did not follow the folder: %v", err)
+	}
+	var gotFolder, gotInner string
+	for _, it := range s.Items {
+		switch it.ID {
+		case folderItem.ID:
+			gotFolder = it.Path
+		case innerItem.ID:
+			gotInner = it.Path
+		}
+	}
+	if gotFolder != folderNew || gotInner != innerNew {
+		t.Fatalf("tray paths = %q, %q; want %q, %q", gotFolder, gotInner, folderNew, innerNew)
+	}
+	if a.thumbnails[innerItem.ID] != nil {
+		t.Fatal("the nested item's cached thumbnail must be dropped")
+	}
+	r.undo()
+	if _, err := os.Stat(inner); err != nil {
+		t.Fatalf("undo did not restore the nested file: %v", err)
+	}
+	for _, it := range s.Items {
+		if it.ID == innerItem.ID && it.Path != inner {
+			t.Fatalf("undo left the nested tray path at %q", it.Path)
+		}
+	}
+}
+
+// Enter goes through apply, which refuses exactly what the button
+// refuses: an unparsable 起始号 must not start a batch.
+func TestRenameApplyGuardBadStart(t *testing.T) {
+	a, view, dir := renameShelf(t, "a.txt")
+	selectAllTray(t, a)
+	view.Frame()
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	r.mode, r.fmtStartText = int(modeFormat), "abc"
+	view.Frame()
+	if !view.HasText("起始号需要是数字") {
+		t.Fatalf("bad start must show a hint: %v", view.Texts())
+	}
+	r.apply()
+	if r.done != nil {
+		t.Fatal("apply must refuse an unparsable start")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("a refused apply moved a file: %v", err)
+	}
+}
+
+// The completion pill lives in the panel, so 撤销 outlives the window and
+// still undoes the batch after it closes.
+func TestRenameUndoPillOutlivesWindow(t *testing.T) {
+	a, view, dir := renameShelf(t, "a.txt")
+	selectAllTray(t, a)
+	view.Frame()
+	r := openHeadlessRename(t, a)
+	r.win = &mygo.Window{}
+	r.find, r.replace = "a", "b"
+	view.Frame()
+	r.apply()
+	if r.done == nil {
+		t.Fatalf("apply failed: %s", r.err)
+	}
+	a.renameClosed()
+	if r.win != nil {
+		t.Fatal("closing must drop the window pointer")
+	}
+	if r.undoUntil.Before(time.Now().Add(9 * time.Second)) {
+		t.Fatalf("closing must restart the pill's clock: %v", r.undoUntil)
+	}
+	panel := ui.NewTester(a.view, panelWidth, panelHeight)
+	panel.Frame()
+	if !panel.HasText("已重新命名 1 项") || !panel.HasText("撤销重新命名") {
+		t.Fatalf("panel lacks the undo pill: %v", panel.Texts())
+	}
+	if err := panel.Click("撤销重新命名"); err != nil {
+		t.Fatal(err)
+	}
+	panel.Frame()
+	if r.done != nil {
+		t.Fatal("undo must consume the batch")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("undo did not restore the file: %v", err)
+	}
+	if panel.HasText("撤销重新命名") {
+		t.Fatal("the pill must go once it was used")
+	}
+}
+
+// The pill retires itself after renameUndoLife.
+func TestRenameUndoPillExpires(t *testing.T) {
+	a := &shelf{}
+	r := &renameUI{host: a, done: &renameDone{ops: []renameOp{{src: "x", dst: "y"}}},
+		undoUntil: time.Now().Add(-time.Second)}
+	a.rn = r
+	renameModule{host: a}.tick(time.Now())
+	if !r.undoUntil.IsZero() {
+		t.Fatalf("expired pill deadline = %v, want zero", r.undoUntil)
+	}
+}
+
+// While the rename window is up the shelf must not grab the global
+// Esc/Space: a click on the panel would otherwise steal them and hide it.
+func TestRenameWindowKeepsPanelKeys(t *testing.T) {
+	a := &shelf{}
+	if !a.keysAreOurs() {
+		t.Fatal("a shelf with no windows may hold the keys")
+	}
+	a.rn = &renameUI{host: a, win: &mygo.Window{}}
+	if a.keysAreOurs() {
+		t.Fatal("the rename window must keep Esc/Space to itself")
+	}
+	a.rn.win = nil
+	if !a.keysAreOurs() {
+		t.Fatal("closing the window gives the keys back")
+	}
+}
+
+// Re-opening an existing window must not forget the app the keyboard goes
+// back to on close.
+func TestOpenRenameKeepsRememberedApp(t *testing.T) {
+	a, _, _ := renameShelf(t, "a.txt")
+	origFront, origActivate, origShow, origFocus := frontmostPID, renameActivate, renameShow, renameFocus
+	frontmostPID = func() int { return 777 }
+	renameActivate = func() {}
+	renameShow = func(*mygo.Window) {}
+	renameFocus = func(*mygo.Window) {}
+	t.Cleanup(func() {
+		frontmostPID, renameActivate, renameShow, renameFocus = origFront, origActivate, origShow, origFocus
+	})
+	a.rn = &renameUI{host: a, win: &mygo.Window{}, prevPID: 4242}
+	a.openRename(a.visibleItems())
+	if a.rn.prevPID != 4242 {
+		t.Fatalf("re-opening lost the remembered app: %d", a.rn.prevPID)
+	}
+}
+
+// The data directory check looks at the path as given, not only at its
+// symlink-resolved spelling.
+func TestRenameableDataDirSpellings(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(t.TempDir(), "data-link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	a := &shelf{dataDir: root}
+	cases := []struct {
+		name string
+		p    string
+		want bool
+	}{
+		{"direct", filepath.Join(root, "state.json"), false},
+		{"unresolved dot-dot", filepath.Join(root, "sub", "..", "state.json"), false},
+		{"through symlink", filepath.Join(link, "images", "x.png"), false},
+		{"outside", filepath.Join(outside, "keep.txt"), true},
+	}
+	for _, c := range cases {
+		it := store.Item{Kind: store.KindFile, Path: c.p}
+		if got := a.renameable(it); got != c.want {
+			t.Fatalf("%s: renameable(%q) = %v, want %v", c.name, c.p, got, c.want)
+		}
 	}
 }

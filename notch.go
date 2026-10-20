@@ -353,10 +353,16 @@ func (a *shelf) syncCopyKey() {
 }
 
 // keysAreOurs reports whether the shelf may hold the global Esc and Space:
-// never while the Settings window is key, and never while the panel itself
-// has the keyboard for clipboard search. Pure; unit-tested.
+// never while the Settings or 重新命名 window is key, and never while the
+// panel itself has the keyboard for clipboard search. Pure; unit-tested.
 func (a *shelf) keysAreOurs() bool {
-	return a.settingsWin == nil && !a.focusMode
+	if a.settingsWin != nil {
+		return false
+	}
+	if a.rn != nil && a.rn.win != nil {
+		return false
+	}
+	return !a.focusMode
 }
 
 func (a *shelf) releaseKeys() {

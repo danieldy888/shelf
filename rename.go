@@ -2,12 +2,12 @@
 
 package main
 
-// Batch rename (PLAN.md C): the 重新命名 window — Finder's "Rename N
-// Items" for the tray's files. The window is a normal titled window like
-// Settings: one instance, opened with the app active and the keyboard,
-// and closing hands the keyboard back to whoever had it. Logic —
-// name computation, conflicts, the safe two-phase move and rollback —
-// lives in renamer.go; this file owns the window and its view.
+// Batch rename: the 重新命名 window — Finder's "Rename N Items" for the
+// tray's files. The window is a normal titled window like Settings: one
+// instance, opened with the app active and the keyboard, and closing
+// hands the keyboard back to whoever had it. Logic — name computation,
+// conflicts, the safe two-phase move and rollback — lives in renamer.go;
+// this file owns the window and its view.
 
 import (
 	"fmt"
@@ -38,28 +38,45 @@ func (a *shelf) renameable(it store.Item) bool {
 	if it.Kind != store.KindFile || it.Missing || it.Converted || it.Path == "" {
 		return false
 	}
-	if a.dataDir != "" && insideDataDir(a.dataDir, it.Path) {
+	if a.dataDir != "" && dataDirHolds(a.dataDir, it.Path) {
 		return false
 	}
 	return true
+}
+
+// dataDirHolds reports whether p sits inside the data directory. Both the
+// path as given and its symlink-resolved spelling are checked: a rename
+// must not reach into the data folder through either one.
+func dataDirHolds(dir, p string) bool {
+	return pathInside(dir, p) || insideDataDir(dir, p)
 }
 
 // insideDataDir reports whether p sits inside the data directory;
 // symlinked spellings resolve first so a file reached through a link
 // still counts as managed.
 func insideDataDir(dir, p string) bool {
-	d, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		d = filepath.Clean(dir)
-	}
-	q, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		q = filepath.Clean(p)
-	}
-	rel, err := filepath.Rel(d, q)
+	rel, err := filepath.Rel(resolvePath(dir), resolvePath(p))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// resolvePath resolves the symlinks in p. A path that does not exist yet
+// (a rename target, an item whose file moved) resolves through its
+// directory, so a link in the middle is still followed.
+func resolvePath(p string) string {
+	p = filepath.Clean(p)
+	if q, err := filepath.EvalSymlinks(p); err == nil {
+		return q
+	}
+	dir := filepath.Dir(p)
+	if dir == p {
+		return p
+	}
+	// A missing tail resolves through its nearest existing ancestor, so a
+	// link in the middle of the path is still followed.
+	return filepath.Join(resolvePath(dir), filepath.Base(p))
+}
+
+// renameUI is the window's session state, kept on the shelf as a.rn so
 // the module can watch it while the window is up. Inputs live here, not
 // in closures, so the view rebuild reads the latest text each frame.
 type renameUI struct {
@@ -79,15 +96,31 @@ type renameUI struct {
 	scroll       ui.ScrollState
 	booted       bool        // first frame focused the mode's first field
 	done         *renameDone // last applied batch, while undo remains open
+	undoUntil    time.Time   // the panel's 撤销 pill shows until then
 	err          string      // apply/undo failure shown inline
 }
 
-// renameDone remembers one applied batch for undo: the file moves in
-// apply order and the item each path belongs to, so 撤销 can restore both
-// disk names and tray paths.
+// renameUndoLife is how long the panel's completion pill keeps its 撤销
+// button after a rename — and again after the window closes.
+const renameUndoLife = 10 * time.Second
+
+// Seams around app-level calls so headless tests can run the window's
+// session without a running app.
+var (
+	frontmostPID   = mac.FrontmostPID
+	ownPID         = mac.OwnPID
+	renameActivate = mac.ActivateSelf
+	renameShow     = func(w *mygo.Window) { w.Show() }
+	renameFocus    = func(w *mygo.Window) { w.Focus() }
+)
+
+// renameDone remembers one applied batch for undo: the disk moves (current
+// name → original name), every tray path the batch changed — items inside
+// a renamed folder included — and the paths to put back if an undo's save
+// fails.
 type renameDone struct {
-	ops []renameOp // src = name now on disk, dst = original name
-	ids []string
+	ops   []renameOp
+	paths map[string]string // item id → original path
 }
 
 // params reads the inputs into the planner's form. An unparsable 起始号
@@ -123,101 +156,151 @@ func (r *renameUI) plan() renamePlan {
 	return planRename(r.items, r.params())
 }
 
+// blocked reports whether 改名 must stay disabled: a conflicting row, no
+// change at all, or an unparsable 起始号. The button and the Enter
+// shortcut both consult it, so the keyboard can never start a batch the
+// button would refuse.
+func (r *renameUI) blocked(pl renamePlan) bool {
+	return pl.conflicts > 0 || pl.changed == 0 ||
+		(renameMode(r.mode) == modeFormat && !r.startOK())
+}
+
+// setErr shows msg inline and repaints.
+func (r *renameUI) setErr(msg string) {
+	r.err = msg
+	r.repaint()
+}
+
+// repaint redraws the rename window and the panel (the 撤销 pill lives
+// there), skipping whichever is not up.
+func (r *renameUI) repaint() {
+	if r.win != nil {
+		r.win.Invalidate()
+	}
+	if r.host.win != nil {
+		r.host.win.Invalidate()
+	}
+}
+
+// undoOps returns ops with source and target swapped.
+func undoOps(ops []renameOp) []renameOp {
+	out := make([]renameOp, len(ops))
+	for i, op := range ops {
+		out[i] = renameOp{src: op.dst, dst: op.src}
+	}
+	return out
+}
+
+// pathUpdates maps the batch's items — and every tray item inside a
+// renamed folder, whose path changes with it — to their new paths, and
+// returns the original paths so 撤销 can put both back.
+func (r *renameUI) pathUpdates(pl renamePlan) (next, orig map[string]string) {
+	next = make(map[string]string, len(pl.ops))
+	orig = make(map[string]string, len(pl.ops))
+	for _, row := range pl.rows {
+		if row.newPath == row.oldPath {
+			continue
+		}
+		next[row.item.ID] = row.newPath
+		orig[row.item.ID] = row.oldPath
+	}
+	for _, it := range r.host.store.Items {
+		if it.Path == "" { // text items have no path to follow
+			continue
+		}
+		if _, done := next[it.ID]; done {
+			continue
+		}
+		for _, row := range pl.rows {
+			if row.newPath == row.oldPath || !pathInside(row.oldPath, it.Path) {
+				continue
+			}
+			rel, err := filepath.Rel(row.oldPath, it.Path)
+			if err != nil {
+				continue
+			}
+			next[it.ID] = filepath.Join(row.newPath, rel)
+			orig[it.ID] = it.Path
+			break
+		}
+	}
+	return next, orig
+}
+
 // apply runs the previewed batch: disk moves first, then the tray paths.
 // A disk failure already rolled back inside execRename; a store failure
 // rolls the disk moves back so the tray never points at names that do not
-// exist. On success the window shows its done state with 撤销.
+// exist. On success the window shows its done state and the panel gets
+// the 撤销 pill.
 func (r *renameUI) apply() {
 	if r.win == nil || r.done != nil {
 		return
 	}
 	pl := r.plan()
-	if pl.conflicts > 0 || pl.changed == 0 {
+	if r.blocked(pl) {
 		return
 	}
 	if err := execRename(pl.ops); err != nil {
-		r.err = err.Error()
+		r.setErr(err.Error())
 		return
 	}
-	updates := make(map[string]string, len(pl.ops))
-	ids := make([]string, 0, len(pl.ops))
-	for _, row := range pl.rows {
-		if row.newPath == row.oldPath {
-			continue
-		}
-		updates[row.item.ID] = row.newPath
-		ids = append(ids, row.item.ID)
-	}
-	if _, err := r.host.store.UpdatePaths(updates); err != nil {
-		undo := make([]renameOp, len(pl.ops))
-		for i, op := range pl.ops {
-			undo[i] = renameOp{src: op.dst, dst: op.src}
-		}
-		r.err = "无法保存托盘记录：" + err.Error()
-		if rb := execRename(undo); rb != nil {
-			r.err += "；" + rb.Error()
-		}
+	next, orig := r.pathUpdates(pl)
+	if _, err := r.host.store.UpdatePaths(next); err != nil {
+		r.setErr("无法保存托盘记录：" + err.Error() + renameRestore(pl.ops))
 		return
+	}
+	for id := range next {
+		r.host.invalidateThumbnail(id) // the cached thumb was decoded at the old path
 	}
 	r.err = ""
-	r.done = &renameDone{ops: pl.ops, ids: ids}
-	for i, op := range pl.ops {
-		r.done.ops[i] = renameOp{src: op.dst, dst: op.src} // undo order: current → original
+	r.done = &renameDone{ops: undoOps(pl.ops), paths: orig}
+	r.undoUntil = time.Now().Add(renameUndoLife)
+	r.repaint()
+}
+
+// renameRestore puts the disk names back after the tray could not record
+// the batch, and words what happened for the inline error.
+func renameRestore(ops []renameOp) string {
+	if err := execRename(undoOps(ops)); err != nil {
+		return "；" + err.Error()
 	}
-	r.host.toastStatus(fmt.Sprintf("已重新命名 %d 项", len(pl.ops)), time.Now().Add(10*time.Second), false)
-	if r.win != nil {
-		r.win.Invalidate()
-	}
+	return "，已全部恢复原状"
 }
 
 // undo moves the last batch's files back to their original names — never
 // overwriting, so an original name taken since fails instead of losing
-// the newer file — and returns the tray paths. Only the latest batch can
-// be undone; a successful undo consumes it.
+// the newer file — and restores the tray paths, nested items included.
+// Only the latest batch can be undone; a successful undo consumes it.
 func (r *renameUI) undo() {
-	if r.done == nil {
+	d := r.done
+	if d == nil {
 		return
 	}
-	if err := execRename(r.done.ops); err != nil {
-		r.err = "无法撤销：" + err.Error()
-		if r.win != nil {
-			r.win.Invalidate()
-		}
+	if err := execRename(d.ops); err != nil {
+		r.setErr("无法撤销：" + err.Error())
 		return
 	}
-	updates := make(map[string]string, len(r.done.ops))
-	for i, id := range r.done.ids {
-		updates[id] = r.done.ops[i].dst // op.dst holds the original path
-	}
-	if _, err := r.host.store.UpdatePaths(updates); err != nil {
-		// The files are back but the tray could not record it: put the
-		// names back so tray and disk still agree, and keep 撤销 available.
-		redo := make([]renameOp, len(r.done.ops))
-		for i, op := range r.done.ops {
-			redo[i] = renameOp{src: op.dst, dst: op.src}
-		}
-		r.err = "无法保存托盘记录：" + err.Error()
-		if e := execRename(redo); e != nil {
-			r.err += "；" + e.Error()
-		}
-		if r.win != nil {
-			r.win.Invalidate()
-		}
+	if _, err := r.host.store.UpdatePaths(d.paths); err != nil {
+		// The names are back but the tray could not record it: rename
+		// forward again so tray and disk agree, and keep 撤销 available.
+		r.setErr("无法保存托盘记录：" + err.Error() + renameRestore(d.ops))
 		return
 	}
-	n := len(r.done.ops)
-	r.done = nil
-	r.err = ""
+	for id := range d.paths {
+		r.host.invalidateThumbnail(id)
+	}
+	n := len(d.ops)
+	r.done, r.undoUntil, r.err = nil, time.Time{}, ""
 	r.host.toastStatus(fmt.Sprintf("已撤销 %d 项重命名", n), time.Now().Add(4*time.Second), false)
-	if r.win != nil {
-		r.win.Invalidate()
-	}
+	r.repaint()
 }
 
 // openRename shows the 重新命名 window for items, or re-focuses the one
 // already open — a single instance like Settings. The shelf releases its
 // global Esc/Space while the window is key (the same handover Settings
-// uses) and remembers the app to give the keyboard back to on close.
+// uses) and remembers the app to give the keyboard back to on close; that
+// memory is taken only when the window is created, so re-opening an
+// existing window never loses it.
 func (a *shelf) openRename(items []store.Item) {
 	if len(items) == 0 || a.store == nil {
 		return
@@ -231,17 +314,17 @@ func (a *shelf) openRename(items []store.Item) {
 	r.mode, r.find, r.replace = int(modeReplace), "", ""
 	r.addText, r.addSeg = "", 1
 	r.fmtName, r.fmtStartText, r.digitsSeg, r.posSeg = "", "1", 0, 1
-	r.done, r.err, r.booted = nil, "", false
-	r.prevPID = 0
-	if pid := mac.FrontmostPID(); pid > 0 && pid != mac.OwnPID() {
-		r.prevPID = pid
-	}
+	r.done, r.undoUntil, r.err, r.booted = nil, time.Time{}, "", false
 	a.releaseKeys()
 	if r.win != nil {
-		mac.ActivateSelf()
-		r.win.Show()
-		r.win.Focus()
+		renameActivate()
+		renameShow(r.win)
+		renameFocus(r.win)
 		return
+	}
+	r.prevPID = 0
+	if pid := frontmostPID(); pid > 0 && pid != ownPID() {
+		r.prevPID = pid
 	}
 	frame := centeredFrame(renameWidth, renameHeight,
 		mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint()).WorkArea)
@@ -258,9 +341,9 @@ func (a *shelf) openRename(items []store.Item) {
 	w.SetBounds(frame)
 	w.OnClosed(a.renameClosed)
 	r.win = w
-	w.Show()
-	mac.ActivateSelf()
-	w.Focus()
+	renameShow(w)
+	renameActivate()
+	renameFocus(w)
 }
 
 // renameTitle names the window and the menu item.
@@ -284,29 +367,47 @@ func centeredFrame(w, h int, work mygo.Rectangle) mygo.Rectangle {
 // renameModule keeps the shelf's global Esc/Space out of the rename
 // window's reach: they are released when the window opens, but a click
 // back on the panel would re-grab them, and a held Space never reaches a
-// text field. tick puts them down again while the window is up.
+// text field. tick puts them down again while the window is up, and
+// retires the panel's 撤销 pill when its time is up.
 type renameModule struct{ host *shelf }
 
 func (renameModule) live() bool { return false }
 
-func (m renameModule) tick(time.Time) {
-	if r := m.host.rn; r != nil && r.win != nil {
+func (m renameModule) tick(now time.Time) {
+	r := m.host.rn
+	if r == nil {
+		return
+	}
+	if r.win != nil {
 		m.host.releaseKeys()
+	}
+	if r.done != nil && !r.undoUntil.IsZero() && now.After(r.undoUntil) {
+		r.undoUntil = time.Time{}
+		if m.host.win != nil {
+			m.host.win.Invalidate()
+		}
 	}
 }
 
 // renameClosed mirrors settingsClosed: the pointer drops first, then the
 // keyboard goes back to the panel (clipboard search), the shelf (panel
-// open) or the app the user came from — never hiding this app.
+// open) or the app the user came from — never hiding this app. Closing
+// also restarts the 撤销 pill's clock, so it stays reachable for a full
+// renameUndoLife after the window goes away.
 func (a *shelf) renameClosed() {
-	if a.rn != nil {
-		a.rn.win = nil
+	r := a.rn
+	if r == nil {
+		return
+	}
+	r.win = nil
+	if r.done != nil {
+		r.undoUntil = time.Now().Add(renameUndoLife)
 	}
 	if a.quitting {
 		return
 	}
-	prev := a.rn.prevPID
-	a.rn.prevPID = 0
+	prev := r.prevPID
+	r.prevPID = 0
 	switch a.settingsKeyboardExit() {
 	case settingsToPanel:
 		if a.win != nil {
@@ -317,6 +418,24 @@ func (a *shelf) renameClosed() {
 		a.holdKeys()
 	}
 	a.handBackApp(prev)
+}
+
+// renameUndoPill is the completion prompt: 「已重新命名 N 项」 with 撤销 in
+// the panel's toast stack, so the undo outlives the window. It stays for
+// renameUndoLife and disappears on its own after that.
+func (a *shelf) renameUndoPill(c *ui.Context) {
+	r := a.rn
+	if r == nil || r.done == nil || r.undoUntil.IsZero() || c.Now().After(r.undoUntil) {
+		return
+	}
+	p := ui.Row(c.Key("pill-rename-undo")).Height(30).Padding(0, 8, 0, 14).Radius(15).
+		AlignItems(ui.Center).Gap(8).Background(fill2)
+	p.Children(func() {
+		ui.Text(c, fmt.Sprintf("已重新命名 %d 项", len(r.done.ops))).SingleLine().FontSize(11).TextColor(ink)
+		if ui.Button(c, "撤销").Label("撤销重新命名").Clicked() {
+			r.undo()
+		}
+	})
 }
 
 // renameView draws the window each frame: the drawn title bar (centered
@@ -501,9 +620,7 @@ func (r *renameUI) previewSection(c *ui.Context) {
 // dialogs do — 取消 secondary, 改名 the accented default (Enter), greyed
 // while anything blocks the batch.
 func (r *renameUI) buttons(c *ui.Context, apply func()) {
-	pl := r.plan()
-	blocked := pl.conflicts > 0 || pl.changed == 0 ||
-		(renameMode(r.mode) == modeFormat && !r.startOK())
+	blocked := r.blocked(r.plan())
 	ui.Row(c.Key("rn-buttons")).FillWidth().Justify(ui.End).Gap(8).Padding(4, 0, 0, 0).Children(func() {
 		if ui.Button(c, "取消").Label("取消改名").Clicked() {
 			r.win.Close()

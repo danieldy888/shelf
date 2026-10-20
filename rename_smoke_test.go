@@ -2,12 +2,12 @@
 
 package main
 
-// Real-window proof for 批量改名 (PLAN.md C): five temporary entries (a
+// Real-window proof for 批量改名: five temporary entries (a
 // folder and a Chinese name among them) are renamed by all three modes,
 // each undone, and disk and tray paths are compared entry by entry. The
 // test shoots the real 重新命名 window (a conflict row included) and the
-// native item menu, and checks the keyboard goes back to the app the
-// window was opened from. Everything lives under /tmp/shelf-rename and
+// native item menu and the completion pill with 撤销, and checks the
+// keyboard goes back to the app the window was opened from. Everything lives under /tmp/shelf-rename and
 // the smoke data dir; user files and the real data directory are never
 // touched. Run with SHELF_BASKET_SMOKE=1.
 
@@ -281,11 +281,42 @@ func TestRenameSmoke(t *testing.T) {
 	sameSet(t, diskNames(t, dir), want, "add: disk")
 	sameSet(t, trayNames(a), want, "add: tray")
 	renameShot(t, a.rn.win, "done")
+
+	// Closing must leave the 撤销 pill in the panel: shot it, then undo
+	// from there (the panel pill outlives the window).
+	if a.rn.undoUntil.Before(time.Now().Add(9 * time.Second)) {
+		t.Fatalf("pill deadline too soon: %v", a.rn.undoUntil)
+	}
+	onMain(func() { a.rn.win.Close() })
+	time.Sleep(500 * time.Millisecond)
+	if a.rn.win != nil {
+		t.Fatal("closing did not release the window")
+	}
+	onMain(func() {
+		a.place(mygo.Screen.CursorScreenPoint())
+		a.show(false)
+		a.progress, a.animationFrom = 1, 1
+		a.syncWindowFrame()
+		a.win.Invalidate()
+	})
+	time.Sleep(700 * time.Millisecond)
+	renameShot(t, a.win, "toast")
 	onMain(func() { a.rn.undo() })
 	sameSet(t, diskNames(t, dir), names, "add undo: disk")
 	sameSet(t, trayNames(a), names, "add undo: tray")
 
-	// 2) 名称加序号：custom name + two-digit numbers, then undo.
+	// 2) 名称加序号：custom name + two-digit numbers, then undo. The
+	// window is opened again, which must keep working after a close.
+	var folderItems []store.Item
+	onMain(func() {
+		for _, it := range a.visibleItems() {
+			folderItems = append(folderItems, it)
+		}
+		a.openRename(folderItems)
+	})
+	if a.rn.win == nil {
+		t.Fatal("re-opening after a close did not create the window")
+	}
 	onMain(func() {
 		r := a.rn
 		r.mode, r.fmtName, r.fmtStartText, r.digitsSeg, r.posSeg = int(modeFormat), "批次", "1", 1, 1

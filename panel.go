@@ -626,6 +626,7 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 		if note := a.updateStatus(); note != "" {
 			a.updatePill(c, note)
 		}
+		a.renameUndoPill(c)
 		if over || (a.dragging && !a.ownDrag) {
 			a.pill(c, "drop", "松开放入", false)
 		}
