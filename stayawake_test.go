@@ -157,6 +157,41 @@ func TestAwakeCreateFailure(t *testing.T) {
 	}
 }
 
+// A failure picked from the tray arrives while the panel is collapsed; the
+// toast would expire unseen, so the module must open the panel first and
+// start the notice from there.
+func TestAwakeFailureOpensPanel(t *testing.T) {
+	p := newFakePower()
+	p.fail = errors.New("denied")
+	m := newAwakeStub(p)
+	if m.host.visible {
+		t.Fatal("panel started visible")
+	}
+	m.start(time.Now(), 30*time.Minute)
+	if !m.host.visible {
+		t.Fatal("failure toast posted to a collapsed panel: never seen")
+	}
+	if m.host.status == "" || !m.host.statusErr {
+		t.Fatalf("toast = %q err=%v, want the error notice", m.host.status, m.host.statusErr)
+	}
+	if left := time.Until(m.host.statusUntil); left < 3*time.Second {
+		t.Fatalf("notice expires in %v, want the full 4s from opening", left)
+	}
+}
+
+// pmset prints an empty `named:` for non-ASCII names, so the hold's name
+// must be plain ASCII to stay visible in `pmset -g assertions`.
+func TestAwakeAssertionNameIsASCII(t *testing.T) {
+	if awakeAssertionName != "Shelf Stay Awake" {
+		t.Fatalf("assertion name = %q, want %q", awakeAssertionName, "Shelf Stay Awake")
+	}
+	for i, r := range awakeAssertionName {
+		if r > 127 {
+			t.Fatalf("assertion name has non-ASCII %q at byte %d", r, i)
+		}
+	}
+}
+
 func TestAwakeRemainText(t *testing.T) {
 	p := newFakePower()
 	m := newAwakeStub(p)

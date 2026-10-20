@@ -10,17 +10,20 @@ import "testing"
 // and CFString bridging all work.
 func TestPowerAssertion(t *testing.T) {
 	for _, kind := range []PowerAssertionKind{PowerAssertSystemSleep, PowerAssertDisplaySleep} {
-		id, err := NewPowerAssertion(kind, "Shelf 保持唤醒")
+		id, err := NewPowerAssertion(kind, "Shelf Stay Awake")
 		if err != nil {
 			t.Fatalf("create kind %d: %v", kind, err)
 		}
 		if id == 0 {
 			t.Fatalf("create kind %d returned id 0", kind)
 		}
-		if name := PowerAssertionName(id); name != "Shelf 保持唤醒" {
-			t.Errorf("AssertName = %q, want %q", name, "Shelf 保持唤醒")
+		if name := PowerAssertionName(id); name != "Shelf Stay Awake" {
+			t.Errorf("AssertName = %q, want %q", name, "Shelf Stay Awake")
 		}
 		ReleasePowerAssertion(id)
+		if name := PowerAssertionName(id); name != "" {
+			t.Errorf("AssertName after release = %q, want the hold gone", name)
+		}
 	}
 	ReleasePowerAssertion(0) // no-op, must not crash
 	if _, err := NewPowerAssertion(PowerAssertionKind(99), "x"); err == nil {

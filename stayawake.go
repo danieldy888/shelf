@@ -13,7 +13,7 @@ import (
 
 // awakeModule keeps the Mac from idle-sleeping for a chosen span, meant
 // for letting a long task finish. One named IOKit power assertion
-// (「Shelf 保持唤醒」) holds while the feature is on: PreventUserIdleSystemSleep
+// (「Shelf Stay Awake」) holds while the feature is on: PreventUserIdleSystemSleep
 // by default — the screen may still dim and turn off — or
 // PreventUserIdleDisplaySleep while 「屏幕也保持亮着」 is chosen. Timed
 // holds release on their deadline, on 关闭, and when Shelf quits;
@@ -31,7 +31,6 @@ type awakeModule struct {
 	duration time.Duration
 	until    time.Time // deadline for timed holds; zero for 「一直」
 	remain   string    // last countdown text drawn, to redraw on change
-	kind     mac.PowerAssertionKind
 
 	// create/release and now are test seams; nil means the real calls.
 	create  func(mac.PowerAssertionKind) (mac.PowerAssertionID, error)
@@ -92,9 +91,9 @@ func (a *shelf) awakeMenu() []*mygo.MenuItem {
 }
 
 // awakeAssertionName is the name powerd records for the hold (AssertName).
-// `pmset -g assertions` only renders ASCII there, so it shows "" for this
-// one while the name itself is stored.
-const awakeAssertionName = "Shelf 保持唤醒"
+// ASCII only: `pmset -g assertions` prints an empty `named:` for any
+// non-ASCII name, so this keeps the hold visible in that listing.
+const awakeAssertionName = "Shelf Stay Awake"
 
 func (m *awakeModule) active() bool { return m != nil && m.id != 0 }
 
@@ -172,9 +171,12 @@ func (m *awakeModule) wantKind() mac.PowerAssertionKind {
 	return mac.PowerAssertSystemSleep
 }
 
-// fail surfaces a creation error: the toast carries the red dot and the
-// state reads off (a menu re-open then shows nothing checked, 关闭 grey).
+// fail surfaces a creation error: the panel opens first so the toast is
+// actually seen (a collapsed panel paints nothing and the deadline would
+// run out unseen), then the 4-second notice starts with the red dot. The
+// state reads off, so a re-opened menu shows nothing checked and 关闭 grey.
 func (m *awakeModule) fail(err error) {
+	m.host.show(false)
 	m.host.toastStatus("无法开启保持唤醒："+err.Error(), m.clock().Add(4*time.Second), true)
 }
 
