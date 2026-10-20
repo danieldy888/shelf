@@ -66,14 +66,41 @@ var dropCellOpts = transfer.DropOptions{
 	Operations: transfer.Copy,
 }
 
-// Seams: the pasteboard read, the dropped data's file extraction, AirDrop
-// and the cursor probe are substituted in tests.
+// Seams: the pasteboard reads, the dropped data's file extraction,
+// AirDrop and the cursor probe are substituted in tests.
 var (
-	dragFiles     = mac.DragFiles
-	dropFilesData = func(d transfer.Data) ([]string, error) { return d.Files() }
-	airDrop       = mac.AirDrop
-	cursorPoint   = func() mygo.Point { return mygo.Screen.CursorScreenPoint() }
+	dragFiles       = mac.DragFiles
+	dragFilesChange = mac.DragFilesChange
+	dropFilesData   = func(d transfer.Data) ([]string, error) { return d.Files() }
+	airDrop         = mac.AirDrop
+	cursorPoint     = func() mygo.Point { return mygo.Screen.CursorScreenPoint() }
 )
+
+// dropZoneState is the drop zone's memory of the drag in flight. paths
+// are cached by the drag pasteboard's changeCount — the board answers a
+// cheap serial so the file list (and its os.Stat classification) is only
+// re-read when it actually changed, never once per frame. When the system
+// says the drag ended, the zone holds for dropHoldGrace: the release's
+// mouse-up clears the monitor's dragging flag before the drop reaches the
+// render that owns the cells, and without the hold that frame would build
+// no cell targets and the drop would be answered but never delivered —
+// files swallowed. done marks the drop consumed (a cell or the plain
+// receive path ran); the grace only ever covers the delivery lag.
+type dropZoneState struct {
+	serial int64     // drag session the cache belongs to
+	count  int64     // drag pasteboard changeCount last read
+	files  []string  // paths read at count
+	class  dropClass // their classification
+	until  time.Time // hold deadline once the drag flag fell
+	done   bool      // this session's drop already landed
+	on     bool      // the zone drew this frame
+	need   int       // stage height the zone asks for (0 while off)
+}
+
+// dropHoldGrace is how long the zone outlives the dragging flag so the
+// release's drop still finds its cells: a few frames is plenty — the
+// native drop has already been answered by then.
+const dropHoldGrace = 300 * time.Millisecond
 
 // dropDebugFiles pins the zone's contents for the screenshot harness:
 // SHELF_DEBUG_DROP_FILES=/a.png,/b.zip (path-list separated) makes a
@@ -145,22 +172,28 @@ func classifyDrop(paths []string) dropClass {
 // right, at most dropMaxCells. No paths — a source vending promised or
 // remote files exposes none until the drop — shows only the 放入托盘 row.
 func dropActions(paths []string) []dropAction {
+	return dropActionsFor(paths, classifyDrop(paths))
+}
+
+// dropActionsFor is dropActions on a classification the caller already
+// made — the zone classifies once per pasteboard change and reuses it.
+func dropActionsFor(paths []string, class dropClass) []dropAction {
 	if len(paths) == 0 {
 		return nil
 	}
 	air := dropAction{id: "airdrop", icon: airDropSymbol, label: "隔空投送", isAirDrop: true}
-	switch classifyDrop(paths) {
+	switch class {
 	case classImages:
 		allJPEG := true
+		pdfLabel, pdfSub, pdfTarget := "转成 PDF", "1 页", toPDF
+		if len(paths) > 1 {
+			pdfLabel, pdfSub, pdfTarget = "合成一个 PDF", "按拖入顺序", toMergedPDF
+		}
 		for _, p := range paths {
 			if ext := strings.ToLower(filepath.Ext(p)); ext != ".jpg" && ext != ".jpeg" {
 				allJPEG = false
 				break
 			}
-		}
-		pdfLabel, pdfSub, pdfTarget := "转成 PDF", "每页一张", toPDF
-		if len(paths) > 1 {
-			pdfLabel, pdfSub, pdfTarget = "合成一个 PDF", "按拖入顺序", toMergedPDF
 		}
 		other := dropAction{id: "tojpeg", icon: imgSymbol, label: "转 JPEG", sub: "每张一份", target: toJPEG}
 		if allJPEG {
@@ -205,11 +238,16 @@ func zipAction(n int) dropAction {
 // dropCountText is the module-bar count: 「3 张图片」, 「1 个压缩包」,
 // 「2 个 PDF」, 「2 项」 for anything mixed.
 func dropCountText(paths []string) string {
-	n := len(paths)
+	return dropCountTextFor(len(paths), classifyDrop(paths))
+}
+
+// dropCountTextFor is dropCountText on a classification the caller
+// already made.
+func dropCountTextFor(n int, class dropClass) string {
 	if n == 0 {
 		return ""
 	}
-	switch classifyDrop(paths) {
+	switch class {
 	case classImages:
 		return fmt.Sprintf("%d 张图片", n)
 	case classPDFs:
@@ -220,61 +258,90 @@ func dropCountText(paths []string) string {
 	return fmt.Sprintf("%d 项", n)
 }
 
-// dropZoneFiles answers which files are being dragged over the panel, or
-// nil when the drop zone must not show: no drag in flight, Shelf's own
-// drag-out (a shelf drop back on the shelf stays a cancel), a drag
-// carrying no files, or the pointer outside the panel — over already
-// answers true for a hover anywhere on the window's drop target,
-// including over the cells (their targets nest inside it); the cursor
-// check catches only the hover corner cases the offer misses. The debug
-// pin bypasses the pointer check so the screenshot harness can hold the
-// zone open.
-func (a *shelf) dropZoneFiles(over bool) []string {
+// dropZoneSnap answers which files the zone should show, updating the
+// shelf's dropZoneState. Order matters: the pointer check runs before any
+// pasteboard read, so a drag merely passing over the notch strip never
+// touches the board. While the drag is in flight the files come from the
+// board, refetched only when its changeCount moved; classification rides
+// the same cache. Once the flag falls the cached files keep answering for
+// dropHoldGrace — or until the drop is consumed — so the release frame
+// still builds the cells it needs. Shelf's own drag-out, a drag carrying
+// no files, and a release outside the panel all answer nil. The debug pin
+// bypasses the pointer check so the screenshot harness can hold the zone
+// open.
+func (a *shelf) dropZoneSnap(over bool) []string {
+	d := &a.drop
+	d.on, d.need = false, 0
 	if a.ownDrag {
 		return nil
 	}
 	if paths := dropDebugFiles(); len(paths) > 0 {
+		d.class = classifyDrop(paths)
+		d.on, d.need = true, dropZoneNeedH()
 		return paths
 	}
-	if !a.dragging {
+	if a.dragging {
+		d.serial, d.until, d.done = a.dragSerial, time.Time{}, false
+		inside := over || a.win == nil
+		if !inside {
+			p := cursorPoint()
+			inside = p.X >= a.x && p.X < a.x+panelWidth && p.Y >= a.y && p.Y < a.y+a.panelH()
+		}
+		if !inside {
+			return nil
+		}
+		if count := dragFilesChange(); count != d.count {
+			d.count = count
+			d.files = dragFiles()
+			d.class = classifyDrop(d.files)
+		}
+		if len(d.files) == 0 {
+			return nil
+		}
+		d.on, d.need = true, dropZoneNeedH()
+		return d.files
+	}
+	// The drag flag fell: keep serving this session's files briefly so a
+	// release already answered but not yet rendered still finds its cell.
+	if d.done || d.serial != a.dragSerial || len(d.files) == 0 {
 		return nil
 	}
-	paths := dragFiles()
-	if len(paths) == 0 {
+	if d.until.IsZero() {
+		d.until = time.Now().Add(dropHoldGrace)
+	} else if time.Now().After(d.until) {
 		return nil
 	}
-	if over || a.win == nil {
-		return paths
+	if a.win != nil {
+		p := cursorPoint()
+		if p.X < a.x || p.X >= a.x+panelWidth || p.Y < a.y || p.Y >= a.y+a.panelH() {
+			return nil // released outside the panel: nothing to deliver
+		}
 	}
-	p := cursorPoint()
-	inside := p.X >= a.x && p.X < a.x+panelWidth && p.Y >= a.y && p.Y < a.y+a.panelH()
-	if !inside {
-		return nil
-	}
-	return paths
+	d.on, d.need = true, dropZoneNeedH()
+	return d.files
 }
 
 // dropBody is the view() entry that owns the stage: while a file drag
 // hovers the expanded panel the module bar and stage become the drop
 // zone; anything else defers to the current page unchanged.
 func (a *shelf) dropBody(c *ui.Context, over bool) {
-	paths := a.dropZoneFiles(over)
+	paths := a.dropZoneSnap(over)
 	if len(paths) == 0 {
 		a.tabBody(c, over)
 		return
 	}
-	a.dropModuleBar(c, paths)
+	a.dropModuleBar(c, a.drop.class, len(paths))
 	stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
-	stage.Children(func() { a.dropStage(c, paths) })
+	stage.Children(func() { a.dropStage(c, paths, a.drop.class) })
 }
 
 // dropModuleBar is the module bar while the zone is up: 投放 and the
 // dragged count on the left, the release hint on the right.
-func (a *shelf) dropModuleBar(c *ui.Context, paths []string) {
+func (a *shelf) dropModuleBar(c *ui.Context, class dropClass, n int) {
 	ui.Row(c.Key("module-bar")).Height(moduleBarH).AlignItems(ui.Center).FillWidth().
 		Padding(0, 0, 0, 2).Margin(0, 0, stageGap, 0).Children(func() {
 		ui.Text(c, "投放").SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-		if count := dropCountText(paths); count != "" {
+		if count := dropCountTextFor(n, class); count != "" {
 			ui.Text(c, count).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 0, 0, 8)
 		}
 		ui.Box(c).Grow(1)
@@ -286,11 +353,11 @@ func (a *shelf) dropModuleBar(c *ui.Context, paths []string) {
 // action cells. The zone asks for at least its own height — a stage
 // shorter than that would squeeze the cells — while a taller stage keeps
 // it, so the panel never jumps mid-drag.
-func (a *shelf) dropStage(c *ui.Context, paths []string) {
+func (a *shelf) dropStage(c *ui.Context, paths []string, class dropClass) {
 	zone := ui.Column(c.Key("drop-zone")).FillWidth().Grow(1).MinHeight(float32(dropZoneNeedH())).Gap(dropZoneGap)
 	zone.Children(func() {
 		a.dropTrayCell(c, paths)
-		if actions := dropActions(paths); len(actions) > 0 {
+		if actions := dropActionsFor(paths, class); len(actions) > 0 {
 			a.dropActionRow(c, actions)
 		}
 	})
@@ -321,6 +388,7 @@ func (a *shelf) dropTrayCell(c *ui.Context, paths []string) {
 		a.dropThumbStack(c, paths)
 	})
 	if drop, ok := ui.DropData(row, dropCellOpts); ok {
+		a.drop.done = true
 		a.receive(drop.Data)
 	}
 }
@@ -417,6 +485,7 @@ func (a *shelf) dropActionCell(c *ui.Context, act dropAction, busy bool) {
 // the panel settles on the tray page.
 func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 	a.received = true
+	a.drop.done = true
 	if a.tab != pageTray {
 		a.setTab(pageTray)
 	}

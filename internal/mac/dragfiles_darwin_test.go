@@ -67,7 +67,8 @@ func TestDragFilesFromReadsItemURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	board := writeTestBoard(t, []string{file, folder}, nil)
-	paths := dragFilesFrom(board)
+	var paths []string
+	withPool(func() { paths = dragFilesFrom(board) })
 	want := []string{file, folder}
 	if !slices.Equal(paths, want) {
 		t.Fatalf("dragFilesFrom = %q, want %q", paths, want)
@@ -80,7 +81,8 @@ func TestDragFilesFromFallsBackToFilenames(t *testing.T) {
 	dir := t.TempDir()
 	a, b := filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt")
 	board := writeTestBoard(t, []string{a}, []string{a, b})
-	paths := dragFilesFrom(board)
+	var paths []string
+	withPool(func() { paths = dragFilesFrom(board) })
 	if !slices.Equal(paths, []string{a, b}) {
 		t.Fatalf("dragFilesFrom = %q, want %q (deduped union)", paths, []string{a, b})
 	}
@@ -91,7 +93,9 @@ func TestDragFilesFromEmptyBoard(t *testing.T) {
 	withPool(func() {
 		send(board, "setString:forType:", uintptr(nsString("hello")), uintptr(nsString("public.utf8-plain-text")))
 	})
-	if paths := dragFilesFrom(board); len(paths) != 0 {
+	var paths []string
+	withPool(func() { paths = dragFilesFrom(board) })
+	if len(paths) != 0 {
 		t.Fatalf("a text-only board answered files %q", paths)
 	}
 }

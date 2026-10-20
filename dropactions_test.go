@@ -4,10 +4,12 @@ package main
 
 import (
 	"archive/zip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -362,12 +364,13 @@ func TestDropZoneHiddenForOwnDragAndNonFiles(t *testing.T) {
 	if view.HasText("投放") || view.HasText("放入托盘") {
 		t.Fatal("own drag-out showed the drop zone")
 	}
-	// No drag at all → no zone either.
+	// No drag at all — once the release grace has lapsed — no zone.
 	a.ownDrag = false
 	a.dragging = false
+	a.drop.until = time.Now().Add(-time.Minute)
 	view = ui.NewTester(a.view, panelWidth, panelHeight)
 	if view.HasText("投放") {
-		t.Fatal("no drag still showed the drop zone")
+		t.Fatal("an ended drag still showed the drop zone")
 	}
 }
 
@@ -383,18 +386,18 @@ func TestDropZoneHiddenWhenPathsUnreadable(t *testing.T) {
 	}
 }
 
-func TestDropZoneFilesPointerGates(t *testing.T) {
+func TestDropZoneSnapPointerGates(t *testing.T) {
 	dir := t.TempDir()
 	img := writeFile(t, dir, "1.png", testPNGBytes(t))
 	a, _ := dropViewShelf(t, []string{img})
 	// With a window (simulated by win != nil impossible headless), the
 	// pointer must be inside the panel: over is the zone's own hover.
-	if got := a.dropZoneFiles(true); len(got) != 1 {
+	if got := a.dropZoneSnap(true); len(got) != 1 {
 		t.Fatal("hovering the window lost the drag's files")
 	}
 	// Not over and headless (a.win == nil) still answers: tests draw the
 	// final state without a pointer.
-	if got := a.dropZoneFiles(false); len(got) != 1 {
+	if got := a.dropZoneSnap(false); len(got) != 1 {
 		t.Fatal("headless render lost the files")
 	}
 	// The pointer-inside branch needs the seam.
@@ -435,6 +438,188 @@ func TestDropZoneModuleBarCounts(t *testing.T) {
 	for _, want := range []string{"2 项", "打成 zip"} {
 		if !view2.HasText(want) {
 			t.Fatalf("mixed zone missing %q; texts %v", want, view2.Texts())
+		}
+	}
+}
+
+// dropViewSnapShelf stubs the whole board-read path so tests can drive
+// dropZoneSnap without a system drag: the pasteboard serial comes from
+// dragFilesChange, the file list from dragFiles.
+func snapShelf(t *testing.T, files []string) (*shelf, *int, *int64) {
+	t.Helper()
+	a := &shelf{dragging: true, visible: true, notchW: 180, notchH: 32,
+		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	reads := new(int)
+	count := new(int64)
+	*count = 7
+	oldF, oldC := dragFiles, dragFilesChange
+	dragFiles = func() []string { *reads++; return files }
+	dragFilesChange = func() int64 { return *count }
+	t.Cleanup(func() { dragFiles, dragFilesChange = oldF, oldC })
+	return a, reads, count
+}
+
+func TestDropZoneSurvivesReleaseFrame(t *testing.T) {
+	// monitorDrag clears a.dragging on release before the drop reaches the
+	// next frame; the zone must still build so the drop finds its cell.
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	a, _, _ := snapShelf(t, []string{img})
+	a.store = s
+	a.conv = &converter{host: a}
+	f := fakeConverters(t)
+	if got := a.dropZoneSnap(true); len(got) != 1 {
+		t.Fatal("no zone while dragging")
+	}
+	a.dragging = false // the release's mouse-up, before the drop lands
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	if !view.HasText("投放") || !view.HasText("压缩到 1 MB") {
+		t.Fatalf("release frame lost the drop zone; texts %v", view.Texts())
+	}
+	// The cell drop now executes the action, not nothing.
+	a.runDropAction(dropActions([]string{img})[2], fileDrop(t, img)) // 转 JPEG
+	if !slices.Equal(f.formats, []mac.ImageFormat{mac.FormatJPEG}) {
+		t.Fatalf("the released action never ran: formats %v", f.formats)
+	}
+	// Consumed: the zone closes, panel back to the tray page.
+	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	if view.HasText("投放") {
+		t.Fatal("consumed drop kept the zone")
+	}
+}
+
+func TestDropZoneHoldExpiresAndStaysOutsideOnly(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, _, _ := snapShelf(t, []string{img})
+	a.dropZoneSnap(true)
+	a.dragging = false
+	// Within grace the zone serves; past it the drag is over.
+	if len(a.dropZoneSnap(true)) != 1 {
+		t.Fatal("grace dropped the session")
+	}
+	a.drop.until = time.Now().Add(-time.Second)
+	if got := a.dropZoneSnap(true); got != nil {
+		t.Fatalf("expired grace still answered %v", got)
+	}
+	// A new drag serial never inherits the previous session's files.
+	a.dragging = true
+	a.drop.count = 7 // same board count: cache hit
+	if got := a.dropZoneSnap(true); len(got) != 1 {
+		t.Fatal("new drag lost the files")
+	}
+}
+
+func TestDropZoneBoardReadsOncePerChange(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, reads, count := snapShelf(t, []string{img})
+	a.dropZoneSnap(true)
+	for range 5 {
+		a.dropZoneSnap(true)
+	}
+	if *reads != 1 {
+		t.Fatalf("unchanged board read %d times in 6 frames", *reads)
+	}
+	*count++ // the source rewrote the board mid-drag: refetch once
+	a.dropZoneSnap(true)
+	a.dropZoneSnap(true)
+	if *reads != 2 {
+		t.Fatalf("one change read the board %d times", *reads)
+	}
+}
+
+func TestDropZonePanelHeightCoversZone(t *testing.T) {
+	// A shallow stage (empty tray → stageMinH) must not clip the zone:
+	// the panel grows to hold it plus the bottom padding.
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, _, _ := snapShelf(t, []string{img})
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	a.store = s
+	a.dropZoneSnap(true)
+	spacer, rowH, _ := a.earLayout()
+	minH := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom + dropZoneNeedH()
+	if got := a.panelContentH(); got < minH {
+		t.Fatalf("panelContentH = %d, zone needs %d", got, minH)
+	}
+	// A taller stage keeps its height — the zone never shrinks the panel.
+	a2, _, _ := snapShelf(t, []string{img})
+	a2.store = s
+	for i := range 40 {
+		f := writeFile(t, dir, fmt.Sprintf("tall-%02d.txt", i), []byte("x"))
+		if err := s.AddFiles([]string{f}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a2.dropZoneSnap(true)
+	tall := a2.currentStageH()
+	if a2.panelContentH() != spacer+rowH+earBottomGap+moduleBarH+stageGap+panelPadBottom+min(tall, stageMaxH) {
+		t.Fatalf("zone shrank the panel: %d", a2.panelContentH())
+	}
+}
+
+func TestDropZoneHidesReleasePill(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, view := dropViewShelf(t, []string{img})
+	if a.drop.on == false {
+		t.Fatal("zone not up for a file drag")
+	}
+	for _, txt := range view.Texts() {
+		if txt == "松开放入" {
+			t.Fatal("the drop capsule overlapped the zone")
+		}
+	}
+	// Without the zone the capsule still shows.
+	a2, view2 := dropViewShelf(t, nil)
+	a2.drop.on = false
+	view2 = ui.NewTester(a2.view, panelWidth, panelHeight)
+	if !view2.HasText("松开放入") {
+		t.Fatalf("idle drag lost the capsule; texts %v", view2.Texts())
+	}
+}
+
+func TestDropActionSubtitlesMatchBehavior(t *testing.T) {
+	dir := t.TempDir()
+	one := writeFile(t, dir, "solo.png", testPNGBytes(t))
+	more := writeFile(t, dir, "extra.png", testPNGBytes(t))
+	single := dropActions([]string{one})
+	if single[1].id != "topdf" || single[1].sub != "1 页" || single[1].target != toPDF {
+		t.Fatalf("single image pdf cell = %+v", single[1])
+	}
+	double := dropActions([]string{one, more})
+	if double[1].label != "合成一个 PDF" || double[1].sub != "按拖入顺序" {
+		t.Fatalf("multi image pdf cell = %+v", double[1])
+	}
+	pdf := writeFile(t, dir, "doc.pdf", []byte("%PDF"))
+	for _, act := range dropActions([]string{pdf}) {
+		switch act.id {
+		case "toword":
+			if act.sub != "提取文字" {
+				t.Fatalf("转 Word sub %q", act.sub)
+			}
+		case "topng":
+			if act.sub != "PNG · 每页一张" {
+				t.Fatalf("每页存成图片 sub %q", act.sub)
+			}
+		case "zip":
+			if act.sub != "" {
+				t.Fatalf("single zip sub %q", act.sub)
+			}
+		case "airdrop":
+			if act.sub != "" {
+				t.Fatalf("airdrop sub %q", act.sub)
+			}
 		}
 	}
 }

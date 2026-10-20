@@ -140,6 +140,7 @@ func TestDropZoneScreenshots(t *testing.T) {
 		writeSmokePNG(t, fix, "照片 三.png", 320, 240),
 	}
 	shotDropZone(t, a, imgs, "zone-images")
+	shotDropZone(t, a, imgs[:1], "zone-single-image")
 
 	zipPath := filepath.Join(fix, "素材.zip")
 	payload := filepath.Join(fix, "inner.txt")

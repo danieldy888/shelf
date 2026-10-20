@@ -273,6 +273,7 @@ func (a *shelf) view(c *ui.Context) {
 		a.fb.clearExpired(now, true)
 		if accepts {
 			if drop, ok := ui.DropData(zone, opts); ok {
+				a.drop.done = true
 				a.receive(drop.Data)
 			}
 		}
@@ -287,6 +288,12 @@ func (a *shelf) view(c *ui.Context) {
 	// The panel's height eases between contents (tab switch, rows coming
 	// and going); the content itself is laid out at the target height.
 	// While closing, the shell keeps the height it was showing.
+	// The drop zone's file snapshot runs before the height math so the
+	// panel already sizes for the zone on the frame it appears — no
+	// clipped first frame and no mid-drag resize.
+	if expanded {
+		a.dropZoneSnap(over)
+	}
 	targetH := float32(a.panelH())
 	shownH := targetH
 	if a.win != nil && (a.visible || a.progress > 0.01) {
@@ -378,6 +385,7 @@ func (a *shelf) view(c *ui.Context) {
 		return
 	}
 	if drop, ok := ui.DropData(zone, opts); ok {
+		a.drop.done = true
 		a.receive(drop.Data)
 		if !a.visible {
 			a.show(false)
@@ -689,7 +697,9 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 			a.updatePill(c, note)
 		}
 		a.renameUndoPill(c)
-		if over || (a.dragging && !a.ownDrag) {
+		// The drop zone carries its own release hint in the module bar;
+		// the 松开放入 capsule stays hidden while it is up.
+		if (over || (a.dragging && !a.ownDrag)) && !a.drop.on {
 			a.pill(c, "drop", "松开放入", false)
 		}
 	})
@@ -876,15 +886,21 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, openK, peekK, shake f
 // is under way, the module bar, then the stage. Pages whose sharesHeight
 // is true size the stage to the group's tallest, so switching between
 // them never resizes the panel; any other page sizes it to its own
-// stageH. Clamped between stageMinH and stageMaxH (pages scroll past
-// that). Pure; unit-tested.
+// stageH. While the drop zone is up its full height wins over the stage
+// floor — the panel always contains the whole zone plus the bottom
+// padding, so nothing is ever clipped mid-drag. Pages scroll past
+// stageMaxH. Pure; unit-tested.
 func (a *shelf) panelContentH() int {
 	spacer, rowH, _ := a.earLayout()
 	h := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
 	if len(a.liveActivities()) > 0 {
 		h += liveH + liveGap
 	}
-	h += min(max(a.currentStageH(), stageMinH), stageMaxH)
+	stage := min(max(a.currentStageH(), stageMinH), stageMaxH)
+	if a.drop.on && a.drop.need > stage {
+		stage = a.drop.need
+	}
+	h += stage
 	if a.focusMode || a.search != "" {
 		// The keyboard hint pill floats over the clipboard stage's foot.
 		h += hintPillH

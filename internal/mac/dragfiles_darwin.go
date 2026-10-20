@@ -25,42 +25,60 @@ func DragFiles() []string {
 	if err := Init(); err != nil {
 		return nil
 	}
-	return dragFilesFrom(dragPasteboard())
+	var paths []string
+	withPool(func() { paths = dragFilesFrom(dragPasteboard()) })
+	return paths
+}
+
+// DragFilesChange returns the drag pasteboard's changeCount, the serial
+// that marks when the board was last rewritten. Poll it each frame and
+// only call DragFiles when it moves — the board's property list is a
+// round trip too expensive to fetch per frame.
+func DragFilesChange() int64 {
+	var n int64
+	withPool(func() { n = sendInt64(dragPasteboard(), "changeCount") })
+	return n
 }
 
 // dragFilesFrom reads board's file paths; split out so tests can point a
 // scratch pasteboard at it. Call inside the caller's withPool.
 func dragFilesFrom(board id) []string {
 	var paths []string
-	withPool(func() {
-		// readObjectsForClasses:NSURL with FileURLsOnly walks the items'
-		// file-url and URL types and decodes to file paths in board order.
-		urls := send(board, "readObjectsForClasses:options:",
-			uintptr(send(class("NSArray"), "arrayWithObject:", uintptr(objc.GetClass("NSURL")))),
-			uintptr(send(class("NSDictionary"), "dictionaryWithObject:forKey:",
-				uintptr(send(class("NSNumber"), "numberWithBool:", 1)),
-				uintptr(nsString("NSPasteboardURLReadingFileURLsOnlyKey")))))
-		for i := range sendInt(urls, "count") {
-			if u := send(urls, "objectAtIndex:", uintptr(i)); u != 0 && sendInt(u, "isFileURL") != 0 {
-				if p := dragURLPath(u); p != "" {
+	// readObjectsForClasses:NSURL with FileURLsOnly walks the items'
+	// file-url and URL types and decodes to file paths in board order.
+	urls := send(board, "readObjectsForClasses:options:",
+		uintptr(send(class("NSArray"), "arrayWithObject:", uintptr(objc.GetClass("NSURL")))),
+		uintptr(send(class("NSDictionary"), "dictionaryWithObject:forKey:",
+			uintptr(send(class("NSNumber"), "numberWithBool:", 1)),
+			uintptr(nsString("NSPasteboardURLReadingFileURLsOnlyKey")))))
+	for i := range sendInt(urls, "count") {
+		if u := send(urls, "objectAtIndex:", uintptr(i)); u != 0 && sendInt(u, "isFileURL") != 0 {
+			if p := dragURLPath(u); p != "" {
+				paths = append(paths, p)
+			}
+		}
+	}
+	// NSFilenamesPboardType is the classic array-of-paths some sources
+	// (older Finder sessions among them) vend instead of per-item URLs.
+	// Entries already seen through a file URL are skipped; anything
+	// else is appended in order. Each element must be an NSString before
+	// it is read — a malformed list could carry other plist types.
+	if list := send(board, "propertyListForType:", uintptr(nsString("NSFilenamesPboardType"))); list != 0 {
+		if send(list, "isKindOfClass:", uintptr(objc.GetClass("NSArray"))) != 0 {
+			NSString := objc.GetClass("NSString")
+			for i := range sendInt(list, "count") {
+				e := send(list, "objectAtIndex:", uintptr(i))
+				// isKindOfClass: returns BOOL, a char-sized value in
+				// x0 whose upper bits are garbage — mask before testing.
+				if e == 0 || send(e, "isKindOfClass:", uintptr(NSString))&0xFF == 0 {
+					continue
+				}
+				if p := goString(e); p != "" {
 					paths = append(paths, p)
 				}
 			}
 		}
-		// NSFilenamesPboardType is the classic array-of-paths some sources
-		// (older Finder sessions among them) vend instead of per-item URLs.
-		// Entries already seen through a file URL are skipped; anything
-		// else is appended in order.
-		if list := send(board, "propertyListForType:", uintptr(nsString("NSFilenamesPboardType"))); list != 0 {
-			if send(list, "isKindOfClass:", uintptr(objc.GetClass("NSArray"))) != 0 {
-				for i := range sendInt(list, "count") {
-					if p := goString(send(list, "objectAtIndex:", uintptr(i))); p != "" {
-						paths = append(paths, p)
-					}
-				}
-			}
-		}
-	})
+	}
 	return dedupePaths(paths)
 }
 
