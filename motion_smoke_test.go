@@ -182,8 +182,8 @@ func TestSmokeCapsuleSuccess(t *testing.T) {
 	// does, through the global monitor while the window lets it through.
 	var stop func()
 	onMain(func() {
-		stop = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
-			a.mouseDown(inside, mygo.Screen.CursorScreenPoint())
+		stop = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool, button int) {
+			a.mouseDown(inside, button, mygo.Screen.CursorScreenPoint())
 		})
 	})
 	t.Cleanup(func() { onMain(stop) })
@@ -201,7 +201,7 @@ func TestSmokeCapsuleSuccess(t *testing.T) {
 		// Without the grant the HID press goes nowhere observable; the
 		// monitor's own handler still proves the same path here.
 		t.Logf("capsule press at %+v not exercised: no Accessibility access for this test process", pill)
-		onMain(func() { a.mouseDown(false, mygo.Point{X: pill.X + pill.Width/2, Y: pill.Y + pill.Height - 8}) })
+		onMain(func() { a.mouseDown(false, 0, mygo.Point{X: pill.X + pill.Width/2, Y: pill.Y + pill.Height - 8}) })
 	}
 	motionShot(t, a, "capsule-click-expands", 300*time.Millisecond)
 	// End the toast at its source before folding: hide() hands a live

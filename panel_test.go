@@ -445,7 +445,7 @@ func TestPeekPillCoversExpandHint(t *testing.T) {
 func TestMouseDownOnPeekPillExpandsEvenIfEventWentElsewhere(t *testing.T) {
 	a := &shelf{peeking: true, peekProgress: 1, notchX: 645, notchY: 0, notchW: 180, notchH: 32, y: 0}
 	hint := mygo.Point{X: a.notchX + a.notchW/2, Y: max(32, a.notchH) + 10}
-	a.mouseDown(false, hint)
+	a.mouseDown(false, 0, hint)
 	if !a.visible {
 		t.Fatal("clicking the visible peek pill must expand even when WindowServer gave the press to another app")
 	}
@@ -453,7 +453,7 @@ func TestMouseDownOnPeekPillExpandsEvenIfEventWentElsewhere(t *testing.T) {
 
 func TestMouseDownAwayFromPeekDoesNotExpand(t *testing.T) {
 	a := &shelf{peeking: true, peekProgress: 1, notchX: 645, notchY: 0, notchW: 180, notchH: 32, y: 0}
-	a.mouseDown(false, mygo.Point{X: 80, Y: 40})
+	a.mouseDown(false, 0, mygo.Point{X: 80, Y: 40})
 	if a.visible {
 		t.Fatal("a click far from the pill must not expand the shelf")
 	}

@@ -118,8 +118,8 @@ func main() {
 
 func (a *shelf) ready(show bool) {
 	a.newNotchWindow()
-	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool) {
-		a.mouseDown(inside, mygo.Screen.CursorScreenPoint())
+	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool, button int) {
+		a.mouseDown(inside, button, mygo.Screen.CursorScreenPoint())
 	})
 	a.stopDragObservation = mac.ObserveLeftMouseDragged(a.pointerDragged)
 	a.win.OnClose(func(e *mygo.CloseEvent) {

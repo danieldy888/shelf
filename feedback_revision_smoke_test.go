@@ -43,7 +43,7 @@ func TestCollapsedMarginsReachUnderlyingWindow(t *testing.T) {
 			receiver.ShowInactive()
 			mac.SetWindowLevel(h, mac.StatusWindowLevel-1)
 			receiverNum = mac.WindowNumber(h)
-			stop = mac.ObserveMouseDown(h, func(inside bool) {
+			stop = mac.ObserveMouseDown(h, func(inside bool, button int) {
 				if inside {
 					received++
 				}

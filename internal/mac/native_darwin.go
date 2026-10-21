@@ -426,6 +426,16 @@ type dragTracker struct {
 	serial  int64
 	active  bool
 	wasDown bool
+	pressed bool // a left press event arrived since the last sample
+}
+
+// press records a real left-button-down event (from ObserveMouseDown).
+// The 30 ms poll can miss a release between holds — a fast drop and
+// re-grab, or a tap-drag the event source reports late — leaving wasDown
+// stuck true and folding a brand-new drag's board write into the previous
+// session's serial. The press event is the edge the poll missed.
+func (t *dragTracker) press() {
+	t.pressed = true
 }
 
 // step folds one observation into the tracker.
@@ -435,16 +445,19 @@ type dragTracker struct {
 //     before the app started are never reported as a drag);
 //   - button release ends the hold and re-baselines the board, so the next
 //     press needs a *new* count to arm;
-//   - on a fresh press, a board change that arrived since the previous
-//     sample arms immediately IF the board declares items — a typed bump
-//     only ever comes from a drag session declaring items, and a press
-//     that coincides with one is the drag's own start;
+//   - on a fresh press — the button newly observed down, or a real press
+//     event that filled a missed-release gap — a board change that arrived
+//     since the previous sample arms immediately IF the board declares
+//     items — a typed bump only ever comes from a drag session declaring
+//     items, and a press that coincides with one is the drag's own start;
 //   - while a hold is already active, any count change is consumed into
 //     the same serial (session rewrites do not look like a new drag);
 //   - during a hold that is not yet a drag, the first count change arms
 //     exactly one serial per hold — but only if the board declares items
 //     (typed); a bump on an empty board is a clear, not a drag.
 func (t *dragTracker) step(count int64, typed, down bool) {
+	pressed := t.pressed
+	t.pressed = false
 	if !t.primed {
 		t.primed = true
 		t.base = count
@@ -457,7 +470,7 @@ func (t *dragTracker) step(count int64, typed, down bool) {
 		t.base = count
 		return
 	}
-	if !t.wasDown {
+	if !t.wasDown || pressed {
 		t.wasDown = true
 		if count != t.base && typed {
 			// Drag began inside the same poll window as the press.
@@ -528,6 +541,14 @@ func DragState() (active bool, serial int64) {
 		tracker.step(count, typed, down)
 	})
 	return tracker.active, tracker.serial
+}
+
+// NoteLeftPress tells the tracker a real left-button press event arrived:
+// the shelf's ObserveMouseDown monitor sees presses even when the 30 ms
+// DragState poll misses the release between two holds, and a hold that
+// never looked released must split at the press. Main thread only.
+func NoteLeftPress() {
+	tracker.press()
 }
 
 // CollectionBehavior reads a window's NSWindowCollectionBehavior. Used

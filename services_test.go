@@ -30,7 +30,7 @@ func TestServiceFlashOwnership(t *testing.T) {
 	a.escHeld, a.spaceHeld = true, true
 	serviceFlashGen++
 	gen = serviceFlashGen
-	a.mouseDown(true, mygo.Point{})
+	a.mouseDown(true, 0, mygo.Point{})
 	if a.serviceFlashMayHide(gen) {
 		t.Error("a click inside the panel must take ownership")
 	}

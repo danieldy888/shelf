@@ -258,7 +258,13 @@ func (a *shelf) overPeekPill(p mygo.Point) bool {
 
 // mouseDown is the AppKit mouse-down observer. inside means the event was
 // delivered to our window; otherwise it went to another app or the menu bar.
-func (a *shelf) mouseDown(inside bool, p mygo.Point) {
+// Every left press also reaches the drag tracker: the 30 ms board poll can
+// miss a release between two drags, and the press is the edge that splits
+// their serials (see dragTracker.press).
+func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
+	if button == 0 {
+		mac.NoteLeftPress()
+	}
 	if a.quitting {
 		return
 	}

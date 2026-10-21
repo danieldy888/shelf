@@ -21,7 +21,7 @@ func TestMouseObservationAllButtonsAndStop(t *testing.T) {
 	var event func(id, objc.SEL, uint, smokePoint, uint, float64, int, id, int, int, float64) id
 	purego.RegisterFunc(&event, msgSendAddr)
 	calls := 0
-	stop := ObserveMouseDown(0, func(inside bool) {
+	stop := ObserveMouseDown(0, func(inside bool, button int) {
 		if !inside {
 			t.Error("Expected local nil-window event")
 		}

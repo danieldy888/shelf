@@ -290,7 +290,7 @@ func TestPeekPressExpandsAndSendsNoCommand(t *testing.T) {
 	// WindowServer delivered the press to the menu bar (inside=false): the
 	// player never saw it, so the observer expands and sends nothing.
 	pill := a.peekPillRect()
-	a.mouseDown(false, mygo.Point{X: pill.X + pill.Width - 12, Y: pill.Y + pill.Height/2})
+	a.mouseDown(false, 0, mygo.Point{X: pill.X + pill.Width - 12, Y: pill.Y + pill.Height/2})
 	if !a.visible {
 		t.Fatal("a press on the pill must expand the panel")
 	}

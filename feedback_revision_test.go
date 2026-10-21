@@ -50,7 +50,7 @@ func TestDeliveredCollapsedMarginClickDoesNotDisappear(t *testing.T) {
 			a.fb.drawn = true
 		}
 		r := a.peekPillRect()
-		a.mouseDown(true, mygo.Point{X: r.X - 5, Y: a.y + 40})
+		a.mouseDown(true, 0, mygo.Point{X: r.X - 5, Y: a.y + 40})
 		if !a.visible {
 			t.Fatalf("delivered margin click was swallowed (capsule=%v)", capsule)
 		}

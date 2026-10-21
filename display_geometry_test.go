@@ -183,11 +183,11 @@ func TestMouseDownMenuBarRuleOnSecondaryDisplay(t *testing.T) {
 	a := secondaryShelfBelow()
 	a.visible = true
 	bar := mygo.Point{X: 200, Y: a.notchY + 10}
-	a.mouseDown(false, bar)
+	a.mouseDown(false, 0, bar)
 	if !a.visible {
 		t.Fatal("click inside the secondary display's menu-bar strip collapsed the shelf")
 	}
-	a.mouseDown(false, mygo.Point{X: 200, Y: a.notchY + 200})
+	a.mouseDown(false, 0, mygo.Point{X: 200, Y: a.notchY + 200})
 	if a.visible {
 		t.Fatal("click on the desktop area below the menu bar must collapse the shelf")
 	}

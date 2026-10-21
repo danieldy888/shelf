@@ -409,14 +409,14 @@ func TestCapsuleClickExpandsThroughTheMonitor(t *testing.T) {
 	if r.Width < 240 {
 		t.Fatalf("the capsule's click box is only %d wide: %+v", r.Width, r)
 	}
-	a.mouseDown(false, mygo.Point{X: r.X + r.Width/2, Y: r.Y + r.Height - 6})
+	a.mouseDown(false, 0, mygo.Point{X: r.X + r.Width/2, Y: r.Y + r.Height - 6})
 	if !a.visible {
 		t.Fatal("a press on the capsule must expand the shelf")
 	}
 	b := motionShelf()
 	b.toastStatus("已转换 1 项", time.Now().Add(3*time.Second), statusOK)
 	b.fb.drawn = true
-	b.mouseDown(false, mygo.Point{X: b.notchX - 120, Y: b.notchH + 10})
+	b.mouseDown(false, 0, mygo.Point{X: b.notchX - 120, Y: b.notchH + 10})
 	if b.visible {
 		t.Fatal("a press beside the capsule must pass through")
 	}

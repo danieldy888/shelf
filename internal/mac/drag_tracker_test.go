@@ -126,3 +126,48 @@ func TestDragTrackerPressWithUntypedBump(t *testing.T) {
 		t.Fatalf("untyped bump on press must not arm, got active=%v serial=%d", tr.active, tr.serial)
 	}
 }
+
+// TestDragTrackerPressEventArmsAMissedRelease: polling the button state at
+// 30 ms can miss a release entirely (a fast drop-and-regrab, or a tap-drag
+// the event source reports late). The tracker then never sees down=false,
+// so a quick third drag's board write is consumed as the previous
+// session's rewrite: active stays on the stale serial and the shelf's
+// suppressed flag from the interrupted drop never clears — the drop pill
+// never returns. The left-press event (ObserveMouseDown, always
+// installed) is the edge polling misses: it must re-arm the hold.
+func TestDragTrackerPressEventArmsAMissedRelease(t *testing.T) {
+	var tr dragTracker
+	tr.step(3, true, false) // idle
+	tr.step(3, true, true)  // press 1
+	tr.step(4, true, true)  // drag 1 begins: serial 1
+	tr.step(4, true, true)
+	// Drag 1 ends and drag 2's press plus its first board write all land
+	// inside one poll window: down never goes false in a sample. Without
+	// the press edge, step() sees an unchanged held button and folds the
+	// write into serial 1.
+	tr.press()
+	tr.step(5, true, true)
+	if !tr.active || tr.serial != 2 {
+		t.Fatalf("a press observed between samples must re-arm: active=%v serial=%d, want serial 2", tr.active, tr.serial)
+	}
+	tr.press()
+	tr.step(6, true, true) // drag 3 the same way
+	if !tr.active || tr.serial != 3 {
+		t.Fatalf("third drag must arm serial 3, got active=%v serial=%d", tr.active, tr.serial)
+	}
+}
+
+// TestDragTrackerPressEventIgnoresStaleBoard: a press edge alone cannot
+// resurrect the board — press on an unchanged board is still a click.
+func TestDragTrackerPressEventIgnoresStaleBoard(t *testing.T) {
+	var tr dragTracker
+	tr.step(3, true, false)
+	tr.step(3, true, true)
+	tr.step(4, true, true) // drag 1
+	tr.step(4, true, true)
+	tr.press()
+	tr.step(4, true, true) // missed release, but no new write: press ends it
+	if tr.active || tr.serial != 1 {
+		t.Fatalf("press on an unchanged board must end the hold, got active=%v serial=%d", tr.active, tr.serial)
+	}
+}

@@ -528,7 +528,7 @@ func TestFoldingCapsuleReceivesClicksAcrossItsVisibleWidth(t *testing.T) {
 	a := motionShelf()
 	a.fb.retracting = true
 	a.fx = shellMotion{w: 300, h: 48, peek: true}
-	a.mouseDown(false, mygo.Point{X: a.stripCenter() + 135, Y: a.y + 38})
+	a.mouseDown(false, 0, mygo.Point{X: a.stripCenter() + 135, Y: a.y + 38})
 	if !a.visible {
 		t.Fatal("a click inside the folding shell passed outside the pill")
 	}
