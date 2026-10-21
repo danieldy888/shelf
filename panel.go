@@ -424,7 +424,9 @@ func (a *shelf) view(c *ui.Context) {
 				if !c.Preferences().ReduceMotion {
 					s := 0.88 + 0.12*contentK
 					content.TransformOrigin(0.5, 0).Scale(s, s)
-					if blur := 10 * (1 - contentK); blur >= 0.05 {
+					// 不可见的内容不值得一次离屏模糊：低于淡入起点
+					// (k ≤ 0.1 ⇒ opacity 0) 或残余模糊小于 0.05pt 时跳过。
+					if blur := 10 * (1 - contentK); contentK > 0.1 && blur >= 0.05 {
 						content.Blur(blur)
 					}
 				}
