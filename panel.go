@@ -382,16 +382,23 @@ func (a *shelf) view(c *ui.Context) {
 			peekW = zone.Jump("peek-w", peekW)
 			peekH = zone.Jump("peek-h", peekH)
 		} else {
-			anim := sizeAnim
 			switch {
 			case closing:
-				anim = closeSpring
-			case peekTarget == 0:
-				// Folding: hold the drawn shape, shrink with peekK alone.
-				peekW, peekH = a.fx.peekW, a.fx.peekH
+				// Panel fold: the peek shape follows the live track/drag
+				// state on the way down.
+				peekW = zone.AnimateTo("peek-w", peekW, closeSpring)
+				peekH = zone.AnimateTo("peek-h", peekH, closeSpring)
+			case peekTarget == 0 && a.fx.peekW > 0 && a.fx.peekH > 0:
+				// Peek folding to the notch is subtract-only: pin the
+				// drawn shape. Jump, not AnimateTo — AnimateTo keeps an
+				// outward velocity and grew the shell past its drawn
+				// size when the pointer left mid-morph.
+				peekW = zone.Jump("peek-w", a.fx.peekW)
+				peekH = zone.Jump("peek-h", a.fx.peekH)
+			default:
+				peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
+				peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
 			}
-			peekW = zone.AnimateTo("peek-w", peekW, anim)
-			peekH = zone.AnimateTo("peek-h", peekH, anim)
 		}
 	}
 	a.fx.peekW, a.fx.peekH = peekW, peekH
@@ -949,6 +956,14 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		return
 	}
 	pw, ph := a.peekSize()
+	if folding {
+		// Folding keeps the content kind frozen but lays it out at the
+		// shrinking shell's size: the frozen drop-pill size (a.fx.peekW/H)
+		// would center the words below the clipping shell mid-fold, while
+		// the live peekSize() answer (a loaded track's player size) pushes
+		// them outside even sooner.
+		pw, ph = shellW, shellH
+	}
 	notchH := float32(max(32, a.notchH))
 	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Clip().
 		AlignItems(ui.Center).Label("展开 Shelf")

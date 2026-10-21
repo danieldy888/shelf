@@ -28,7 +28,9 @@ func dragPeekShelf() *shelf {
 }
 
 // foldFrames steps the view while the peek folds and checks the shell only
-// ever shrinks and keeps the drop pill's words.
+// ever shrinks and keeps the drop pill's words — inside the clipping shell,
+// not merely present in the layout tree: the text's own rect must overlap
+// the drawn shell rect.
 func foldFrames(t *testing.T, a *shelf, view *ui.Tester, keepText string) {
 	t.Helper()
 	pw, ph := a.fx.w, a.fx.h
@@ -42,8 +44,18 @@ func foldFrames(t *testing.T, a *shelf, view *ui.Tester, keepText string) {
 			t.Fatalf("frame %d: the player title appeared mid-fold", i)
 		}
 		if keepText != "" && a.fx.peekK > 0.02 {
-			if _, ok := view.Find(keepText); !ok {
+			tr, ok := view.Find(keepText)
+			if !ok {
 				t.Fatalf("frame %d: %q vanished while the shell is still up (peekK %.2f)", i, keepText, a.fx.peekK)
+			}
+			// The shell draws centered at the top of the surface.
+			sx0 := (panelWidth - a.fx.w) / 2
+			ix0 := max(tr.X, sx0)
+			iy0 := max(tr.Y, float32(0))
+			ix1 := min(tr.X+tr.W, sx0+a.fx.w)
+			iy1 := min(tr.Y+tr.H, a.fx.h)
+			if ix1 <= ix0 || iy1 <= iy0 {
+				t.Fatalf("frame %d: %q's rect %+v does not overlap the shell %.1fx%.1f at %.1f,0", i, keepText, tr, a.fx.w, a.fx.h, sx0)
 			}
 		}
 		view.Advance(16 * time.Millisecond)
@@ -64,6 +76,35 @@ func TestPeekFoldKeepsShownShape(t *testing.T) {
 	a.dragging = false
 	a.peeking = false
 	foldFrames(t, a, view, "松开放入")
+}
+
+// TestPeekFoldMidMorphOnlyShrinks: the pointer leaves the notch while the
+// pill is still morphing toward the player — the fold must not grow past
+// the size it froze at (the second grok finding: AnimateTo kept outward
+// velocity and grew the shell one more step).
+func TestPeekFoldMidMorphOnlyShrinks(t *testing.T) {
+	a := dragPeekShelf()
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	// Drag ends over the notch: the shell starts morphing toward the player.
+	a.dragging = false
+	for range 2 {
+		view.Frame()
+		view.Advance(16 * time.Millisecond)
+	}
+	if a.fx.w <= float32(180+dropPillExtraW) {
+		t.Fatalf("the player morph never grew the shell: %.1f", a.fx.w)
+	}
+	// The pointer leaves the notch mid-morph: fold from the drawn size.
+	a.peeking = false
+	pw, ph := a.fx.w, a.fx.h
+	for i := range 30 {
+		view.Frame()
+		if a.fx.w > pw+0.5 || a.fx.h > ph+0.5 {
+			t.Fatalf("frame %d: mid-morph fold grew to %.1fx%.1f (was %.1fx%.1f)", i, a.fx.w, a.fx.h, pw, ph)
+		}
+		pw, ph = a.fx.w, a.fx.h
+		view.Advance(16 * time.Millisecond)
+	}
 }
 
 // TestPeekFoldWithoutTrackAlsoPlain: the same fold with no track loaded
