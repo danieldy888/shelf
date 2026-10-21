@@ -143,3 +143,52 @@ func TestCapsuleTakesClicksOnlyOnItsBody(t *testing.T) {
 		a.syncMousePassThrough()
 	})
 }
+
+// While the failure capsule is shaking, the hit box must follow the drawn
+// offset: a press where the capsule currently is reaches Shelf; a press
+// where it was (the unshifted box) falls through. Run with
+// SHELF_BASKET_SMOKE=1.
+func TestShakingCapsuleHitBoxFollowsTheOffset(t *testing.T) {
+	a := redesignShelf(t)
+	oldCursor := cursorPoint
+	t.Cleanup(func() { onMain(func() { cursorPoint = oldCursor }) })
+	onMain(func() {
+		a.place(mygo.Screen.CursorScreenPoint())
+		a.visible, a.progress, a.peeking, a.peekProgress = false, 0, false, 0
+		a.toastStatus("转换失败：文件无法读取", time.Now().Add(4*time.Second), statusErr)
+		a.win.Invalidate()
+	})
+	time.Sleep(600 * time.Millisecond) // grow-out done, shake in flight
+
+	var shelf int
+	var r mygo.Rectangle
+	onMain(func() {
+		shelf = mac.WindowNumber(a.win.NativeHandle())
+		r = a.peekPillRect() // X already carries the shake offset
+		if r.Width <= 0 {
+			t.Fatal("no capsule to hit-test")
+		}
+		if a.fx.shakeX == 0 {
+			t.Logf("shake offset is 0 this frame; the hit-box check runs unshifted")
+		}
+		cursorPoint = func() mygo.Point {
+			return mygo.Point{X: r.X + r.Width/2, Y: r.Y + r.Height/2}
+		}
+		a.syncMousePassThrough()
+	})
+	time.Sleep(150 * time.Millisecond)
+
+	screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
+	onMain(func() {
+		r := a.peekPillRect() // re-read: the shake may have moved the box
+		hit := mac.WindowAtPoint(float64(r.X+r.Width/2), float64(a.dispBounds.Y)+float64(r.Y+r.Height/2)-float64(a.y), screenH)
+		if hit != shelf {
+			t.Errorf("a press on the shaking capsule missed Shelf (hit %d, shake=%.1f)", hit, a.fx.shakeX)
+		}
+	})
+	onMain(func() {
+		a.fb = feedback{}
+		a.status = ""
+		a.syncMousePassThrough()
+	})
+}
