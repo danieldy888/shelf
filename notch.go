@@ -88,10 +88,9 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 				w = max(w, fbMaxW+2*fbGlowPad)
 				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+fbGlowPad)
 			}
-		case a.fx.openMoving || a.winH != 0:
-			// The opening spring overshoots its final size for a moment:
-			// the frame holds room for the whole flight so no frame is
-			// clipped.
+		case a.fx.openMoving:
+			// Keep overshoot room only while the panel opens. Settled
+			// transparent margins must not swallow clicks below the panel.
 			ow, oh := openFrameRoom(float32(h - 8))
 			if oh > h {
 				h = oh
@@ -143,6 +142,22 @@ func (a *shelf) syncWindowFrame() {
 	}
 	r := a.desiredFrame()
 	if r == a.frame {
+		return
+	}
+	if a.buildingView && a.winH != 0 {
+		// MyGo captured the surface size before view() ran. Resizing here
+		// would present this frame's old canvas in the new native frame.
+		// Update posts to the next main-loop pass; resolve the latest target
+		// there, including any close or reopen issued in the meantime.
+		if !a.frameQueued {
+			a.frameQueued = true
+			a.win.Update(func() {
+				a.frameQueued = false
+				if a.win != nil && !a.win.IsDestroyed() {
+					a.syncWindowFrame()
+				}
+			})
+		}
 		return
 	}
 	a.settingFrame = true

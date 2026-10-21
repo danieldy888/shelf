@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
 )
@@ -253,4 +254,130 @@ func TestFixNativeCapsuleScreenshots(t *testing.T) {
 		a.toastStatus("第二条提示 · 内容已完成", time.Now().Add(6*time.Second), statusOK)
 	})
 	fixCapsuleShot(t, a, "capsule-reposted-mid-retract")
+}
+
+// WindowServer, not a placeholder Window or desiredFrame arithmetic, must
+// send presses below the settled panel to the receiver underneath it.
+func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
+	for _, tall := range []bool{false, true} {
+		name := "tray"
+		if tall {
+			name = "tall page"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := redesignShelf(t)
+			motionClosed(a)
+			time.Sleep(600 * time.Millisecond)
+			onMain(func() {
+				a.dragging, a.pointerDrag, a.ownDrag = false, false, false
+				if tall {
+					a.registerPage(&fakePage{on: true, height: 320})
+					a.setTab("fake")
+				}
+				a.show(false)
+			})
+			t.Cleanup(func() { motionClosed(a) })
+			time.Sleep(850 * time.Millisecond)
+			var receiver *mygo.Window
+			var point mygo.Point
+			var frame mygo.Rectangle
+			var shelfNum, receiverNum, insideHit, outsideHit, targetH int
+			var moving bool
+			onMain(func() {
+				if a.winH == 0 {
+					t.Error("the check requires a native window handle")
+					return
+				}
+				frame, targetH, moving = a.win.Bounds(), a.panelH(), a.fx.openMoving
+				point = mygo.Point{X: a.stripCenter(), Y: a.y + targetH + 2}
+				receiver = mygo.NewWindow(mygo.WindowOptions{
+					Title: "Shelf bottom-edge click receiver", Width: 40, Height: 40,
+					Hidden: true, Frameless: true, DisableShadow: true, Panel: true, SkipTaskbar: true,
+					Content: ui.View(func(c *ui.Context) { ui.Text(c, "Receiver") }),
+				})
+				mac.SetWindowFrame(receiver.NativeHandle(), point.X-20, point.Y-20, 40, 40)
+				receiver.ShowInactive()
+				mac.SetWindowLevel(receiver.NativeHandle(), mac.StatusWindowLevel-1)
+				receiverNum = mac.WindowNumber(receiver.NativeHandle())
+				shelfNum = mac.WindowNumber(a.winH)
+			})
+			if receiver == nil {
+				t.Fatal("no native receiver")
+			}
+			t.Cleanup(func() { onMain(receiver.Close) })
+			time.Sleep(150 * time.Millisecond)
+			onMain(func() {
+				screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
+				insideHit = mac.WindowAtPoint(float64(point.X), float64(a.y+targetH-4), screenH)
+				outsideHit = mac.WindowAtPoint(float64(point.X), float64(point.Y), screenH)
+			})
+			if moving || frame.Height != targetH {
+				t.Errorf("settled native frame %+v retains overshoot room: panelH=%d moving=%v", frame, targetH, moving)
+			}
+			if insideHit != shelfNum || outsideHit != receiverNum {
+				t.Errorf("bottom edge at y=%d: inside target=%d want Shelf=%d; y=%d target=%d want receiver=%d",
+					frame.Y+targetH, insideHit, shelfNum, point.Y, outsideHit, receiverNum)
+			}
+			t.Logf("native frame=%+v panelH=%d point=(%d,%d) Shelf=%d receiver=%d inside_hit=%d outside_hit=%d",
+				frame, targetH, point.X, point.Y, shelfNum, receiverNum, insideHit, outsideHit)
+		})
+	}
+}
+
+func TestSmokeEdgeOpenedDropZoneFollowsPointer(t *testing.T) {
+	a := redesignShelf(t)
+	motionClosed(a)
+	time.Sleep(600 * time.Millisecond)
+	path := writeFile(t, t.TempDir(), "incoming.png", testPNGBytes(t))
+	var point mygo.Point
+	oldFiles, oldCount, oldCursor := dragFiles, dragFilesChange, cursorPoint
+	onMain(func() {
+		dragFiles = func(*shelf) []string { return []string{path} }
+		dragFilesChange = func(*shelf) int64 { return 123 }
+		cursorPoint = func() mygo.Point { return point }
+		point = mygo.Point{X: a.stripCenter(), Y: a.y + a.notchH + 8}
+		a.dragging, a.pointerDrag, a.ownDrag = true, true, false
+		a.dragSerial++
+		a.show(true)
+	})
+	t.Cleanup(func() {
+		onMain(func() {
+			dragFiles, dragFilesChange, cursorPoint = oldFiles, oldCount, oldCursor
+			a.dragging, a.pointerDrag = false, false
+		})
+		motionClosed(a)
+	})
+	time.Sleep(850 * time.Millisecond)
+	var withZone, withoutZone int
+	onMain(func() {
+		if a.winH == 0 || !a.edgeOpened || !a.drop.on {
+			t.Errorf("incoming drag did not show its native drop zone")
+		}
+		withZone = a.win.Bounds().Height
+		point = mygo.Point{X: a.x + panelWidth + 80, Y: a.y + a.panelH() + 40}
+		a.win.Invalidate()
+	})
+	time.Sleep(80 * time.Millisecond)
+	onMain(func() {
+		if a.drop.on {
+			t.Error("the drop zone stayed lit after the pointer left the edge-opened panel")
+		}
+	})
+	time.Sleep(500 * time.Millisecond)
+	onMain(func() {
+		withoutZone = a.win.Bounds().Height
+		if withoutZone >= withZone || withoutZone != a.panelH() {
+			t.Errorf("native panel retained drop-zone height: with=%d outside=%d panelH=%d", withZone, withoutZone, a.panelH())
+		}
+		point = mygo.Point{X: a.stripCenter(), Y: a.y + a.notchH + 8}
+		a.win.Invalidate()
+	})
+	time.Sleep(500 * time.Millisecond)
+	onMain(func() {
+		if !a.drop.on || a.win.Bounds().Height != withZone {
+			t.Errorf("returning to the panel did not restore the drop zone: on=%v frame=%+v", a.drop.on, a.win.Bounds())
+		}
+		t.Logf("edgeOpened=%v pointer exit: drop zone off; native height %d -> %d -> %d on reentry",
+			a.edgeOpened, withZone, withoutZone, a.win.Bounds().Height)
+	})
 }

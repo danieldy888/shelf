@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"shelf/internal/mac"
 	"shelf/internal/store"
 )
 
@@ -361,5 +363,64 @@ func TestOpeningFrameStaysAlignedAndFreezesPeekMorph(t *testing.T) {
 	settled := a.desiredFrame()
 	if settled.X != firstFrame.X || settled.Width != firstFrame.Width {
 		t.Fatalf("settled frame %+v shifted horizontally from flight frame %+v", settled, firstFrame)
+	}
+}
+
+// A track/drag change while opening must affect the visible fold, not only
+// the peek that appears after the panel has already disappeared.
+func TestClosingFollowsCurrentPeekAfterOpeningStateChanges(t *testing.T) {
+	oldFiles, oldCount, oldCursor := dragFiles, dragFilesChange, cursorPoint
+	dragFiles = func(*shelf) []string { return nil }
+	dragFilesChange = func(*shelf) int64 { return 0 }
+	cursorPoint = func() mygo.Point { return mygo.Point{} }
+	t.Cleanup(func() { dragFiles, dragFilesChange, cursorPoint = oldFiles, oldCount, oldCursor })
+	for _, name := range []string{"track stops", "drag starts", "drag ends"} {
+		t.Run(name, func(t *testing.T) {
+			makePanel := func() (*shelf, *ui.Tester) {
+				a := motionWindow()
+				a.settings.IslandNowPlaying = true
+				a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "Track"}}
+				a.modules = []module{a.np}
+				a.dragging = name == "drag ends"
+				v := ui.NewTester(a.view, panelWidth, panelHeight)
+				v.Frame()
+				a.peeking = true
+				for range 24 {
+					v.Frame()
+					v.Advance(16 * time.Millisecond)
+				}
+				a.visible = true
+				v.Frame()
+				v.Advance(96 * time.Millisecond)
+				v.Frame()
+				return a, v
+			}
+			changed, changedView := makePanel()
+			control, controlView := makePanel()
+			switch name {
+			case "track stops":
+				changed.np.have = false
+			case "drag starts":
+				changed.dragging = true
+			case "drag ends":
+				changed.dragging = false
+			}
+			changed.visible, changed.peeking = false, false
+			control.visible, control.peeking = false, false
+			for range 3 {
+				changedView.Frame()
+				controlView.Frame()
+				changedView.Advance(16 * time.Millisecond)
+				controlView.Advance(16 * time.Millisecond)
+			}
+			direction := float32(-1)
+			if name == "drag ends" {
+				direction = 1
+			}
+			if direction*(changed.fx.w-control.fx.w) <= 0.1 || direction*(changed.fx.h-control.fx.h) <= 0.1 {
+				t.Fatalf("the fold still uses the old peek shape: changed %.3fx%.3f, unchanged %.3fx%.3f",
+					changed.fx.w, changed.fx.h, control.fx.w, control.fx.h)
+			}
+		})
 	}
 }

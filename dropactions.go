@@ -302,7 +302,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		if d.serial != a.dragSerial {
 			*d = dropZoneState{serial: a.dragSerial}
 		}
-		inside := over || a.edgeOpened || a.win == nil
+		inside := over || a.win == nil
 		if !inside {
 			p := cursorPoint()
 			inside = p.X >= a.x && p.X < a.x+panelWidth && p.Y >= a.y && p.Y < a.y+a.panelH()

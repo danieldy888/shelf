@@ -35,6 +35,7 @@ type shelf struct {
 	dispBounds                                 mygo.Rectangle
 	frame                                      mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
 	settingFrame                               bool
+	buildingView, frameQueued                  bool // defer native resize until the current UI frame has painted
 	animationStart                             time.Time
 	animationFrom, progress                    float32
 	openGen                                    int     // counts openings; keys the panel's height animation

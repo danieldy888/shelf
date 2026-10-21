@@ -162,6 +162,8 @@ type panelHeightKey struct{ gen int }
 // 提示）、展开（纯黑面板从刘海里长出来）。单元测试里 a.win 为 nil，
 // 直接按完整展开态渲染。
 func (a *shelf) view(c *ui.Context) {
+	a.buildingView = true
+	defer func() { a.buildingView = false }()
 	// A page that got switched off (or a stale id) must not stay current:
 	// fold back to the tray before anything reads a.tab.
 	a.normalizeTab()
@@ -367,18 +369,21 @@ func (a *shelf) view(c *ui.Context) {
 	// player, capsule) when it changes while shown, e.g. a drag starting.
 	peekW, peekH := a.peekSize()
 	if a.win != nil {
-		if expanded || closing {
-			// Once the panel is opening or closing, openK drives the shell
-			// alone: freeze the peek shape so a concurrent peekW/peekH
-			// spring cannot fight openK or pull the shell back mid-flight.
+		if expanded {
+			// Opening uses one fixed peek shape so its morph cannot fight
+			// openK. Closing instead follows the current track/drag state.
 			if a.fx.peekK > 0 && a.fx.peekW > 0 && a.fx.peekH > 0 {
 				peekW, peekH = a.fx.peekW, a.fx.peekH
 			}
 			peekW = zone.Jump("peek-w", peekW)
 			peekH = zone.Jump("peek-h", peekH)
 		} else {
-			peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
-			peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
+			anim := sizeAnim
+			if closing {
+				anim = closeSpring
+			}
+			peekW = zone.AnimateTo("peek-w", peekW, anim)
+			peekH = zone.AnimateTo("peek-h", peekH, anim)
 		}
 	}
 	a.fx.peekW, a.fx.peekH = peekW, peekH
