@@ -104,6 +104,7 @@ type dropZoneState struct {
 	class  dropClass // their classification
 	until  time.Time // hold deadline once the drag flag fell
 	done   bool      // this session's drop already landed
+	frozen bool      // the release happened (or the board rewrote): the shown set is final
 	on     bool      // the zone drew this frame
 	need   int       // stage height the zone asks for (0 while off)
 }
@@ -295,8 +296,30 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 			d.on, d.need = true, dropZoneNeedH()
 			return d.files
 		}
-	} else if !a.dragging && !d.loaded {
+	} else if !a.dragging && !d.loaded && !d.frozen {
 		d.files = nil
+	}
+	// The release freezes the shown set: the pasteboard's changeCount bumps
+	// while the monitor still reports the drag, and a fresh drag's serial
+	// change can land before an answered drop is delivered — neither may
+	// swap or discard the cells the user released on. The freeze holds the
+	// same files until the drop lands (done) or the hold expires.
+	if d.frozen {
+		if d.done || len(d.files) == 0 || (d.until.IsZero() || time.Now().After(d.until)) {
+			d.frozen = false
+			*d = dropZoneState{}
+			return nil
+		}
+		if a.win != nil {
+			p := cursorPoint()
+			if p.X < a.x || p.X >= a.x+panelWidth || p.Y < a.y || p.Y >= a.y+a.panelH() {
+				d.frozen = false
+				*d = dropZoneState{}
+				return nil // released outside the panel: nothing to deliver
+			}
+		}
+		d.on, d.need = true, dropZoneNeedH()
+		return d.files
 	}
 	if a.dragging {
 		if d.serial != a.dragSerial {
@@ -310,10 +333,19 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		if !inside {
 			return nil
 		}
-		if count := dragFilesChange(a); !d.loaded || count != d.count {
+		// Once the zone has files its picture is the snapshot the user aims
+		// at; only an empty zone tracks board changes (promised files can
+		// arrive late). A count change on a loaded zone is the release's
+		// rewrite — freeze instead of swapping cells under the pointer.
+		if count := dragFilesChange(a); !d.loaded || (count != d.count && len(d.files) == 0) {
 			d.count, d.loaded = count, true
 			d.files = dragFiles(a)
 			d.class = classifyDrop(d.files)
+		} else if len(d.files) > 0 && count != d.count {
+			d.frozen = true
+			d.until = time.Now().Add(dropHoldGrace)
+			d.on, d.need = true, dropZoneNeedH()
+			return d.files
 		}
 		if len(d.files) == 0 {
 			return nil
@@ -323,7 +355,9 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 	}
 	// The drag flag fell: keep serving this session's files briefly so a
 	// release already answered but not yet rendered still finds its cell.
-	if d.done || d.serial != a.dragSerial || len(d.files) == 0 {
+	// The serial check is dropped: a new drag starting inside grace must
+	// not discard a drop the old session already accepted.
+	if d.done || len(d.files) == 0 {
 		return nil
 	}
 	if d.until.IsZero() {
@@ -337,6 +371,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 			return nil // released outside the panel: nothing to deliver
 		}
 	}
+	d.frozen = true // the drag ended: this set is final until delivered
 	d.on, d.need = true, dropZoneNeedH()
 	return d.files
 }
@@ -499,23 +534,27 @@ func (a *shelf) dropActionCell(c *ui.Context, act dropAction, busy bool) {
 	}
 }
 
-// runDropAction executes the cell the files were released on. The files
-// come from the drop data itself — the same bytes the tray path reads —
-// so a source that never exposed paths mid-drag still lands correctly.
-// AirDrop only opens the system sheet. Everything else drives the
-// existing conversion pipeline on items built from the paths: they are
-// not shelved; only the outputs land in the tray, front and selected, so
-// the panel settles on the tray page.
+// runDropAction executes the cell the files were released on. The set it
+// acts on is the set the cells drew — a.drop.files — frozen at release so
+// a board rewrite under the pointer can't swap the job; the drop data is
+// the fallback for sources that never exposed paths mid-drag. AirDrop
+// only opens the system sheet. Everything else drives the existing
+// conversion pipeline on items built from the paths: they are not
+// shelved; only the outputs land in the tray, front and selected, so the
+// panel settles on the tray page.
 func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 	a.received = true
 	a.drop.done = true
 	if a.tab != pageTray {
 		a.setTab(pageTray)
 	}
-	files, err := dropFilesData(data)
-	if err != nil || len(files) == 0 {
-		a.receive(data)
-		return
+	files := a.drop.files
+	if len(files) == 0 {
+		var err error
+		if files, err = dropFilesData(data); err != nil || len(files) == 0 {
+			a.receive(data)
+			return
+		}
 	}
 	if act.isAirDrop {
 		if err := airDrop(files, nil); err != nil {
@@ -545,8 +584,17 @@ func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 // entries for paths no longer dragged in, keeping it bounded by the
 // handful of files a drag carries.
 var (
-	dropThumbCache = map[string]*ui.Bitmap{}
-	dropThumbBusy  = map[string]bool{}
+	dropThumbCache  = map[string]*ui.Bitmap{}
+	dropThumbBusy   = map[string]int{} // path → generation of the decode in flight
+	dropThumbSeq    int
+	dropThumbActive int // decoders in flight, capped like the tray's
+)
+
+// dropThumbWork and dropThumbUpdate are the two seams headless tests swap:
+// the goroutine spawn and the main-thread hand-off.
+var (
+	dropThumbWork   = func(fn func()) { go fn() }
+	dropThumbUpdate = func(a *shelf, fn func()) { a.win.Update(fn) }
 )
 
 // dropThumbs answers the cached thumbnails for paths in order (nil for
@@ -560,6 +608,9 @@ func (a *shelf) dropThumbs(paths []string) []*ui.Bitmap {
 	}
 	for k := range dropThumbBusy {
 		if !slices.Contains(paths, k) {
+			// The path left the stack mid-decode: removing the busy mark is
+			// what stops finishDropThumb from writing the now-unwanted
+			// result back into the cache.
 			delete(dropThumbBusy, k)
 		}
 	}
@@ -576,28 +627,43 @@ func (a *shelf) dropThumbs(paths []string) []*ui.Bitmap {
 
 // startDropThumb begins decoding path's thumbnail; the picture decode
 // runs off the main thread, the Finder-icon fallback on it, and the
-// result lands through a window update.
+// result lands through a window update. At most maxConcurrentThumbs run
+// at once — a full lane retries next frame instead of queueing, same as
+// the tray thumbnails.
 func (a *shelf) startDropThumb(path string) {
-	if a.win == nil || a.winH == 0 || dropThumbBusy[path] {
+	if a.win == nil || a.winH == 0 || dropThumbBusy[path] != 0 {
 		return
 	}
-	dropThumbBusy[path] = true
-	go func() {
+	if dropThumbActive >= maxConcurrentThumbs {
+		return
+	}
+	dropThumbSeq++
+	seq := dropThumbSeq
+	dropThumbBusy[path] = seq
+	dropThumbActive++
+	dropThumbWork(func() {
 		var bmp *ui.Bitmap
 		if img := decodeThumb(path); img != nil {
 			bmp = ui.NewBitmap(img)
 		}
-		a.win.Update(func() {
-			delete(dropThumbBusy, path)
-			if a.quitting {
-				return
-			}
-			if bmp == nil {
-				if icon := mac.FileIcon(path, 26); len(icon) > 0 {
-					bmp, _ = ui.DecodeBitmap(icon)
-				}
-			}
-			dropThumbCache[path] = bmp
-		})
-	}()
+		dropThumbUpdate(a, func() { a.finishDropThumb(path, bmp, seq) })
+	})
+}
+
+// finishDropThumb runs on the main thread through the window's update:
+// it writes the decoded bitmap unless the path's busy mark was cleared
+// (the path left the stack mid-decode) or replaced (a newer decode for
+// the same path owns it — the stale result must not evict that slot).
+func (a *shelf) finishDropThumb(path string, bmp *ui.Bitmap, seq int) {
+	dropThumbActive--
+	if dropThumbBusy[path] != seq || a.quitting {
+		return
+	}
+	delete(dropThumbBusy, path)
+	if bmp == nil {
+		if icon := mac.FileIcon(path, 26); len(icon) > 0 {
+			bmp, _ = ui.DecodeBitmap(icon)
+		}
+	}
+	dropThumbCache[path] = bmp
 }

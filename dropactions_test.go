@@ -526,11 +526,16 @@ func TestDropZoneBoardReadsOncePerChange(t *testing.T) {
 	if *reads != 1 {
 		t.Fatalf("unchanged board read %d times in 6 frames", *reads)
 	}
-	*count++ // the source rewrote the board mid-drag: refetch once
+	// A bump with files already loaded is the release's board rewrite: the
+	// zone freezes its picture instead of re-reading.
+	*count++
 	a.dropZoneSnap(true)
 	a.dropZoneSnap(true)
-	if *reads != 2 {
-		t.Fatalf("one change read the board %d times", *reads)
+	if *reads != 1 {
+		t.Fatalf("the release's rewrite re-read the board %d times", *reads)
+	}
+	if !a.drop.frozen {
+		t.Fatal("the loaded zone did not freeze on the board bump")
 	}
 }
 
@@ -621,5 +626,175 @@ func TestDropActionSubtitlesMatchBehavior(t *testing.T) {
 				t.Fatalf("airdrop sub %q", act.sub)
 			}
 		}
+	}
+}
+
+// TestDropZoneFreezesAtReleaseCountBump: the release bumps the drag
+// pasteboard's changeCount while the monitor still reports the drag
+// running. The frame between them must serve the cells the user aimed at,
+// not the board's rewritten content (PhaseDrop: a bump mid-drag read and
+// reclassified the board, so a drop aimed at 「转成 PDF · 1 页」 could run
+// as 「合成一个 PDF」 or vanish entirely).
+func TestDropZoneFreezesAtReleaseCountBump(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	img2 := writeFile(t, dir, "2.png", testPNGBytes(t))
+	files := []string{img}
+	a, _, count := snapShelf(t, files)
+	oldF := dragFiles
+	dragFiles = func(*shelf) []string { return files }
+	t.Cleanup(func() { dragFiles = oldF })
+
+	// Drag hovers with one image: the zone serves the single-image cells.
+	a.dropZoneSnap(true)
+	if len(a.drop.files) != 1 {
+		t.Fatal("no zone while dragging")
+	}
+	// Release rewrites the board before the flag falls: the source now
+	// reports a different, larger set.
+	*count++
+	files = []string{img, img2}
+	if got := a.dropZoneSnap(true); len(got) != 1 || got[0] != img {
+		t.Fatalf("the release frame re-read the board: %v", got)
+	}
+	if len(a.drop.files) != 1 {
+		t.Fatalf("the served set changed under the pointer: %v", a.drop.files)
+	}
+}
+
+// TestDropZoneFrozenSurvivesNewDragSerial: a new drag that starts while a
+// release is still pending must not reset the zone and drop the pending
+// drop — the frozen snapshot outlives the serial change until consumed or
+// expired.
+func TestDropZoneFrozenSurvivesNewDragSerial(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, _, _ := snapShelf(t, []string{img})
+	a.dropZoneSnap(true)
+	// The release fell: grace serves the old session…
+	a.dragging = false
+	a.dropZoneSnap(true)
+	if !a.drop.frozen {
+		t.Fatal("the release did not freeze the zone")
+	}
+	// …and stays even after a new drag bumps the serial.
+	a.dragging = true
+	a.dragSerial++
+	if got := a.dropZoneSnap(true); len(got) != 1 || got[0] != img {
+		t.Fatalf("a new drag's serial discarded the pending drop's zone: %v", got)
+	}
+}
+
+// TestDropZoneFrozenStopsBoardReads: once frozen the zone must not touch
+// the pasteboard at all — no reclassification, no new file list.
+func TestDropZoneFrozenStopsBoardReads(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, reads, _ := snapShelf(t, []string{img})
+	a.dropZoneSnap(true)
+	before := *reads
+	a.dragging = false
+	for range 4 {
+		if got := a.dropZoneSnap(true); len(got) != 1 {
+			t.Fatalf("frozen zone stopped answering mid-grace: %v", got)
+		}
+	}
+	if *reads != before {
+		t.Fatalf("the frozen zone re-read the board %d times", *reads-before)
+	}
+}
+
+// TestDropZoneMidDragBoardChangeIgnored: while files are already loaded,
+// a changeCount bump mid-drag is the release rewriting the board — the
+// zone's picture must not follow it.
+func TestDropZoneMidDragBoardChangeIgnored(t *testing.T) {
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, reads, count := snapShelf(t, []string{img})
+	a.dropZoneSnap(true)
+	*count++ // board rewrite while still dragging: freeze, don't re-read
+	if got := a.dropZoneSnap(true); len(got) != 1 {
+		t.Fatalf("frozen zone lost the files: %v", got)
+	}
+	if *reads != 1 {
+		t.Fatalf("frozen zone re-read the board: %d reads", *reads)
+	}
+	if a.drop.frozen != true {
+		t.Fatal("a loaded zone did not freeze on the count bump")
+	}
+}
+
+// TestRunDropActionUsesWhatWasShown: the set an action runs on is the set
+// the cells were drawn from — even if the drop data would resolve a
+// different list (the frozen snapshot is the truth the user saw).
+func TestRunDropActionUsesWhatWasShown(t *testing.T) {
+	a, f, dir := dropShelf(t)
+	png := writeFile(t, dir, "截图.png", testPNGBytes(t))
+	png2 := writeFile(t, dir, "图2.png", testPNGBytes(t))
+	a.drop.files = []string{png} // what the zone displayed
+	a.drop.class = classifyDrop(a.drop.files)
+	act := dropActionsFor(a.drop.files, a.drop.class)[1] // 转成 PDF · 1 页
+	if act.id != "topdf" || act.target != toPDF {
+		t.Fatalf("picked %v", act)
+	}
+	// The drop data carries more files than the zone showed — a board that
+	// rewrote under the pointer. The shown set wins.
+	a.runDropAction(act, fileDrop(t, png, png2))
+	if len(f.pdfSrcs) != 1 || len(f.pdfSrcs[0]) != 1 {
+		t.Fatalf("expected one 1-page PDF job for the shown file, got %v", f.pdfSrcs)
+	}
+}
+
+// TestDropThumbCapAndStaleWriteBack: decodes for dropped-in paths respect
+// the shared concurrency cap, and a path that leaves the stack mid-decode
+// never lands its bitmap in the cache.
+func TestDropThumbCapAndStaleWriteBack(t *testing.T) {
+	dir := t.TempDir()
+	png := writeFile(t, dir, "1.png", testPNGBytes(t))
+	a, _, _ := snapShelf(t, []string{png})
+	a.win = &mygo.Window{} // non-nil so the worker path runs
+	a.winH = 1
+	t.Cleanup(func() { a.win = nil; a.winH = 0 })
+	oldWork, oldUpdate := dropThumbWork, dropThumbUpdate
+	var pending []func()
+	dropThumbWork = func(fn func()) { pending = append(pending, fn) }
+	dropThumbUpdate = func(_ *shelf, fn func()) { fn() }
+	t.Cleanup(func() { dropThumbWork, dropThumbUpdate = oldWork, oldUpdate })
+	t.Cleanup(func() {
+		dropThumbCache = map[string]*ui.Bitmap{}
+		dropThumbBusy = map[string]int{}
+		dropThumbActive = 0
+	})
+
+	// Two lanes, three paths: the third must wait for a slot.
+	extra := []string{writeFile(t, dir, "2.png", testPNGBytes(t)), writeFile(t, dir, "3.png", testPNGBytes(t))}
+	paths := append([]string{png}, extra...)
+	a.dropThumbs(paths)
+	if len(pending) != maxConcurrentThumbs {
+		t.Fatalf("started %d decodes, cap is %d", len(pending), maxConcurrentThumbs)
+	}
+	if dropThumbBusy[extra[1]] != 0 {
+		t.Fatal("a third decode started while both lanes were full")
+	}
+
+	// The first path's decode finishes while the path is still wanted.
+	pending[0]()
+	if dropThumbCache[png] == nil {
+		t.Fatal("decode finished but never cached")
+	}
+	pending = pending[1:]
+
+	// Mid-decode, the second path leaves the stack: finish must not write.
+	a.dropThumbs([]string{png, extra[1]}) // extra[0] evicted from busy
+	pending[0]()
+	if _, ok := dropThumbCache[extra[0]]; ok {
+		t.Fatal("a decode wrote back for a path no longer dragged")
+	}
+	pending = pending[1:]
+
+	// The freed slot lets the deferred third path start on the next frame.
+	a.dropThumbs([]string{png, extra[1]})
+	if len(pending) != 1 || dropThumbBusy[extra[1]] == 0 {
+		t.Fatalf("deferred path did not start: pending %d", len(pending))
 	}
 }
