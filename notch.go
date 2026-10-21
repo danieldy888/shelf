@@ -239,14 +239,16 @@ func capsuleFrameW() int {
 // the shell drawn in view(): the now-playing pill while a track is
 // loaded, otherwise the chevron bulge. A press anywhere on it expands the
 // shelf — the design has no in-pill controls. While the completion capsule
-// is on the shell the box is the shell actually drawn, so a fold in flight
-// keeps its click box the same size as the picture.
+// or a fold in flight is on the shell the box is the shell actually drawn
+// (a fold remnant still takes its own clicks), shifted by the error shake
+// so the moving capsule keeps its own hit box.
 func (a *shelf) peekPillRect() mygo.Rectangle {
 	w, h := a.peekSize()
-	if (a.peeking || a.fb.drawn || a.fb.retracting) && a.fx.w > 0 {
+	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && a.fx.w > 0 {
 		w, h = a.fx.w, a.fx.h
 	}
-	return mygo.Rectangle{X: a.stripCenter() - int(w/2), Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
+	x := a.stripCenter() - int(w/2) + int(a.fx.shakeX)
+	return mygo.Rectangle{X: x, Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
 }
 
 func (a *shelf) overPeekPill(p mygo.Point) bool {
@@ -273,11 +275,11 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	// overlay paints a "click to expand" pill that never receives the click.
 	// A press on the visible pill expands either way — except a press the
 	// hover player received itself: its transport buttons handle that, and
-	// the player opens the shelf for presses elsewhere on it. The window
-	// keeps ignoring the mouse while the capsule shows, so every press
-	// there arrives through this monitor and clicks elsewhere pass through.
-	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && (inside || a.overPeekPill(p)) {
-		if inside && a.overPeekPill(p) && a.peeking && a.np != nil && a.np.showsPlayer() {
+	// the player opens the shelf for presses elsewhere on it. Only a press
+	// inside the drawn shape acts: transparent window margin neither opens
+	// the panel nor claims the event for it.
+	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && a.overPeekPill(p) {
+		if inside && a.peeking && a.np != nil && a.np.showsPlayer() {
 			return
 		}
 		a.show(false)
@@ -324,12 +326,17 @@ func (a *shelf) windowLevel() int {
 // flips this on the drag's first movement, long before the top). A closing
 // panel follows the drawn shell (fx.openK), not the tick's eased progress:
 // the moment the shell has folded back to the peek shape the window lets
-// clicks through again.
+// clicks through again. The completion capsule is a peek shape too: while
+// it shows, the window accepts the mouse only over its drawn body — never
+// over the transparent margin the frame keeps for shake and growth.
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
-	acceptAll := a.visible || a.fx.openK > 0.01 || a.dragging || a.pointerDrag || a.peeking || a.peekProgress > 0.01
-	// A hovered shape only takes the mouse over its drawn body. Native
-	// shadow/ear margins must not block menu-bar items or windows below.
+	acceptAll := a.visible || a.fx.openK > 0.01 || a.dragging || a.pointerDrag ||
+		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting
+	// A hovered or capsule shape only takes the mouse over its drawn body.
+	// Native shadow/ear margins must not block menu-bar items or windows
+	// below — and while the capsule shows, a press elsewhere on the strip
+	// belongs to whatever is underneath.
 	if a.winH != 0 && !a.visible && a.fx.openK <= 0.01 && !a.dragging && !a.pointerDrag {
 		acceptAll = acceptAll && a.overPeekPill(cursorPoint())
 	}

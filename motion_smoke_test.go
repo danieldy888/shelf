@@ -74,7 +74,7 @@ func motionClosed(a *shelf) {
 		a.peekProgress, a.peekFrom = 0, 0
 		a.peekAnimStart = time.Time{}
 		a.fb = feedback{}
-		a.status, a.statusUntil, a.statusShown = "", time.Time{}, time.Time{}
+		a.status, a.statusUntil, a.statusSeen, a.statusSeenAt = "", time.Time{}, 0, time.Time{}
 		a.place(mygo.Screen.CursorScreenPoint())
 		a.win.SetOpacity(1)
 		a.win.ShowInactive()

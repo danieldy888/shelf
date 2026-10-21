@@ -415,11 +415,13 @@ func (a *shelf) view(c *ui.Context) {
 	a.fx.openMoving = a.win != nil && !zone.Settled("open")
 	a.fx.peek = !expanded && peeked && !closing
 	a.syncMousePassThrough()
-	// A failed job shakes the capsule, and only the capsule.
+	// A failed job shakes the capsule, and only the capsule; the drawn
+	// offset goes into fx so the hit box and frame follow the shape.
 	var shake float32
 	if capsule {
 		shake = a.fb.shake(now, c.Preferences().ReduceMotion)
 	}
+	a.fx.shakeX = shake
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
 	// 刘海里长出来，而不是浮在菜单栏下方。窗口宽度含两侧耳角（earR），
@@ -842,17 +844,19 @@ func (a *shelf) pill(c *ui.Context, key, text string, isErr bool) {
 	})
 }
 
-// statusToast renders a.status as a fading pill and arms its expiry: an
-// explicit statusUntil wins; a status without one (notices, errors) fades
-// toastLife after it first shows. report()ed errors carry a red dot.
+// statusToast renders a.status as a fading pill: an explicit statusUntil
+// wins; a status without one (notices, errors) fades toastLife of seen
+// time — the same clock dismissReadFeedback reads, so panel-closed time
+// never eats a deadline-free toast. report()ed errors carry a red dot.
 func (a *shelf) statusToast(c *ui.Context) {
 	now := c.Now()
-	if a.statusShown.IsZero() {
-		a.statusShown = now
+	seen := a.statusSeen
+	if !a.statusSeenAt.IsZero() {
+		seen += now.Sub(a.statusSeenAt)
 	}
 	until := a.statusUntil
 	if until.IsZero() {
-		until = a.statusShown.Add(toastLife)
+		until = now.Add(toastLife - seen)
 	}
 	remaining := until.Sub(now)
 	if remaining <= 0 {

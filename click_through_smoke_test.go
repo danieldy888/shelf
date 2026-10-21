@@ -65,3 +65,81 @@ func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 	check(true, "hover player")
 	peekRestore(t, a)
 }
+
+// While the completion capsule is up, WindowServer must hand presses on
+// the drawn capsule to Shelf and let everything beside it — the frame's
+// transparent shake/growth margin — fall to whatever is underneath.
+// Acceptance is pointer-gated per frame, so the cursor is parked where
+// the press lands first. Run with SHELF_BASKET_SMOKE=1.
+func TestCapsuleTakesClicksOnlyOnItsBody(t *testing.T) {
+	a := redesignShelf(t)
+	oldCursor := cursorPoint
+	t.Cleanup(func() { onMain(func() { cursorPoint = oldCursor }) })
+	onMain(func() {
+		a.place(mygo.Screen.CursorScreenPoint())
+		a.visible, a.progress, a.peeking, a.peekProgress = false, 0, false, 0
+		a.toastStatus("已复制", time.Now().Add(4*time.Second), statusOK)
+		a.win.Invalidate()
+	})
+	time.Sleep(800 * time.Millisecond) // grow-out settles; WindowServer
+	// publishes the resized frame
+
+	var shelf int
+	var r mygo.Rectangle
+	onMain(func() {
+		shelf = mac.WindowNumber(a.win.NativeHandle())
+		r = a.peekPillRect()
+		if r.Width <= 0 {
+			t.Fatal("no drawn capsule to hit-test")
+		}
+		cursorPoint = func() mygo.Point {
+			return mygo.Point{X: r.X + r.Width/2, Y: r.Y + r.Height/2}
+		}
+		a.syncMousePassThrough()
+	})
+	time.Sleep(150 * time.Millisecond) // let WindowServer apply ordering
+
+	screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
+	onMain(func() {
+		for _, p := range [][2]float64{
+			{float64(r.X + r.Width/2), float64(r.Y + r.Height/2)},
+			{float64(r.X+r.Width) - 8, float64(r.Y+r.Height) - 4},
+		} {
+			hit := mac.WindowAtPoint(p[0], float64(a.dispBounds.Y)+p[1]-float64(a.y), screenH)
+			if hit != shelf {
+				t.Errorf("click inside the capsule body missed Shelf at %v (hit %d)", p, hit)
+			}
+		}
+	})
+
+	// A press in the transparent margin — still inside the window's
+	// frame — must reach whatever is underneath. The flip is applied on
+	// the next cursor gate, so each probe point gets its own settle.
+	f := a.desiredFrame()
+	for _, p := range [][2]float64{
+		{float64(r.X) - 14, float64(r.Y) + 4},
+		{float64(r.X + r.Width) + 14, float64(r.Y) + 4},
+	} {
+		if p[0] <= float64(f.X) || p[0] >= float64(f.X+f.Width) {
+			continue // outside the window: nothing to prove
+		}
+		px, py := int(p[0]), int(p[1])
+		onMain(func() {
+			cursorPoint = func() mygo.Point { return mygo.Point{X: px, Y: py + a.y} }
+			a.syncMousePassThrough()
+		})
+		time.Sleep(150 * time.Millisecond)
+		var hit int
+		onMain(func() {
+			hit = mac.WindowAtPoint(float64(px), float64(a.dispBounds.Y)+float64(py)-float64(a.y), screenH)
+		})
+		if hit == shelf {
+			t.Errorf("click on the capsule's margin hit Shelf at %v", p)
+		}
+	}
+	onMain(func() {
+		a.fb = feedback{}
+		a.status = ""
+		a.syncMousePassThrough()
+	})
+}

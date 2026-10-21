@@ -26,7 +26,7 @@ func TestUnarmedToastReadInPanelDoesNotReplay(t *testing.T) {
 			a.peeking = false
 			a.visible, a.progress = true, 1
 			view.Frame()
-			a.statusShown = time.Now().Add(-2 * time.Second)
+			a.statusSeen, a.statusSeenAt = 2*time.Second, time.Now()
 			a.hide(hideExplicit)
 			a.progress = 0
 			view.Frame()
@@ -39,7 +39,10 @@ func TestUnarmedToastReadInPanelDoesNotReplay(t *testing.T) {
 	}
 }
 
-func TestDeliveredCollapsedMarginClickDoesNotDisappear(t *testing.T) {
+func TestCollapsedMarginClickBelongsBelow(t *testing.T) {
+	// Transparent window margin around the drawn pill/capsule takes no
+	// clicks: a press there never opens the panel and never disappears the
+	// shape. Only a press inside the drawn box expands.
 	for _, capsule := range []bool{false, true} {
 		a := motionShelf()
 		a.peeking = !capsule
@@ -51,8 +54,12 @@ func TestDeliveredCollapsedMarginClickDoesNotDisappear(t *testing.T) {
 		}
 		r := a.peekPillRect()
 		a.mouseDown(true, 0, mygo.Point{X: r.X - 5, Y: a.y + 40})
+		if a.visible {
+			t.Fatalf("a margin click opened the panel (capsule=%v)", capsule)
+		}
+		a.mouseDown(true, 0, mygo.Point{X: r.X + r.Width/2, Y: r.Y + r.Height/2})
 		if !a.visible {
-			t.Fatalf("delivered margin click was swallowed (capsule=%v)", capsule)
+			t.Fatalf("a press inside the drawn shape did not expand (capsule=%v)", capsule)
 		}
 	}
 }

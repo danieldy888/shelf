@@ -528,12 +528,12 @@ func TestToastPostedWhileClosingStillShows(t *testing.T) {
 }
 
 // TestCollapsedToastKeepsItsClockInThePill: posting a status while the panel
-// is closed must not stamp the pill's show-time — when the panel opens the
-// toast still lives until its first paint, as it always did.
+// is closed must not start the seen clock — when the panel opens the toast
+// still lives until its first paint, as it always did.
 func TestCollapsedToastKeepsItsClockInThePill(t *testing.T) {
 	a := motionShelf()
 	a.toastStatus("出错了", time.Time{}, statusErr)
-	if !a.statusShown.IsZero() {
+	if a.statusSeen != 0 || !a.statusSeenAt.IsZero() {
 		t.Fatal("a closed-panel toast already counts down before it is ever painted")
 	}
 	if a.fb.text != "出错了" {

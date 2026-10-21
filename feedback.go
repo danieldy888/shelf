@@ -84,6 +84,7 @@ const (
 // spring is still on its way (the frame keeps overshoot room until then).
 type shellMotion struct {
 	w, h, peekW, peekH float32
+	shakeX             float32 // the error shake's current offset: the capsule's hit box follows it
 	openK              float32 // the drawn open interpolation: 0 = folded to the peek shape
 	peekK              float32 // the drawn peek interpolation, for the close clamp
 	peekKind           peekKind
@@ -101,6 +102,7 @@ type feedback struct {
 	shownAt    time.Time
 	until      time.Time
 	hold       time.Duration // visible span retained until the first drawn frame
+	played     string        // text that already ran its full span: never grows the capsule again
 	pillW      float32
 	drawn      bool        // drawn in the last frame (the window's command-line tests read it)
 	retracting bool        // the shell is folding back from the capsule
@@ -171,6 +173,7 @@ func (f *feedback) show(text string, kind statusKind, until time.Time, now time.
 	}
 	if f.text != text {
 		f.pillW = 0
+		f.played = "" // new words are unplayed
 	}
 	f.text, f.kind, f.live = text, kind, false
 	f.shownAt = now
@@ -328,14 +331,16 @@ func (f *feedback) settle(now time.Time) time.Time {
 
 // capsuleUp reports whether the notch should show the capsule: the panel is
 // fully closed, no hover or file drag has claimed the peek shape, and there
-// is something to say.
+// is something to say. A capsule whose hold just ended is stamped played —
+// the fold may still be drawing, but nothing may ever re-show the words.
 func (a *shelf) capsuleUp(now time.Time) bool {
+	up := a.fb.up(now)
+	if !up && a.fb.armed && a.fb.text != "" {
+		a.fb.played = a.fb.text
+	}
 	return !a.visible && a.progress <= 0.01 && !a.peeking &&
-		!(a.dragging && !a.ownDrag) && a.fb.up(now)
+		!(a.dragging && !a.ownDrag) && up
 }
-
-// schedule wakes the view at the hold's deadline or the next breathing
-// beat. Only the failure shake requests display-rate frames.
 func (f *feedback) schedule(c *ui.Context, now time.Time) {
 	if t := f.settle(now); !t.IsZero() {
 		c.After(max(t.Sub(now), 0) + 10*time.Millisecond)
@@ -347,8 +352,13 @@ func (f *feedback) schedule(c *ui.Context, now time.Time) {
 
 // clearExpired drops a toast whose time ran out once the shell has folded
 // all the way back, so nothing is measured or said about it afterwards.
+// The played stamp remembers what already ran: a status still carrying
+// that text must not grow the capsule again.
 func (f *feedback) clearExpired(now time.Time, folded bool) {
 	if folded && !f.up(now) {
+		if f.text != "" {
+			f.played = f.text
+		}
 		f.text, f.job = "", nil
 	}
 }
@@ -357,17 +367,17 @@ func (f *feedback) clearExpired(now time.Time, folded bool) {
 // while the opening spring is still in flight: room for the overshoot, plus
 // a tick of slack so the frame never trails the shell. The width also holds
 // the two ear corners (earR) the shell's top edge draws past its flanks,
-// and keeps the parity of the settled width (panelWidth+2*earR): at Bounce
-// 0.18 (~1.1% overshoot) the 16pt panel margin already absorbs the width
-// overshoot, so w equals panelWidth+2*earR and the window never shifts X
-// or changes width when the spring starts or comes to rest.
+// and keeps the parity of the settled width (panelWidth+2*earR). Both axes
+// use the panel's own spring overshoot (Bounce 0.18 peaks near 1.1%), not
+// the capsule's livelier 4.5% — in-flight margin still takes clicks, so it
+// must hug the shape that can actually be drawn.
 func openFrameRoom(expH float32) (w, h int) {
 	expW := float32(panelWidth - 16)
 	w = max(int(math.Ceil(float64(expW*(1+panelOpenOvershoot)))), panelWidth) + 2*earR
 	if w%(panelWidth+2*earR)%2 != 0 {
 		w++
 	}
-	return w, int(math.Ceil(float64(expH*(1+openOvershoot)))) + 2
+	return w, int(math.Ceil(float64(expH*(1+panelOpenOvershoot)))) + 2
 }
 
 // convertProgress is the activity strip's title and step for a running job,

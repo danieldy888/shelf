@@ -6,6 +6,7 @@ package main
 // player, hover, drag and panel transitions.
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -146,8 +147,9 @@ func TestHideHandsTheFreshToastToTheCapsule(t *testing.T) {
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
 	a.visible, a.progress = true, 1
 	a.toastStatus("已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second), statusOK)
-	view.Frame()               // the pill paints once
-	a.statusShown = time.Now() // one frame ago on the real clock: barely seen
+	view.Frame() // the pill paints once
+	// one frame ago on the real clock: barely seen
+	a.statusSeen, a.statusSeenAt = 0, time.Now()
 	if !view.HasText("已复制") {
 		t.Fatal("the pill did not show the confirmation")
 	}
@@ -173,7 +175,7 @@ func TestToastReadInThePanelDoesNotReplay(t *testing.T) {
 	view.Frame() // the pill starts showing
 	// The pill has been on screen past the readable floor (hide works on
 	// the real clock, so stamp the pill's first paint directly).
-	a.statusShown = time.Now().Add(-statusOK.holdFloor() - 200*time.Millisecond)
+	a.statusSeen, a.statusSeenAt = statusOK.holdFloor()+200*time.Millisecond, time.Now()
 	a.hide(hideExplicit)
 	a.progress = 0
 	view.Frame()
@@ -203,7 +205,8 @@ func TestCapsuleToastKeepsItsClockAcrossAPanelVisit(t *testing.T) {
 	// clock too — the content's opening blur makes headless frames slow,
 	// and handoffStatus inside hide measures the pill's read time in real
 	// time.
-	a.statusShown = time.Now()
+	// the visit was brief: seen time resets to now
+	a.statusSeen, a.statusSeenAt = 0, time.Now()
 	a.hide(hideExplicit)
 	a.progress = 0
 	view.Frame()
@@ -531,5 +534,136 @@ func TestFoldingCapsuleReceivesClicksAcrossItsVisibleWidth(t *testing.T) {
 	a.mouseDown(false, 0, mygo.Point{X: a.stripCenter() + 135, Y: a.y + 38})
 	if !a.visible {
 		t.Fatal("a click inside the folding shell passed outside the pill")
+	}
+}
+
+// TestOpeningFrameUsesThePanelSpring: while the panel is still opening,
+// the in-flight margin comes from the panel's own ~1.1% overshoot — not
+// the capsule's 4.5% — so the extra strip that catches clicks stays a
+// couple of points, not a dozen.
+func TestOpeningFrameUsesThePanelSpring(t *testing.T) {
+	a := motionShelf()
+	a.visible = true
+	a.progress, a.animationFrom = 0.5, 0
+	a.fx.openMoving = true
+	a.shownH = float32(a.panelH())
+	f := a.desiredFrame()
+	// The panel's own spring overshoot (≤1.5%) asks for less than the
+	// settled height, so the in-flight frame is exactly the panel's — no
+	// extra click-catching strip below it.
+	if f.Height > a.panelH() {
+		t.Fatalf("in-flight window height %d exceeds the settled panel %d", f.Height, a.panelH())
+	}
+	// A capsule-scale overshoot would have asked for noticeably more.
+	old := int(math.Ceil(float64(a.panelH()-8)*(1+openOvershoot))) + 2
+	if f.Height >= old {
+		t.Fatalf("in-flight window still keeps the capsule's margin: %d >= %d", f.Height, old)
+	}
+}
+
+// TestCapsuleTakesMouseOnlyOverItsBody: while a completion capsule is up,
+// the strip accepts the mouse over the drawn shape — a press there must
+// reach Shelf — and passes it through over the frame's margins.
+func TestCapsuleTakesMouseOnlyOverItsBody(t *testing.T) {
+	a := motionShelf()
+	a.winH = 1 // pretend a live native surface
+	a.toastStatus("已复制", time.Now().Add(3*time.Second), statusOK)
+	a.fb.drawn = true
+	a.fx = shellMotion{w: 240, h: 54}
+	old := cursorPoint
+	t.Cleanup(func() { cursorPoint = old })
+	r := a.peekPillRect()
+	cursorPoint = func() mygo.Point { return mygo.Point{X: r.X + r.Width/2, Y: r.Y + r.Height/2} }
+	a.syncMousePassThrough()
+	if a.ignoringMouse {
+		t.Fatal("the capsule's own body ignores the mouse")
+	}
+	cursorPoint = func() mygo.Point { return mygo.Point{X: r.X + r.Width + 20, Y: a.y + 10} }
+	a.syncMousePassThrough()
+	if !a.ignoringMouse {
+		t.Fatal("clicks beside the capsule still reach the strip window")
+	}
+}
+
+// TestShakeMovesTheCapsuleHitBox: the error capsule's shake shifts the
+// drawn shell; the hit box must shift with it or presses miss the moving
+// capsule.
+func TestShakeMovesTheCapsuleHitBox(t *testing.T) {
+	a := motionShelf()
+	a.fx.shakeX = -fbShakeX
+	withShake := a.peekPillRect()
+	a.fx.shakeX = 0
+	plain := a.peekPillRect()
+	if withShake.X != plain.X-fbShakeX {
+		t.Fatalf("shake not followed: box X %d, want %d", withShake.X, plain.X-fbShakeX)
+	}
+}
+
+// TestPausedCapsuleDefersTheSharedDeadline: a capsule paused by hover
+// must extend the status's panel deadline — the words parked off screen
+// must not be cleared mid-pause, and the remaining hold resumes on
+// un-pause.
+func TestPausedCapsuleDefersTheSharedDeadline(t *testing.T) {
+	a := motionWindow()
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view.Frame()
+	a.toastStatus("已复制", time.Now().Add(1200*time.Millisecond), statusOK)
+	view.Frame()
+	view.Advance(200 * time.Millisecond)
+	view.Frame()
+	if !a.fb.drawn || !a.fb.armed {
+		t.Fatal("the capsule never showed")
+	}
+	// Hover parks the capsule; the panel deadline passes mid-pause.
+	a.peeking = true
+	view.Frame()
+	view.Advance(1500 * time.Millisecond)
+	view.Frame()
+	if !a.fb.pausedAt.IsZero() == false && a.fb.text == "" {
+		t.Fatal("the paused capsule lost its words")
+	}
+	if a.status == "" {
+		t.Fatal("the panel deadline cleared a status still parked in the capsule")
+	}
+	// Un-pause: the hold resumes where it stopped.
+	a.peeking = false
+	view.Frame()
+	view.Advance(400 * time.Millisecond)
+	view.Frame()
+	if !a.fb.drawn {
+		t.Fatal("the capsule did not resume after the pause")
+	}
+}
+
+// TestPlayedOutCapsuleNeverReplays: a capsule that ran its whole span is
+// done — a short open/close must not post it again.
+func TestPlayedOutCapsuleNeverReplays(t *testing.T) {
+	a := motionWindow()
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view.Frame()
+	a.toastStatus("已复制", time.Now().Add(800*time.Millisecond), statusOK)
+	view.Frame()
+	// Let it play out fully: the hold floors at expand+holdFloor (~2s), so
+	// run past it and the fold-back.
+	view.Advance(2600 * time.Millisecond)
+	for range 30 {
+		view.Frame()
+		view.Advance(16 * time.Millisecond)
+	}
+	if a.fb.drawn {
+		t.Fatal("the capsule still shows after its hold")
+	}
+	// Panel opens and closes quickly: nothing new may appear on the notch.
+	a.visible, a.progress = true, 1
+	view.Frame()
+	a.hide(hideExplicit)
+	a.progress = 0
+	view.Frame()
+	view.Advance(600 * time.Millisecond)
+	view.Frame()
+	// The played-out words may still linger until the fold clears them —
+	// what must not happen is a fresh capsule drawing.
+	if a.fb.drawn {
+		t.Fatalf("a played-out capsule replayed on panel close (text=%q)", a.fb.text)
 	}
 }

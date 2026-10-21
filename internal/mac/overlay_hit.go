@@ -297,6 +297,23 @@ func SetOverlayAcceptsMouse(window uintptr, accept bool) {
 	})
 }
 
+// OverlayIgnoresMouse reads the window's ignoresMouseEvents, the flag
+// SetOverlayAcceptsMouse drives. The gated click-through tests use it to
+// tell the Go-side flag from the applied native state. Main thread only.
+func OverlayIgnoresMouse(window uintptr) bool {
+	if window == 0 {
+		return true
+	}
+	if err := Init(); err != nil {
+		return true
+	}
+	var ignoring bool
+	withPool(func() {
+		ignoring = send(id(window), "ignoresMouseEvents") != 0
+	})
+	return ignoring
+}
+
 // msgWindowAtPoint sends windowNumberAtPoint:belowWindowWithWindowNumber:,
 // whose NSPoint argument needs a registered function.
 var (
@@ -363,6 +380,19 @@ func SetWindowLevel(window uintptr, level int) {
 		send(w, "setLevel:", uintptr(level))
 		send(w, "orderFrontRegardless")
 	})
+}
+
+// OrderOverlayFront re-fronts the overlay inside its level — the gated
+// hit tests use it to make a just-enabled mouse target visible to
+// WindowServer ordering before windowNumberAtPoint.
+func OrderOverlayFront(window uintptr) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() { send(id(window), "orderFrontRegardless") })
 }
 
 // WindowLevel reads the window's current NSWindow level. Main thread only.
