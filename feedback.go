@@ -337,11 +337,18 @@ func (f *feedback) clearExpired(now time.Time, folded bool) {
 // openFrameRoom is the box the window needs for a panel of height expH
 // while the opening spring is still in flight: room for the overshoot, plus
 // a tick of slack so the frame never trails the shell. The width also holds
-// the two ear corners (earR) the shell's top edge draws past its flanks.
+// the two ear corners (earR) the shell's top edge draws past its flanks,
+// and keeps the parity of the settled width (panelWidth+2*earR): the window
+// is centred by an integer X while the shell is centred inside it by a
+// float, so a room width that differs by an odd count would land the
+// settled shell half a point off where the flight frames had it.
 func openFrameRoom(expH float32) (w, h int) {
 	expW := float32(panelWidth - 16)
-	return int(math.Ceil(float64(expW*(1+openOvershoot)))) + 2 + 2*earR,
-		int(math.Ceil(float64(expH*(1+openOvershoot)))) + 2
+	w = int(math.Ceil(float64(expW*(1+openOvershoot)))) + 2 + 2*earR
+	if w%(panelWidth+2*earR)%2 != 0 {
+		w++
+	}
+	return w, int(math.Ceil(float64(expH*(1+openOvershoot)))) + 2
 }
 
 // convertProgress is the activity strip's title and step for a running job,

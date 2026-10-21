@@ -559,8 +559,16 @@ func (a *shelf) earBar(c *ui.Context) {
 	if a.win != nil {
 		x = bar.AnimateTo("tab-x", r.X, ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut})
 	}
-	bar.Draw(func(p *ui.Painter, _ ui.Rect) {
-		p.Fill(ui.Rect{X: x, Y: r.Y, W: r.W, H: r.H}, fill2, r.H/2)
+	prev := bar.LayoutBounds()
+	bar.Draw(func(p *ui.Painter, box ui.Rect) {
+		// The capsule rect comes from last frame's boxes; anchor it to the
+		// bar's current box so a frame that moved the bar (window shrink
+		// after the open spring rests, the blur pass) cannot unglue it.
+		dx, dy := float32(0), float32(0)
+		if prev.W > 0 {
+			dx, dy = box.X-prev.X, box.Y-prev.Y
+		}
+		p.Fill(ui.Rect{X: x + dx, Y: r.Y + dy, W: r.W, H: r.H}, fill2, r.H/2)
 	})
 }
 
