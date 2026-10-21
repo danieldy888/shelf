@@ -557,7 +557,15 @@ func (a *shelf) earBar(c *ui.Context) {
 	}
 	x := r.X
 	if a.win != nil {
-		x = bar.AnimateTo("tab-x", r.X, ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut})
+		if a.tabPhase(c.Now()) < 1 {
+			// A page switch glides the capsule to the other icon.
+			x = bar.AnimateTo("tab-x", r.X, ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut})
+		} else {
+			// Every other move (opening, the window shrink once the spring
+			// rests, a new height) keeps the capsule on the icon instead of
+			// easing behind it.
+			x = bar.Jump("tab-x", r.X)
+		}
 	}
 	prev := bar.LayoutBounds()
 	bar.Draw(func(p *ui.Painter, box ui.Rect) {
