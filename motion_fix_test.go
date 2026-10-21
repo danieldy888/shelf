@@ -4,10 +4,10 @@ package main
 
 // Regression tests for the shell motion fixes: the ear corners' room in
 // the window, monotonic mid-open closes, the drawn-shell-driven window and
-// click pass-through on close, the invisible rest snap, the linear content
-// fade, and the drawn-shell height freeze. Plus the drop-zone isolation
-// fixes: headless board reads, per-drag caches, headless thumbnails and
-// the same-frame window sync on height changes.
+// click pass-through on close, the invisible rest snap, and the
+// drawn-shell height freeze. Plus the drop-zone isolation fixes: headless
+// board reads, per-drag caches, headless thumbnails and the same-frame
+// window sync on height changes.
 
 import (
 	"testing"
@@ -163,19 +163,6 @@ func TestCloseTailHasNoVisibleSnap(t *testing.T) {
 	}
 	if finalStep > 1 {
 		t.Fatalf("the fold snapped the last %.1fpt into place", finalStep)
-	}
-}
-
-// #17: the content fade is the design's linear ramp, not an eased one.
-func TestContentFadeIsLinear(t *testing.T) {
-	if got := contentFade(0.7); got < 0.49 || got > 0.51 {
-		t.Fatalf("contentFade(0.7) = %.3f, want the linear 0.5", got)
-	}
-	if got := contentFade(0.4); got != 0 {
-		t.Fatalf("contentFade(0.4) = %.3f, want 0", got)
-	}
-	if got := contentFade(1); got != 1 {
-		t.Fatalf("contentFade(1) = %.3f, want 1", got)
 	}
 }
 

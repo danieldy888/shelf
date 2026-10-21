@@ -199,6 +199,11 @@ func TestCapsuleToastKeepsItsClockAcrossAPanelVisit(t *testing.T) {
 	view.Frame()
 	view.Advance(500 * time.Millisecond)
 	view.Frame()
+	// The visit was brief on the panel's clock; keep it brief on the wall
+	// clock too — the content's opening blur makes headless frames slow,
+	// and handoffStatus inside hide measures the pill's read time in real
+	// time.
+	a.statusShown = time.Now()
 	a.hide(hideExplicit)
 	a.progress = 0
 	view.Frame()

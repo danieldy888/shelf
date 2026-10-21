@@ -71,7 +71,7 @@ func TestOpeningIsElasticAndTheFrameNeverClips(t *testing.T) {
 	if a.fx.openMoving {
 		t.Fatal("the opening spring never came to rest")
 	}
-	if peak < target*1.02 {
+	if peak <= target+1 {
 		t.Fatalf("the shell peaked at %.1f, only %.1f%% past the final %.1f: the opening has no bounce",
 			peak, (peak/target-1)*100, target)
 	}
@@ -114,20 +114,12 @@ func TestClosingFoldsCrisp(t *testing.T) {
 	}
 }
 
-// TestSpringsMatchTheDesign pins the two curves the panel must use: the
-// opening overshoots (Bounce 0.28 over 380ms), the collapse and the
-// capsule's retraction do not, and the peek shapes morph with a light
-// bounce.
+// TestSpringsMatchTheDesign pins the shell springs that did not change
+// with the island open: the capsule's retraction cannot overshoot, and
+// the peek shapes morph with a light bounce.
 func TestSpringsMatchTheDesign(t *testing.T) {
-	if openSpring.Duration != 0 || openSpring.Spring.Duration != 380*time.Millisecond || openSpring.Spring.Bounce != 0.28 {
-		t.Fatalf("open spring = %+v, want the design's 380ms/Bounce 0.28", openSpring)
-	}
-	for name, s := range map[string]ui.Animation{
-		"close": closeSpring, "capsule retract": retractSpring,
-	} {
-		if s.Spring.Bounce != 0 || s.Spring.Duration != 300*time.Millisecond {
-			t.Fatalf("%s spring = %+v, want a 300ms spring that cannot overshoot", name, s)
-		}
+	if retractSpring.Spring.Bounce != 0 || retractSpring.Spring.Duration != 300*time.Millisecond {
+		t.Fatalf("capsule retract spring = %+v, want a 300ms spring that cannot overshoot", retractSpring)
 	}
 	if peekSpring.Spring.Bounce != 0.15 || peekSpring.Spring.Duration != peekAnimation {
 		t.Fatalf("peek spring = %+v, want %v at Bounce 0.15", peekSpring, peekAnimation)

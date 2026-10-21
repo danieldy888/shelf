@@ -43,20 +43,23 @@ const (
 	fbExpand  = 380 * time.Millisecond  // the grow-in the hold is measured from
 )
 
-// The shell's springs. Expanding overshoots by about 4% (Bounce 0.28) and
-// settles back; collapsing is critically damped and crisp; the hover shapes
-// morph with a light bounce of their own; the capsule gives way the same way
-// it arrived.
+// The shell's springs. The panel opens with a small overshoot (Bounce
+// 0.18) — the island's settle — while the completion capsule keeps the
+// livelier Bounce 0.28 it arrived with; collapsing is critically damped
+// and crisp; the hover shapes morph with a light bounce of their own.
 var (
-	openSpring    = ui.Animation{Spring: ui.SpringOptions{Duration: 380 * time.Millisecond, Bounce: 0.28}}
-	closeSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
-	peekSpring    = ui.Animation{Spring: ui.SpringOptions{Duration: peekAnimation, Bounce: 0.15}}
-	retractSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
-	shakeSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
+	panelOpenSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 380 * time.Millisecond, Bounce: 0.18}}
+	contentSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}, Delay: 30 * time.Millisecond}
+	openSpring      = ui.Animation{Spring: ui.SpringOptions{Duration: 380 * time.Millisecond, Bounce: 0.28}}
+	closeSpring     = ui.Animation{Spring: ui.SpringOptions{Duration: 240 * time.Millisecond, Bounce: 0}}
+	peekSpring      = ui.Animation{Spring: ui.SpringOptions{Duration: peekAnimation, Bounce: 0.15}}
+	retractSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
+	shakeSpring     = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
 )
 
 // openOvershoot is the room the frame keeps for a spring that is still on
-// its way: Bounce 0.28 peaks near 4%, plus a frame's worth of catch-up.
+// its way: the widest spring it must cover is the capsule's Bounce 0.28,
+// which peaks near 4%, plus a frame's worth of catch-up.
 const openOvershoot = 0.045
 
 // shellMotion is what view() drew last: the drawn shell's size, for the

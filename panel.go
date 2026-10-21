@@ -135,14 +135,6 @@ const (
 	earR = 10
 )
 
-// contentFade is the expanded content's opacity at open progress k: it
-// stays transparent while the shell is still a notch-sized sliver and
-// fades in linearly over the last 60% of the growth, so the content
-// arrives with the shell instead of flashing through it.
-func contentFade(k float32) float32 {
-	return min(max((k-0.4)/0.6, 0), 1)
-}
-
 // Page switch "fade through": the page being left fades out over the first
 // tabOutShare of the switch, then the new page fades in, drifting tabShift
 // points from its icon's side. The two never overlap, so their different
@@ -236,13 +228,13 @@ func (a *shelf) view(c *ui.Context) {
 	zone := ui.Column(c.Key("shelf")).Fill().AlignItems(ui.Center).Clip()
 	// Draw springs at display cadence. Their last drawn values also drive
 	// native frame size and mouse pass-through.
-	openK, peekK := a.progress, a.peekProgress
+	openK, peekK, contentK := a.progress, a.peekProgress, float32(1)
 	if a.win == nil && !a.peeking {
 		openK = 1
 	}
 	sizeAnim := peekSpring
 	if a.win != nil {
-		openAnim := openSpring
+		openAnim := panelOpenSpring
 		peekAnim := peekSpring
 		if openTarget == 0 {
 			openAnim = closeSpring
@@ -267,6 +259,17 @@ func (a *shelf) view(c *ui.Context) {
 		}
 		openK = zone.AnimateTo("open", openTarget, openAnim)
 		peekK = zone.AnimateTo("peek", peekTarget, peekAnim)
+		// The content follows its own channel, not openK: it springs in a
+		// beat after the shell (contentSpring's 30ms delay), scales from
+		// 0.88 and un-blurs as it fades in. While the panel is not expanded
+		// the value rests at 0 — a Jump, not a spring — so every opening,
+		// fresh or out of a close in flight, starts the content from
+		// nothing instead of a stale fraction.
+		if a.visible {
+			contentK = zone.AnimateTo("content", 1, contentSpring)
+		} else {
+			contentK = zone.Jump("content", 0)
+		}
 		// AnimateTo first accounts for the time passed since the last frame
 		// along the OLD target: a close issued mid-flight would otherwise
 		// draw one more outward frame before turning. While closing, the
@@ -380,9 +383,9 @@ func (a *shelf) view(c *ui.Context) {
 		x1 := x0 + shellW
 		y1 := shellH
 		ear := float32(earR)
-		// 底部圆角：探头胶囊半圆 → 展开 30pt。The opening's overshoot can
-		// push the drawn growth past its final value; the corner caps there.
-		botR := min(shellH/2, 12+18*min(openK, 1))
+		// 底部圆角：探头胶囊半圆 → 展开 30pt。The island reads rounded from
+		// the first frame, so the corner no longer tracks openK.
+		botR := min(shellH/2, 30)
 		var path ui.Path
 		path.MoveTo(x0-ear+shake, 0)
 		path.QuadTo(x0+shake, 0, x0+shake, earR)
@@ -412,7 +415,19 @@ func (a *shelf) view(c *ui.Context) {
 			content := ui.Column(c.Key("panel")).Width(panelWidth-16).Height(targetH-8).
 				Padding(0, panelPadX, panelPadBottom, panelPadX)
 			if a.win != nil {
-				content.Opacity(contentFade(openK))
+				// The content grows with the shell like an island: it
+				// springs in a beat later (contentK), scaling up from its
+				// top centre and shedding blur as it fades in. ReduceMotion
+				// keeps only the fade — the channel also settles at once
+				// there, so scale and blur are 1 and 0 anyway.
+				content.Opacity(min(max((contentK-0.1)/0.6, 0), 1))
+				if !c.Preferences().ReduceMotion {
+					s := 0.88 + 0.12*contentK
+					content.TransformOrigin(0.5, 0).Scale(s, s)
+					if blur := 10 * (1 - contentK); blur >= 0.05 {
+						content.Blur(blur)
+					}
+				}
 			}
 			content.Children(func() {
 				a.earBar(c)
