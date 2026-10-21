@@ -123,11 +123,12 @@ func TestPeekStripHoldsFoldingShapes(t *testing.T) {
 	if f := a.desiredFrame(); f.Width < 380 || f.Height < 54 {
 		t.Fatalf("strip %+v cuts the folding shell 380x54", f)
 	}
-	// The capsule's own room, glow included, appears with it.
+	// The capsule's own room — shell, ears, shake and overshoot, no glow
+	// margin — appears with it.
 	a.fx = shellMotion{}
 	a.toastStatus("已压缩 3 张", time.Now().Add(3*time.Second), statusOK)
-	if f := a.desiredFrame(); f.Width < fbMaxW || f.Height < 32+fbBody+fbGlowPad {
-		t.Fatalf("strip %+v cannot hold the capsule and its glow", f)
+	if f := a.desiredFrame(); f.Width < capsuleFrameW() || f.Height < 32+fbBody {
+		t.Fatalf("strip %+v cannot hold the capsule", f)
 	}
 }
 
@@ -421,26 +422,26 @@ func TestCapsuleClickExpandsThroughTheMonitor(t *testing.T) {
 	}
 }
 
-// TestCapsuleGlowBreathes: a running job's glow breathes between dim and
-// full over fbBreathe; a verdict's glow is steady, and Reduce Motion keeps
-// it steady too.
-func TestCapsuleGlowBreathes(t *testing.T) {
+// TestCapsuleAccentBreathes: a running job's dot breathes between dim and
+// full over fbBreathe; a verdict's accent is steady, and Reduce Motion
+// keeps it steady too.
+func TestCapsuleAccentBreathes(t *testing.T) {
 	now := time.Unix(0, 0)
 	live := feedback{text: "正在解压 · 1/3", live: true}
 	var lo, hi float32 = 1, 0
 	for i := range 40 {
-		v := live.glow(now.Add(time.Duration(i)*fbBreathe/40), false)
+		v := live.accent(now.Add(time.Duration(i)*fbBreathe/40), false)
 		lo, hi = min(lo, v), max(hi, v)
 	}
 	if lo > 0.5 || hi < 0.9 {
 		t.Fatalf("the breath swings %.2f…%.2f, want about 0.35…1", lo, hi)
 	}
-	if got := live.glow(now, true); got != 0.9 {
-		t.Fatalf("Reduce Motion glow %.2f, want steady 0.9", got)
+	if got := live.accent(now, true); got != 0.9 {
+		t.Fatalf("Reduce Motion accent %.2f, want steady 0.9", got)
 	}
 	done := feedback{text: "已完成"}
-	if got := done.glow(now, false); got != 0.9 {
-		t.Fatalf("a verdict's glow %.2f, want steady 0.9", got)
+	if got := done.accent(now, false); got != 0.9 {
+		t.Fatalf("a verdict's accent %.2f, want steady 0.9", got)
 	}
 }
 
@@ -541,8 +542,8 @@ func TestCollapsedToastKeepsItsClockInThePill(t *testing.T) {
 }
 
 // TestCapsuleGrowNeverPaintsPastTheShell: while the shell is still a sliver
-// growing out of the notch, neither the glow's box nor the words may reach
-// beyond its drawn edge — nothing may paint over the menu bar.
+// growing out of the notch, neither the dot nor the words may reach beyond
+// its drawn edge — nothing may paint over the menu bar.
 func TestCapsuleGrowNeverPaintsPastTheShell(t *testing.T) {
 	a := motionWindow()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
@@ -558,9 +559,8 @@ func TestCapsuleGrowNeverPaintsPastTheShell(t *testing.T) {
 	cx := img.Rect.Dx() / 2
 	x0 := cx - int(a.fx.w/2)
 	x1 := cx + int(a.fx.w/2)
-	// The glow's shadow may legitimately reach past the shell, but the
-	// capsule's own black box and words may not: no opaque dark or light
-	// pixels more than 4pt outside the drawn edge.
+	// Nothing paints outside the shell anymore: neither black nor light
+	// pixels may appear more than 4pt outside the drawn edge.
 	opaque := func(x, y int) bool {
 		r, g, b, al := img.At(x, y).RGBA()
 		if al < 200*257 {
@@ -617,23 +617,23 @@ func TestShakeIsOneLeftRightPass(t *testing.T) {
 	}
 }
 
-// TestCapsuleGlowAlphaIsTheSpec: the verdict's glow alpha is 0.9 once, not
-// multiplied down a second time at the painter, and the breath stays inside
-// 0.3…0.9.
-func TestCapsuleGlowAlphaIsTheSpec(t *testing.T) {
+// TestCapsuleAccentAlphaIsTheSpec: the verdict's accent alpha is 0.9 once,
+// not multiplied down a second time at the painter, and the breath stays
+// inside 0.3…0.9.
+func TestCapsuleAccentAlphaIsTheSpec(t *testing.T) {
 	now := time.Unix(0, 0)
 	live := feedback{text: "正在解压 · 1/3", live: true}
 	var lo, hi float32 = 1, 0
 	for i := range 40 {
-		v := live.glow(now.Add(time.Duration(i)*fbBreathe/40), false)
+		v := live.accent(now.Add(time.Duration(i)*fbBreathe/40), false)
 		lo, hi = min(lo, v), max(hi, v)
 	}
 	if lo < 0.28 || lo > 0.32 || hi > 0.901 || hi < 0.85 {
 		t.Fatalf("the breath swings %.2f…%.2f, want about 0.3…0.9", lo, hi)
 	}
 	done := feedback{text: "已完成"}
-	if got := done.glow(now, false); got != 0.9 {
-		t.Fatalf("a verdict's glow %.2f, want exactly 0.9", got)
+	if got := done.accent(now, false); got != 0.9 {
+		t.Fatalf("a verdict's accent %.2f, want exactly 0.9", got)
 	}
 }
 
@@ -659,7 +659,7 @@ func TestSettledCapsuleAsksForNoFrames(t *testing.T) {
 	if live.animating(now, false) {
 		// The breath runs on the timed beats settle() hands to After —
 		// four frames per breath, not one per display frame.
-		t.Fatal("the breathing glow must not ask for per-frame redraws")
+		t.Fatal("the breathing accent must not ask for per-frame redraws")
 	}
 	if got := live.settle(now); got.Sub(now) != fbBreathe/4 {
 		t.Fatalf("a running job's next beat is %v out, want %v", got.Sub(now), fbBreathe/4)

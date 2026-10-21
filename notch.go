@@ -83,10 +83,11 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 			h = int(a.fx.h+0.5) + 2
 			if a.fb.up(time.Now()) {
 				// Folding into the capsule: the shell may grow wider or
-				// taller than the panel sliver it starts from, and the
-				// glow reaches past it.
-				w = max(w, fbMaxW+2*fbGlowPad)
-				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+fbGlowPad)
+				// taller than the panel sliver it starts from. No glow
+				// reaches past it anymore, so the room is the shell plus
+				// its ears, shake and overshoot only.
+				w = max(w, capsuleFrameW())
+				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+2)
 			}
 		case a.fx.openMoving:
 			// Keep overshoot room only while the panel opens. Settled
@@ -125,11 +126,12 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	h := max(int(math.Ceil(float64(ph))), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
 	if a.capsuleUp(time.Now()) || a.fb.drawn {
 		// The completion capsule is another peek shape: while it shows, the
-		// strip holds room for it and its glow at the widest the text can
-		// make it. The shape grows out of the notch in ~160ms, well inside
-		// the tick that resizes the strip, so no frame is cut.
-		w = max(w, fbMaxW+2*fbGlowPad)
-		h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+fbGlowPad)
+		// strip holds room for it at the widest the text can make it, plus
+		// its ears, shake and grow-out overshoot. The shape grows out of
+		// the notch in ~160ms, well inside the tick that resizes the strip,
+		// so no frame is cut.
+		w = max(w, capsuleFrameW())
+		h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+2)
 	}
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
@@ -222,6 +224,15 @@ func (a *shelf) shellSize(openK, peekK, peekW, peekH, panelH float32) (w, h floa
 	w0 := baseW + (peekW-baseW)*peekK
 	h0 := baseH + (peekH-baseH)*peekK
 	return w0 + (expW-w0)*openK, h0 + (expH-h0)*openK
+}
+
+// capsuleFrameW is the window width the completion capsule needs once the
+// glow margin is gone: the widest capsule, plus both ear corners, the
+// failure shake's reach, and the grow-out spring's overshoot (Bounce 0.28
+// widens the notch→capsule delta by about openOvershoot).
+func capsuleFrameW() int {
+	wide := int(math.Ceil(float64((fbMaxW - 180) * openOvershoot)))
+	return fbMaxW + 2*(earR+fbShakeX+wide)
 }
 
 // peekPillRect is the on-screen box of the hovered notch capsule, matching

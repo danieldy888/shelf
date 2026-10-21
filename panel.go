@@ -940,10 +940,12 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 }
 
 // capsuleView draws the completion capsule: the 16pt status dot over the
-// toast's words, hung below the notch band, ringed by the status colour.
-// The glow sits in a sibling of the clipped content, so its shadow reaches
-// outside the shell; the content is clipped to the shell while it grows.
-func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, now time.Time) {
+// toast's words, hung below the notch band. The capsule's outline is the
+// shell path itself — the same black the hardware draws — so nothing here
+// paints a second shape, a border, or a glow; the status colour stays
+// inside the shell as the dot, which breathes while a job runs. The
+// content is clipped to the shell while it grows.
+func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, _ /* openK */, peekK, shake float32, now time.Time) {
 	f := &a.fb
 	// The first drawn frame starts the capsule's clock: a status posted while
 	// the panel was still closing is held for its full span from here.
@@ -952,26 +954,15 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, openK, peekK, shake f
 	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
 	cw, ch := f.capsule(baseW, baseH)
 	col := f.color()
-	alpha := f.glow(now, c.Preferences().ReduceMotion)
-	botR := min(shellH/2, 12+18*min(openK, 1))
 	textW := cw - fbDot - fbGap - 2*fbPadX
 	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label("展开 Shelf · " + f.text)
 	if shake != 0 {
 		box.Translate(shake, 0)
 	}
 	box.Children(func() {
-		// The glow box hugs the shell actually drawn this frame: while the
-		// capsule is still a sliver growing out of the notch it is a sliver
-		// too, so nothing ever reaches past the shell's edge. Its shadow is
-		// painted outside the clipped body, where it can ring the capsule.
-		gw, gh := min(cw, shellW), min(ch, shellH)
-		ui.Box(c.Key("fb-glow")).Absolute().Top(shellH-gh).Left((shellW-gw)/2).
-			Width(gw).Height(gh).Radius(0, 0, min(botR, gh/2), min(botR, gh/2)).
-			Background(ui.Hex("#000000")).
-			Shadow(0, 6, 26, -2, col.Alpha(alpha)).
-			Border(0.5, col.Alpha(alpha)).PassThrough()
-		// The words keep their final size but are clipped to the drawn
-		// shell, uncovered as it grows — the same reveal as the panel's.
+		// Everything inside the capsule is clipped to the shell actually
+		// drawn this frame: the sliver grows out of the notch and uncovers
+		// the words the same way the panel's shell uncovers its content.
 		clip := ui.Column(c.Key("fb-clip")).Absolute().Top(0).Left(0).
 			Width(shellW).Height(shellH).Clip().Justify(ui.End).AlignItems(ui.Center).PassThrough()
 		clip.Children(func() {
@@ -980,6 +971,12 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, openK, peekK, shake f
 			body.Children(func() {
 				ui.Row(c.Key("fb-msg")).Height(fbBody).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(fbGap).Children(func() {
 					dot := ui.Row(c.Key("fb-dot")).Size(fbDot, fbDot).Radius(fbDot / 2).Background(col).Center()
+					if f.live {
+						// A running job has no verdict yet: the dot
+						// breathes instead of a light the hardware
+						// would never show.
+						dot.Opacity(f.accent(now, c.Preferences().ReduceMotion))
+					}
 					if g := f.glyph(); g != "" {
 						dot.Children(func() { ui.Text(c, g).FontSize(10).FontWeight(800).TextColor(ui.Hex("#000000")) })
 					}

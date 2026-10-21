@@ -5,12 +5,13 @@ package main
 // Completion feedback: the panel's bottom toast only exists while the panel
 // is open, so anything that finishes with the panel closed grows a capsule
 // out of the hardware notch instead — a 16pt status dot and the toast's own
-// words, ringed by a glow of the status colour. The capsule is a peek state
-// of the resident window, not a window of its own: the shell, the spring and
-// the pass-through rules are the ones the hover pill already uses.
+// words inside the same black shell. The capsule is a peek state of the
+// resident window, not a window of its own: the shell, the spring and the
+// pass-through rules are the ones the hover pill already uses.
 //
 // Status colours are the one exception to the panel's single accent: they
-// appear only while a capsule shows, and nowhere else.
+// appear only inside the capsule's black shell — the dot, never a border
+// or a glow past its edge — and nowhere else.
 
 import (
 	"fmt"
@@ -33,8 +34,7 @@ const (
 	fbHoldErr = 2200 * time.Millisecond // a failure the same, after its shake
 	fbShake   = 420 * time.Millisecond  // one decaying left-right shake
 	fbShakeX  = 6                       // its first swing, in points
-	fbBreathe = 1600 * time.Millisecond // one breath of a running job's glow
-	fbGlowPad = 34                      // frame margin for the glow's blur and spread
+	fbBreathe = 1600 * time.Millisecond // one breath of a running job's status dot
 	fbMaxW    = 380                     // the capsule ellipsizes past this width
 	fbDot     = 16                      // the status dot
 	fbGap     = 7                       // dot to text
@@ -276,10 +276,11 @@ func (f *feedback) shake(now time.Time, reduceMotion bool) float32 {
 	return -fbShakeX * (1 - 0.6*t) * float32(math.Sin(2*math.Pi*float64(t)))
 }
 
-// glow is the glow's alpha: a steady 0.9 for a verdict, a slow breath
-// (0.3–0.9) for a job that is still running. Plain information carries no
-// halo: the neutral dot speaks for itself.
-func (f *feedback) glow(now time.Time, reduceMotion bool) float32 {
+// accent is the strength of the status dot's colour inside the shell: a
+// steady 0.9 for a verdict, a slow breath (0.3–0.9) for a job that is
+// still running. Plain information carries no accent: the neutral dot
+// speaks for itself.
+func (f *feedback) accent(now time.Time, reduceMotion bool) float32 {
 	if !f.live && f.kind == statusInfo {
 		return 0
 	}
@@ -291,9 +292,9 @@ func (f *feedback) glow(now time.Time, reduceMotion bool) float32 {
 }
 
 // animating reports whether the capsule still moves by itself — only the
-// failure shake needs per-frame redraws. A running job's glow instead
-// breathes on the timed beats settle() hands to After, so progress costs a
-// frame four times per breath, not one per display frame.
+// failure shake needs per-frame redraws. A running job's dot instead
+// breathes on the timed beats settle() hands to After, so progress costs
+// a frame four times per breath, not one per display frame.
 func (f *feedback) animating(now time.Time, reduceMotion bool) bool {
 	if reduceMotion {
 		return false
@@ -303,7 +304,7 @@ func (f *feedback) animating(now time.Time, reduceMotion bool) bool {
 }
 
 // settle is the time the capsule's fate changes by itself: the end of its
-// hold, or the next breath of a running job's glow.
+// hold, or the next breath of a running job's dot.
 func (f *feedback) settle(now time.Time) time.Time {
 	if f.live {
 		return now.Add(fbBreathe / 4)

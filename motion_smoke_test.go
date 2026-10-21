@@ -127,7 +127,7 @@ func TestSmokeOpeningIsElasticAndNotClipped(t *testing.T) {
 	motionClosed(a)
 }
 
-// TestSmokeCapsuleSuccess shoots the success capsule: green glow, the
+// TestSmokeCapsuleSuccess shoots the success capsule: green ✓ dot, the
 // toast's words under the notch, gone after its hold.
 func TestSmokeCapsuleSuccess(t *testing.T) {
 	a := redesignShelf(t)
@@ -198,10 +198,21 @@ func TestSmokeCapsuleSuccess(t *testing.T) {
 			t.Error("a press on the capsule did not expand the shelf")
 		}
 	} else {
+		// Without the grant the HID press goes nowhere observable; the
+		// monitor's own handler still proves the same path here.
 		t.Logf("capsule press at %+v not exercised: no Accessibility access for this test process", pill)
+		onMain(func() { a.mouseDown(false, mygo.Point{X: pill.X + pill.Width/2, Y: pill.Y + pill.Height - 8}) })
 	}
 	motionShot(t, a, "capsule-click-expands", 300*time.Millisecond)
-	onMain(func() { a.hide(hidePassive) })
+	// End the toast at its source before folding: hide() hands a live
+	// status back to the capsule (handoffStatus), so a still-running hold
+	// would re-draw it after the panel collapsed — the 3s hold raced this
+	// ~2s section on main and the check flapped.
+	onMain(func() {
+		a.status, a.statusUntil = "", time.Now().Add(-time.Second)
+		a.fb.until = time.Now()
+		a.hide(hidePassive)
+	})
 	time.Sleep(400 * time.Millisecond)
 	onMain(func() { drawn = a.fb.drawn })
 	if drawn {
@@ -244,7 +255,7 @@ func TestSmokeCapsuleRunning(t *testing.T) {
 	})
 	t.Cleanup(func() { onMain(func() { a.conv = nil }) })
 	// The capsule grows out of the notch: its strip must be resized before
-	// the shell outgrows the old one, and hold the glow's blur as well.
+	// the shell outgrows the old one — shell, ears and shake only, no glow.
 	for i := range 24 {
 		var w, h float32
 		var frame mygo.Rectangle
@@ -255,8 +266,8 @@ func TestSmokeCapsuleRunning(t *testing.T) {
 		if frame.Width < int(w+0.5) || frame.Height < int(h+0.5) {
 			t.Fatalf("frame %d: window %+v cuts the capsule drawn at %.1fx%.1f", i, frame, w, h)
 		}
-		if i == 23 && frame.Width < fbMaxW+2*fbGlowPad {
-			t.Fatalf("frame %d: strip %+v cannot hold the capsule and its glow", i, frame)
+		if i == 23 && frame.Width < capsuleFrameW() {
+			t.Fatalf("frame %d: strip %+v cannot hold the capsule's full width", i, frame)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

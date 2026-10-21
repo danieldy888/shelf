@@ -334,7 +334,7 @@ func TestLiveCapsulePacesItself(t *testing.T) {
 	now := time.Now()
 	live := feedback{text: "正在转成 JPEG · 1/3", live: true, kind: statusOK}
 	if live.animating(now, false) {
-		t.Fatal("the breathing glow must not request per-frame redraws")
+		t.Fatal("the breathing accent must not request per-frame redraws")
 	}
 	if got := live.settle(now); got.Sub(now) != fbBreathe/4 {
 		t.Fatalf("the next breath beat is %v out, want %v", got.Sub(now), fbBreathe/4)
@@ -357,7 +357,7 @@ func TestLiveCapsulePacesItself(t *testing.T) {
 }
 
 // #10: the three status levels colour the capsule: green ✓, a neutral
-// ink2 dot without a glow for plain information, red ! for errors.
+// ink2 dot without an accent for plain information, red ! for errors.
 func TestStatusLevelsColourTheCapsule(t *testing.T) {
 	now := time.Now()
 	info := feedback{text: "已取消", kind: statusInfo, shownAt: now, until: now.Add(time.Hour)}
@@ -367,12 +367,12 @@ func TestStatusLevelsColourTheCapsule(t *testing.T) {
 	if info.glyph() != "" {
 		t.Fatalf("information glyph %q, want none", info.glyph())
 	}
-	if got := info.glow(now, false); got != 0 {
-		t.Fatalf("information glow %.2f, want none", got)
+	if got := info.accent(now, false); got != 0 {
+		t.Fatalf("information accent %.2f, want none", got)
 	}
 	ok := feedback{text: "已转换 3 项", kind: statusOK, shownAt: now, until: now.Add(time.Hour)}
-	if ok.color() != fbGreen || ok.glyph() != "✓" || ok.glow(now, false) != 0.9 {
-		t.Fatal("a success is not the green ✓ with the steady glow")
+	if ok.color() != fbGreen || ok.glyph() != "✓" || ok.accent(now, false) != 0.9 {
+		t.Fatal("a success is not the green ✓ with the steady accent")
 	}
 	fail := feedback{text: "失败", kind: statusErr, shownAt: now, until: now.Add(time.Hour)}
 	if fail.color() != fbRed || fail.glyph() != "!" {
