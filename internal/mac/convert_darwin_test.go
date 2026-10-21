@@ -960,3 +960,73 @@ func TestResizeImageCapsTheLongerSideNeverEnlarges(t *testing.T) {
 		t.Fatalf("small image became %dx%d, want its own 64x32", w, h)
 	}
 }
+
+// TestRecognizeTextCapsTheDecode: a bitmap wider than recognizeMaxSide is
+// downscaled before Vision sees it, and a 5K-wide image stays native —
+// the cap exists so an extreme screenshot cannot pin a few hundred MB of
+// RGBA inside an uninterruptible decode.
+func TestRecognizeTextCapsTheDecode(t *testing.T) {
+	if err := loadTest(); err != nil {
+		t.Skip(err)
+	}
+	big := filepath.Join(t.TempDir(), "big.png")
+	// 8000×400 solid is cheap to encode and far over the cap.
+	textImage(t, big, 8000, 400, 40, [][3]any{{40.0, 200.0, "CAP"}})
+	withPool(func() {
+		isrc, err := imageSource(big)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cfRelease(isrc)
+		img := uprightImageCapped(isrc, recognizeMaxSide)
+		if img == 0 {
+			t.Fatal("capped decode failed")
+		}
+		defer cfRelease(img)
+		if w, h := cgImgGetWidth(img), cgImgGetHeight(img); w != recognizeMaxSide || h != 307 {
+			t.Fatalf("over-cap decode = %dx%d, want %dx%d", w, h, recognizeMaxSide, 307)
+		}
+	})
+	// A 5K-class shot (under the cap) decodes at native size.
+	fiveK := filepath.Join(t.TempDir(), "5k.png")
+	textImage(t, fiveK, 5120, 288, 24, [][3]any{{20.0, 140.0, "NATIVE"}})
+	withPool(func() {
+		isrc, err := imageSource(fiveK)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cfRelease(isrc)
+		img := uprightImageCapped(isrc, recognizeMaxSide)
+		if img == 0 {
+			t.Fatal("5K decode failed")
+		}
+		defer cfRelease(img)
+		if w, h := cgImgGetWidth(img), cgImgGetHeight(img); w != 5120 || h != 288 {
+			t.Fatalf("under-cap decode = %dx%d, want 5120x288", w, h)
+		}
+	})
+	// The scaled fallback path (thumbnail decode declined) draws the same
+	// capped geometry: rotation swaps axes before the scale applies.
+	small := filepath.Join(t.TempDir(), "small.png")
+	textImage(t, small, 400, 200, 24, [][3]any{{20.0, 100.0, "x"}})
+	withPool(func() {
+		isrc, err := imageSource(small)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cfRelease(isrc)
+		img := imgSrcCreateImageAt(isrc, 0, 0)
+		if img == 0 {
+			t.Fatal("decode failed")
+		}
+		defer cfRelease(img)
+		out := drawUprightScaled(img, 6, 0.5)
+		if out == 0 {
+			t.Fatal("scaled upright draw failed")
+		}
+		defer cfRelease(out)
+		if w, h := cgImgGetWidth(out), cgImgGetHeight(out); w != 100 || h != 200 {
+			t.Fatalf("rotated+scaled draw = %dx%d, want 100x200", w, h)
+		}
+	})
+}

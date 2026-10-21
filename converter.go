@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -122,6 +123,22 @@ var (
 	convertWork     = func(fn func()) { go fn() }
 	convertDispatch = mygo.RunOnMain
 )
+
+// recognizeMu serializes every Vision text request: the ocrIndex's
+// single-worker rule only covers the paths that go through it, while the
+// Word converter called the recognizer directly and could run a second
+// Vision job — model load included — concurrently.
+var recognizeMu sync.Mutex
+
+// recognizeImageText is the one call site every recognition goes through —
+// the background index, the menu's 「识别文字并复制」 and the Word
+// converter — so at most one Vision request (including model load) is ever
+// in flight.
+func recognizeImageText(path string) ([]string, error) {
+	recognizeMu.Lock()
+	defer recognizeMu.Unlock()
+	return recognizeText(path)
+}
 
 // imageExts are the file extensions the converter accepts as images:
 // what ImageIO reads on every supported macOS.
@@ -562,7 +579,7 @@ func wordFromPDF(src, dst string, job *convertJob) (noText bool, err error) {
 			tmp := filepath.Join(filepath.Dir(dst), fmt.Sprintf(".%s.page%d.png", filepath.Base(dst), i+1))
 			err := renderPDFPage(src, i+1, tmp, mac.FormatPNG)
 			if err == nil {
-				lines, err = recognizeText(tmp)
+				lines, err = recognizeImageText(tmp)
 			}
 			os.Remove(tmp)
 			job.ocr.Store(false)
@@ -594,7 +611,7 @@ func normalizeLines(lines []string) []string {
 // in src and, below it, the picture itself (upright, as PNG). It reports
 // whether no text was found.
 func wordFromImage(src, dst string) (noText bool, err error) {
-	lines, err := recognizeText(src)
+	lines, err := recognizeImageText(src)
 	if err != nil {
 		return false, err
 	}

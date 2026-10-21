@@ -318,14 +318,58 @@ func uprightImage(src uintptr) uintptr {
 	return baked
 }
 
+// recognizeMaxSide bounds text-recognition decode: Vision gets the upright
+// image scaled to this longest side at most. 6144 covers 5K and 6K shots
+// (5120 and 6016 wide) at native resolution — text stays sharp — while an
+// extreme bitmap decodes to ≤ 6144² px ≈ 151 MB RGBA instead of hundreds
+// of megabytes of raw pixels nobody can interrupt once in Vision.
+const recognizeMaxSide = 6144
+
+// uprightImageCapped is uprightImage limited to maxSide on the long edge:
+// thumbnail decode honors kCGImageSourceThumbnailMaxPixelSize, and the
+// fallback path draws the upright bitmap into a scaled context instead of
+// the raw full-size one.
+func uprightImageCapped(src uintptr, maxSide int) uintptr {
+	opts := newDict(kThumbWithTransform, nsBool(true), kThumbCreateAlways, nsBool(true),
+		kThumbMaxPixelSize, nsFloat(float64(maxSide)))
+	if img := imgSrcCreateThumbAt(src, 0, uintptr(opts)); img != 0 {
+		return img
+	}
+	img := imgSrcCreateImageAt(src, 0, 0)
+	if img == 0 {
+		return 0
+	}
+	w, h := cgImgGetWidth(img), cgImgGetHeight(img)
+	scale := 1.0
+	if mx := max(w, h); maxSide > 0 && mx > maxSide {
+		scale = float64(maxSide) / float64(mx)
+	}
+	props := sourceProps(src)
+	o := exifOrientation(props)
+	if props != 0 {
+		cfRelease(props)
+	}
+	baked := drawUprightScaled(img, o, scale)
+	cfRelease(img)
+	return baked
+}
+
 // drawUpright renders img through the orientation transform into a new
 // premultiplied RGBA bitmap and returns it as a CGImage.
 func drawUpright(img uintptr, o int) uintptr {
+	return drawUprightScaled(img, o, 1)
+}
+
+// drawUprightScaled is drawUpright with an extra uniform scale: the output
+// is the upright image at scale× its displayed size.
+func drawUprightScaled(img uintptr, o int, scale float64) uintptr {
 	w, h := cgImgGetWidth(img), cgImgGetHeight(img)
 	dw, dh := w, h
 	if o >= 5 {
 		dw, dh = h, w
 	}
+	dw = max(1, int(float64(dw)*scale+0.5))
+	dh = max(1, int(float64(dh)*scale+0.5))
 	space := cgColorSpaceDeviceRGB()
 	if space == 0 {
 		return 0
@@ -337,7 +381,14 @@ func drawUpright(img uintptr, o int) uintptr {
 		return 0
 	}
 	defer cfRelease(ctx)
-	cgCtxConcatCTM(ctx, orientationCTM(o, w, h))
+	ctm := orientationCTM(o, w, h)
+	ctm.A *= scale
+	ctm.B *= scale
+	ctm.C *= scale
+	ctm.D *= scale
+	ctm.Tx *= scale
+	ctm.Ty *= scale
+	cgCtxConcatCTM(ctx, ctm)
 	cgCtxDrawImage(ctx, NSRect{Size: NSSize{Width: float64(w), Height: float64(h)}}, img)
 	return cgBitmapCreateImage(ctx)
 }
@@ -571,7 +622,7 @@ func RecognizeText(src string) (lines []string, err error) {
 			return
 		}
 		defer cfRelease(isrc)
-		img := uprightImage(isrc)
+		img := uprightImageCapped(isrc, recognizeMaxSide)
 		if img == 0 {
 			err = fmt.Errorf("mac: cannot decode image %s", src)
 			return

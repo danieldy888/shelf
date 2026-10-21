@@ -8,7 +8,11 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -462,5 +466,144 @@ func TestOCRSearchMatchesFoldedText(t *testing.T) {
 	// back to 「应用 · 时间」.
 	if _, _, _, ok := ocrSnippet(text, "不存在的内容"); ok {
 		t.Fatal("a non-match must report ok=false")
+	}
+}
+
+// TestOCRQueuedItemDeletedSaysCancelled: a queued 「识别文字并复制」 whose
+// image is deleted before its turn must call the callback so the user
+// hears a definite outcome — never the promised copy hanging forever
+// (PhaseOcr: the queue dropped it silently and the status line kept
+// 「正在识别，完成后自动复制」).
+func TestOCRQueuedItemDeletedSaysCancelled(t *testing.T) {
+	a, o, rec := testOCRShelf(t)
+	addClipImage(t, a, 30) // background item, recognized first below
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	o.recognize = func(string) ([]string, error) { return []string{"字"}, nil }
+	o.tick(time.Now()) // the background worker occupies the recognizer
+	it2 := addClipImage(t, a, 60)
+	a.copyRecognizedText(it2) // queues behind the running worker
+	if len(o.pending) != 1 {
+		t.Fatalf("the request must queue, pending=%d", len(o.pending))
+	}
+	if err := a.store.Remove(it2.ID); err != nil {
+		t.Fatal(err)
+	}
+	workers[0]()
+	o.tick(time.Now())
+	if !strings.Contains(a.status, "未复制") {
+		t.Fatalf("the queued request died silently: status=%q", a.status)
+	}
+	if rec.text != "" {
+		t.Fatalf("a deleted image's text must not be copied, got %q", rec.text)
+	}
+}
+
+// TestOCRDeletedMidRecognitionDoesNotCopy: the image is removed while its
+// worker runs; the callback must not fall through to the copy path with
+// the dead item's text (PhaseOcr: SetOCR's "no item" was swallowed, the
+// callback saw err==nil and the clipboard took a deleted image's words).
+func TestOCRDeletedMidRecognitionDoesNotCopy(t *testing.T) {
+	a, o, rec := testOCRShelf(t)
+	addClipImage(t, a, 30)
+	it := addClipImage(t, a, 60)
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	o.recognize = func(string) ([]string, error) { return []string{"不应复制的文字"}, nil }
+	a.copyRecognizedText(it)
+	if len(workers) != 1 {
+		t.Fatalf("the menu request starts one worker, got %d", len(workers))
+	}
+	if err := a.store.Remove(it.ID); err != nil {
+		t.Fatal(err)
+	}
+	workers[0]()
+	if rec.text != "" {
+		t.Fatalf("a deleted image's text was copied anyway: %q", rec.text)
+	}
+	if !strings.Contains(a.status, "未复制") {
+		t.Fatalf("the deletion must be reported, not the success toast: %q", a.status)
+	}
+	if _, err := os.Stat(it.Path); err == nil {
+		t.Fatal("the managed file is gone with its item — the result path must not read it")
+	}
+}
+
+// TestOCRDeletedItemIsNotRememberedFailed: deleting an image mid-run is a
+// cancellation, not a failure — the next capture of the same bytes (same
+// content id) must be recognized, not skipped for the rest of the session.
+func TestOCRDeletedItemIsNotRememberedFailed(t *testing.T) {
+	a, o, _ := testOCRShelf(t)
+	it := addClipImage(t, a, 30)
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	o.recognize = func(string) ([]string, error) { return []string{"字"}, nil }
+	a.copyRecognizedText(it)
+	if err := a.store.Remove(it.ID); err != nil {
+		t.Fatal(err)
+	}
+	workers[0]()
+	if o.failed[it.ID] {
+		t.Fatal("a deleted item is a cancellation, not a recognition failure")
+	}
+	// A new capture of the same content gets the same id; it must be picked up.
+	if err := a.store.AddClipImage(testImagePNG(t, 30), "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.store.Items) == 0 || !o.needs(a.store.Items[0]) {
+		t.Fatal("the re-added image must need recognition again")
+	}
+}
+
+// TestOCRDeletedAndErroredIsNotRememberedFailed: a recognition that errors
+// AND finds its item gone (user deleted it while the decoder held a bad
+// file) must not poison the id either — only genuine failures on a live
+// item belong in failed[].
+func TestOCRDeletedAndErroredIsNotRememberedFailed(t *testing.T) {
+	a, o, _ := testOCRShelf(t)
+	it := addClipImage(t, a, 30)
+	var workers []func()
+	o.run = func(f func()) { workers = append(workers, f) }
+	o.recognize = func(string) ([]string, error) { return nil, errors.New("vision lost") }
+	a.copyRecognizedText(it)
+	if err := a.store.Remove(it.ID); err != nil {
+		t.Fatal(err)
+	}
+	workers[0]()
+	if o.failed[it.ID] {
+		t.Fatal("a deleted item's failure is still a cancellation for retry purposes")
+	}
+}
+
+// TestOCRWorkerAndWordConvertNeverOverlap: the menu/background recognizer
+// and the Word converter share one Vision call site — at most one
+// recognition runs at a time, whichever caller launched it.
+func TestOCRWorkerAndWordConvertNeverOverlap(t *testing.T) {
+	a, o, _ := testOCRShelf(t)
+	it := addClipImage(t, a, 30)
+	var inFlight int64
+	var maxSeen int64
+	release := make(chan struct{})
+	old := recognizeText
+	recognizeText = func(string) ([]string, error) {
+		n := atomic.AddInt64(&inFlight, 1)
+		if n > maxSeen {
+			maxSeen = n
+		}
+		<-release
+		atomic.AddInt64(&inFlight, -1)
+		return []string{"字"}, nil
+	}
+	t.Cleanup(func() { recognizeText = old })
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); wordFromImage(it.Path, filepath.Join(t.TempDir(), "w.docx")) }()
+	go func() { defer wg.Done(); o.start(it, nil) }()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if maxSeen != 1 {
+		t.Fatalf("two Vision calls ran at once (max %d); the paths must serialize", maxSeen)
 	}
 }

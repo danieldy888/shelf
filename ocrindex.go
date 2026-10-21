@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -85,14 +86,16 @@ func (o *ocrIndex) tick(time.Time) {
 	if a.quitting || a.store == nil {
 		return
 	}
-	// Queued menu requests run before the next background image; the busy
-	// worker has just finished, so no gap applies between them.
 	if len(o.pending) > 0 && len(o.inflight) == 0 {
 		r := o.pending[0]
 		o.pending = o.pending[1:]
-		// The item may have been deleted while queued: drop it silently.
+		// The item may have been deleted while queued: the request is
+		// cancelled, and the callback must still run — the user was told
+		// 「完成后自动复制」 and needs a definite outcome.
 		if idx := slices.IndexFunc(a.store.Items, func(x store.Item) bool { return x.ID == r.item.ID }); idx >= 0 {
 			o.start(a.store.Items[idx], r.cb)
+		} else if r.cb != nil {
+			r.cb("", errItemGone)
 		}
 		return
 	}
@@ -144,6 +147,11 @@ func (o *ocrIndex) abort(id string) { delete(o.inflight, id) }
 
 // start launches the one-at-a-time worker for item. cb (nil for the
 // background pass) runs on the main thread after the write-back attempt.
+// errItemGone is the cancellation a deleted image produces: the item left
+// the store while its recognition was queued or in flight, so nothing is
+// copied and nothing is written back.
+var errItemGone = errors.New("store: item deleted before recognition finished")
+
 func (o *ocrIndex) start(it store.Item, cb func(string, error)) {
 	if o.inflight == nil {
 		o.inflight = map[string]bool{}
@@ -151,7 +159,7 @@ func (o *ocrIndex) start(it store.Item, cb func(string, error)) {
 	o.inflight[it.ID] = true
 	recognize := o.recognize
 	if recognize == nil {
-		recognize = recognizeText
+		recognize = recognizeImageText
 	}
 	dispatch := o.dispatch
 	if dispatch == nil {
@@ -178,45 +186,60 @@ func (o *ocrIndex) start(it store.Item, cb func(string, error)) {
 		}
 		lines, err := recognize(path)
 		dispatch(func() {
-			o.finish(id, lines, err)
+			gone, werr := o.finish(id, lines, err)
 			if cb != nil {
-				text := ""
-				if err == nil {
-					text = joinOCRLines(lines)
+				switch {
+				case gone:
+					cb("", errItemGone)
+				case werr != nil:
+					cb("", werr)
+				case err != nil:
+					cb("", err)
+				default:
+					cb(joinOCRLines(lines), nil)
 				}
-				cb(text, err)
 			}
 		})
 	})
 }
 
-// finish writes the worker's result onto the item (main thread). A
-// recognition error is logged and remembered for the session; an item
-// that vanished while being recognized drops the result.
-func (o *ocrIndex) finish(id string, lines []string, err error) {
+// finish writes the worker's result onto the item (main thread) and
+// reports whether the item vanished mid-recognition. Recognition errors on
+// an item that still exists are remembered for the session; a deleted item
+// is a cancellation — its content id must not be marked failed, or a later
+// capture of the same bytes would be skipped until restart.
+func (o *ocrIndex) finish(id string, lines []string, err error) (gone bool, werr error) {
 	delete(o.inflight, id)
 	o.nextAt = o.nowTime().Add(o.gap())
+	a := o.host
+	exists := a.store != nil && slices.ContainsFunc(a.store.Items,
+		func(it store.Item) bool { return it.ID == id })
 	if err != nil {
 		log.Printf("ocr: %v", err)
-		o.markFailed(id)
-		return
+		if exists {
+			o.markFailed(id)
+		}
+		return !exists, nil
 	}
-	a := o.host
 	if a.quitting || a.store == nil {
-		return
+		return !exists, nil
 	}
 	if err := a.store.SetOCR(id, joinOCRLines(lines)); err != nil {
-		// "no item" = deleted mid-recognition, the intended drop; anything
-		// else is a save failure — don't retry every tick.
-		o.markFailed(id)
-		if !strings.Contains(err.Error(), "no item") {
-			a.toastQuiet("操作失败："+err.Error(), time.Time{}, statusErr)
+		if strings.Contains(err.Error(), "no item") {
+			// Deleted mid-recognition: the intended drop — a cancellation,
+			// not a failure, so the id is not marked failed.
+			return true, nil
 		}
-		return
+		// A real save failure on a live item: don't retry every tick, and
+		// the callback hears the error instead of copying blindly.
+		o.markFailed(id)
+		a.toastQuiet("操作失败："+err.Error(), time.Time{}, statusErr)
+		return !exists, err
 	}
 	if a.win != nil {
 		a.win.Invalidate() // a hit row's snippet appears without a repaint wait
 	}
+	return false, nil
 }
 
 func (o *ocrIndex) gap() time.Duration {
@@ -282,6 +305,8 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 	queued := !item.OCRDone && o.anyBusy() && !o.busy(item.ID)
 	if !o.recognizeNow(item, func(text string, err error) {
 		switch {
+		case errors.Is(err, errItemGone):
+			a.toastStatus("图片已删除，未复制", time.Now().Add(3*time.Second), statusInfo)
 		case err != nil:
 			a.report(err)
 		case text == "":
