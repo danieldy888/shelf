@@ -66,6 +66,19 @@ const (
 	panelOpenOvershoot = 0.015
 )
 
+// peekKind is which content the peek shell is showing: the chevron or the
+// 松开放入 pill, the hover player, or the completion capsule. Recorded
+// each revealed frame so a fold can keep drawing that same content while
+// it shrinks away.
+type peekKind int
+
+const (
+	peekChevron peekKind = iota
+	peekDrop
+	peekPlayer
+	peekCapsule
+)
+
 // shellMotion is what view() drew last: the drawn shell's size, for the
 // window frame to hold while the springs are in flight, and whether a
 // spring is still on its way (the frame keeps overshoot room until then).
@@ -73,9 +86,10 @@ type shellMotion struct {
 	w, h, peekW, peekH float32
 	openK              float32 // the drawn open interpolation: 0 = folded to the peek shape
 	peekK              float32 // the drawn peek interpolation, for the close clamp
-	openMoving         bool    // the opening spring has not come to rest
-	sizeMoving         bool    // a peek-shape morph has not come to rest
-	peek               bool    // w and h are the peek shape's, not the panel's
+	peekKind           peekKind
+	openMoving         bool // the opening spring has not come to rest
+	sizeMoving         bool // a peek-shape morph has not come to rest
+	peek               bool // w and h are the peek shape's, not the panel's
 }
 
 // feedback is the capsule's state: what it says, for how long, and how wide

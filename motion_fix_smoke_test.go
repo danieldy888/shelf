@@ -256,6 +256,53 @@ func TestFixNativeCapsuleScreenshots(t *testing.T) {
 	fixCapsuleShot(t, a, "capsule-reposted-mid-retract")
 }
 
+// TestFixNativeFoldTrace replays the user's cancelled-drag video: a track
+// is loaded, the pointer is away from the notch, and the drop pill folds.
+// Before the fix the shell grew toward the player and the player's text
+// drew mid-fold; now every frame only shrinks and the strip sheds its
+// click surface with it.
+func TestFixNativeFoldTrace(t *testing.T) {
+	a := redesignShelf(t)
+	motionClosed(a)
+	time.Sleep(600 * time.Millisecond)
+	defer motionClosed(a)
+	onMain(func() {
+		a.settings.IslandNowPlaying = true
+		fakeTrack(a, true)
+		a.dragging = true
+		a.peeking, a.peekProgress, a.peekFrom = true, 1, 1
+		a.win.Invalidate()
+	})
+	time.Sleep(500 * time.Millisecond)
+	motionShot(t, a, "fold-drop-pill", 0)
+	// The drag ends with the pointer away from the notch: the pill folds.
+	onMain(func() {
+		a.dragging = false
+		a.peeking, a.peekAnimStart = false, time.Now()
+		a.peekFrom = 1
+		a.win.Invalidate()
+	})
+	fold := sampleMotion(a, 700*time.Millisecond)
+	saveMotion(t, "trace-fold-drop", fold)
+	baseH := float32(max(32, a.notchH))
+	for i, s := range fold {
+		if i == 0 {
+			continue
+		}
+		prev := fold[i-1]
+		if s.w > prev.w+0.5 || s.h > prev.h+0.5 {
+			t.Fatalf("frame at %.1fms: folding shell grew %.1fx%.1f -> %.1fx%.1f", s.ms, prev.w, prev.h, s.w, s.h)
+		}
+		if float32(s.window.Height) < s.h {
+			t.Fatalf("frame at %.1fms: window %+v cuts the folding shell %.1f", s.ms, s.window, s.h)
+		}
+	}
+	if last := fold[len(fold)-1]; last.h > baseH+4 || last.w > float32(max(180, a.notchW))+4 {
+		t.Fatalf("the fold ended at %.1fx%.1f, not back at the notch", last.w, last.h)
+	}
+	motionShot(t, a, "folded-notch", 300*time.Millisecond)
+}
+
 // WindowServer, not a placeholder Window or desiredFrame arithmetic, must
 // send presses below the settled panel to the receiver underneath it.
 func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {

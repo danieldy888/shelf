@@ -678,7 +678,7 @@ func TestPlayerFadesOutWithTheShell(t *testing.T) {
 	// peekK mid-decay, the pointer gone: the player is still the shape on
 	// show, drawn at its fading opacity.
 	view := ui.NewTester(func(c *ui.Context) {
-		a.peekView(c, 380, 140, 0, 0.6, 0, false)
+		a.peekView(c, 380, 140, 0, 0.6, 0, false, false)
 	}, panelWidth, panelHeight)
 	view.Frame()
 	if !view.HasText("Fashion Killa") {

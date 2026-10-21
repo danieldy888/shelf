@@ -367,6 +367,10 @@ func (a *shelf) view(c *ui.Context) {
 	a.shownH = shownH
 	// The hover shape springs between its forms (chevron, drop pill,
 	// player, capsule) when it changes while shown, e.g. a drag starting.
+	// A fold is subtract-only: while the peek closes (peekTarget 0), the
+	// shape freezes at what is actually drawn — re-aiming at the live
+	// peekSize() answer would grow the folding shell toward a track's
+	// player size before it could shrink.
 	peekW, peekH := a.peekSize()
 	if a.win != nil {
 		if expanded {
@@ -379,8 +383,12 @@ func (a *shelf) view(c *ui.Context) {
 			peekH = zone.Jump("peek-h", peekH)
 		} else {
 			anim := sizeAnim
-			if closing {
+			switch {
+			case closing:
 				anim = closeSpring
+			case peekTarget == 0:
+				// Folding: hold the drawn shape, shrink with peekK alone.
+				peekW, peekH = a.fx.peekW, a.fx.peekH
 			}
 			peekW = zone.AnimateTo("peek-w", peekW, anim)
 			peekH = zone.AnimateTo("peek-h", peekH, anim)
@@ -435,7 +443,7 @@ func (a *shelf) view(c *ui.Context) {
 				// 收起途中只有壳缩回刘海，不画内容。
 				return
 			}
-			a.peekView(c, shellW, shellH, openK, peekK, shake, over)
+			a.peekView(c, shellW, shellH, openK, peekK, shake, over, peekTarget == 0)
 			return
 		}
 		// The content is laid out once at the panel's final size and the
@@ -892,7 +900,7 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 // player, the pill's content is laid out at its final size and uncovered
 // by the growing shell; the glyphs sit in the band below the hardware
 // notch, where the screen has pixels.
-func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, over bool) {
+func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, over, folding bool) {
 	now := c.Now()
 	if a.fb.retracting && !a.peeking && !(a.dragging && !a.ownDrag) {
 		// The shell is still folding back from the capsule: only the frame
@@ -900,32 +908,56 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		// over a capsule on its way out.
 		return
 	}
-	// The completion capsule outranks the player: a status that is up is
-	// what the shell grew for (peekSize and desiredFrame agree), and the
-	// player takes the shape back when the toast is done.
-	if a.capsuleUp(now) {
+	// While the peek is folding (peek target 0) the shell keeps showing
+	// the content it already had — folding is subtract-only. Re-evaluating
+	// live state mid-fold would flash a loaded track's title inside the
+	// shrinking shell.
+	kind := a.fx.peekKind
+	if !folding {
+		switch {
+		case a.capsuleUp(now):
+			// The completion capsule outranks the player: a status that is
+			// up is what the shell grew for (peekSize and desiredFrame
+			// agree), and the player takes the shape back when the toast
+			// is done.
+			kind = peekCapsule
+		case !over && a.np != nil && a.np.showsPlayer():
+			kind = peekPlayer
+		case over || (a.dragging && !a.ownDrag):
+			kind = peekDrop
+		default:
+			kind = peekChevron
+		}
+		a.fx.peekKind = kind
+	}
+	switch kind {
+	case peekCapsule:
 		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
 		return
-	}
-	if !over && a.np != nil && a.np.showsPlayer() {
-		pw, ph := a.playerSize()
-		clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
-		drew := false
-		clip.Children(func() { drew = a.np.peekPlayer(c, pw, ph, peekK) })
-		if drew {
-			return
+	case peekPlayer:
+		if a.np != nil {
+			pw, ph := a.playerSize()
+			clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+			drew := false
+			clip.Children(func() { drew = a.np.peekPlayer(c, pw, ph, peekK) })
+			if drew {
+				return
+			}
 		}
+		// The player's content is gone mid-fold (track ended): fold the
+		// shell silently rather than swapping in another glyph.
+		return
 	}
 	pw, ph := a.peekSize()
 	notchH := float32(max(32, a.notchH))
 	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Clip().
 		AlignItems(ui.Center).Label("展开 Shelf")
 	pill.Children(func() {
-		ui.Column(c.Key("peek-body")).Width(pw).Height(ph).Children(func() {
+		ui.Column(c.Key("peek-body")).Width(pw).Height(ph).Opacity(min(max(peekK, 0), 1)).Children(func() {
 			ui.Box(c.Key("peek-notch")).Height(notchH)
 			band := ui.Row(c.Key("peek-band")).FillWidth().Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(6)
 			band.Children(func() {
-				if over || (a.dragging && !a.ownDrag) {
+				if kind == peekDrop {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
 					ui.Text(c, "松开放入").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
 				} else {
