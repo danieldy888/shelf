@@ -244,6 +244,7 @@ func (a *shelf) view(c *ui.Context) {
 		} else if a.fx.openK < 1 && zone.Velocity("open") < 0 {
 			// 收起中途重新打开也不得带着收起速度继续往回缩。
 			zone.Jump("open", a.fx.openK)
+			openAnim.Spring.Velocity = 0.5
 		}
 		switch {
 		case capsule:
@@ -450,9 +451,8 @@ func (a *shelf) view(c *ui.Context) {
 					s := 0.88 + 0.12*contentK
 					content.TransformOrigin(0.5, 0).Scale(s, s)
 					// 不可见的内容不值得一次离屏模糊：低于淡入起点
-					// (k ≤ 0.1 ⇒ opacity 0)、残余模糊已不可辨 (< 0.25pt)
-					// 或无原生窗口的纯软件测试表面（winH == 0）时跳过。
-					if blur := 6 * (1 - contentK); a.winH != 0 && contentK > 0.1 && blur >= 0.25 {
+					// (k ≤ 0.1 ⇒ opacity 0) 或残余模糊已不可辨 (< 0.25pt) 时跳过。
+					if blur := 6 * (1 - contentK); contentK > 0.1 && blur >= 0.25 {
 						content.Blur(blur)
 					}
 				}

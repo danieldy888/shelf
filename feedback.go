@@ -71,11 +71,11 @@ const (
 // spring is still on its way (the frame keeps overshoot room until then).
 type shellMotion struct {
 	w, h, peekW, peekH float32
-	openK      float32 // the drawn open interpolation: 0 = folded to the peek shape
-	peekK      float32 // the drawn peek interpolation, for the close clamp
-	openMoving bool    // the opening spring has not come to rest
-	sizeMoving bool    // a peek-shape morph has not come to rest
-	peek       bool    // w and h are the peek shape's, not the panel's
+	openK              float32 // the drawn open interpolation: 0 = folded to the peek shape
+	peekK              float32 // the drawn peek interpolation, for the close clamp
+	openMoving         bool    // the opening spring has not come to rest
+	sizeMoving         bool    // a peek-shape morph has not come to rest
+	peek               bool    // w and h are the peek shape's, not the panel's
 }
 
 // feedback is the capsule's state: what it says, for how long, and how wide

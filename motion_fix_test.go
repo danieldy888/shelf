@@ -72,9 +72,9 @@ func TestMidOpenCloseNeverGrowsOutward(t *testing.T) {
 	}
 }
 
-// Reopening mid-close must stay continuous: the shell turns around where
-// it is — it may keep shrinking at the fold's speed for the frame already
-// in flight, but it never snaps back to the notch.
+// Reopening mid-close turns the shell outward from its last drawn size.
+// The next display frame must grow, not keep folding or pause while the
+// old spring's inward velocity wears off.
 func TestMidCloseReopenIsContinuous(t *testing.T) {
 	a := motionWindow()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
@@ -90,11 +90,16 @@ func TestMidCloseReopenIsContinuous(t *testing.T) {
 		view.Advance(16 * time.Millisecond)
 	}
 	a.visible = true // reopen mid-fold
-	prevH := a.fx.h
+	reopenedH := a.fx.h
+	prevH := reopenedH
+	targetH := float32(a.panelH() - 8)
 	for i := range 60 {
 		view.Frame()
-		if a.fx.h < prevH-30 {
-			t.Fatalf("frame %d after the reopen: the shell snapped down to %.1f from %.1f", i, a.fx.h, prevH)
+		if i == 1 && a.fx.h <= reopenedH {
+			t.Fatalf("the first display frame after reopening did not grow: %.2f -> %.2f", reopenedH, a.fx.h)
+		}
+		if prevH < targetH && a.fx.h < prevH-0.01 {
+			t.Fatalf("frame %d after the reopen: the shell kept folding from %.2f to %.2f", i, prevH, a.fx.h)
 		}
 		prevH = a.fx.h
 		view.Advance(16 * time.Millisecond)

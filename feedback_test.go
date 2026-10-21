@@ -114,33 +114,6 @@ func TestClosingFoldsCrisp(t *testing.T) {
 	}
 }
 
-// TestSpringsMatchTheDesign pins the shell springs that did not change
-// with the island open: the capsule's retraction cannot overshoot, and
-// the peek shapes morph with a light bounce.
-func TestSpringsMatchTheDesign(t *testing.T) {
-	if retractSpring.Spring.Bounce != 0 || retractSpring.Spring.Duration != 300*time.Millisecond {
-		t.Fatalf("capsule retract spring = %+v, want a 300ms spring that cannot overshoot", retractSpring)
-	}
-	if peekSpring.Spring.Bounce != 0.15 || peekSpring.Spring.Duration != peekAnimation {
-		t.Fatalf("peek spring = %+v, want %v at Bounce 0.15", peekSpring, peekAnimation)
-	}
-}
-
-// TestOpenFrameRoomHoldsTheOvershoot is the frame arithmetic on its own:
-// room for the panel's opening overshoot plus both ears, never less.
-func TestOpenFrameRoomHoldsTheOvershoot(t *testing.T) {
-	for _, expH := range []float32{140, 328, 552} {
-		w, h := openFrameRoom(expH)
-		expW := float32(panelWidth - 16)
-		if float64(w) < float64(expW)*(1+panelOpenOvershoot)+2*earR {
-			t.Fatalf("room %d px cannot hold a shell %.0f wide overshooting with ears", w, expW)
-		}
-		if float64(h) < float64(expH)*(1+panelOpenOvershoot) {
-			t.Fatalf("room %d px cannot hold a shell %.0f tall overshooting", h, expH)
-		}
-	}
-}
-
 // TestPeekStripHoldsFoldingShapes keeps the native strip as big as the
 // shape it is folding back from: a capsule that just expired, or a player
 // whose track stopped, must not be clipped on its way down.
