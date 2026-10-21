@@ -286,16 +286,23 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 	if a.ownDrag {
 		return nil
 	}
-	if paths := dropDebugFiles(); len(paths) > 0 {
-		d.class = classifyDrop(paths)
-		d.on, d.need = true, dropZoneNeedH()
-		return paths
+	if raw := os.Getenv("SHELF_DEBUG_DROP_FILES"); raw != "" {
+		if !slices.Equal(d.files, dropDebugFiles()) {
+			d.files = dropDebugFiles()
+			d.class = classifyDrop(d.files)
+		}
+		if len(d.files) > 0 {
+			d.on, d.need = true, dropZoneNeedH()
+			return d.files
+		}
+	} else if !a.dragging && !d.loaded {
+		d.files = nil
 	}
 	if a.dragging {
 		if d.serial != a.dragSerial {
 			*d = dropZoneState{serial: a.dragSerial}
 		}
-		inside := over || a.win == nil
+		inside := over || a.edgeOpened || a.win == nil
 		if !inside {
 			p := cursorPoint()
 			inside = p.X >= a.x && p.X < a.x+panelWidth && p.Y >= a.y && p.Y < a.y+a.panelH()
@@ -338,7 +345,10 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 // hovers the expanded panel the module bar and stage become the drop
 // zone; anything else defers to the current page unchanged.
 func (a *shelf) dropBody(c *ui.Context, over bool) {
-	paths := a.dropZoneSnap(over)
+	paths := a.drop.files
+	if !a.drop.on {
+		paths = nil
+	}
 	if len(paths) == 0 {
 		a.tabBody(c, over)
 		return
@@ -568,7 +578,7 @@ func (a *shelf) dropThumbs(paths []string) []*ui.Bitmap {
 // runs off the main thread, the Finder-icon fallback on it, and the
 // result lands through a window update.
 func (a *shelf) startDropThumb(path string) {
-	if a.win == nil || dropThumbBusy[path] {
+	if a.win == nil || a.winH == 0 || dropThumbBusy[path] {
 		return
 	}
 	dropThumbBusy[path] = true

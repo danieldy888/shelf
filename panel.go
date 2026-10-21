@@ -220,7 +220,7 @@ func (a *shelf) view(c *ui.Context) {
 	if a.visible {
 		openTarget = 1
 	}
-	if a.peeking || a.visible || capsule {
+	if a.peeking || capsule {
 		peekTarget = 1
 	}
 	// Keep one native drop target across all states. The transparent root does
@@ -241,6 +241,9 @@ func (a *shelf) view(c *ui.Context) {
 			// 展开中途关闭不得带着展开速度继续往外长：反向时重置为很小的
 			// 向内初速度（临界阻尼下初速度 ≤ 0 保证壳尺寸单调变小）。
 			openAnim.Spring.Velocity = -0.5
+		} else if a.fx.openK < 1 && zone.Velocity("open") < 0 {
+			// 收起中途重新打开也不得带着收起速度继续往回缩。
+			zone.Jump("open", a.fx.openK)
 		}
 		switch {
 		case capsule:
@@ -258,7 +261,14 @@ func (a *shelf) view(c *ui.Context) {
 			peekAnim.Spring.Velocity = -0.5 // 收起反向同样不带外冲速度
 		}
 		openK = zone.AnimateTo("open", openTarget, openAnim)
-		peekK = zone.AnimateTo("peek", peekTarget, peekAnim)
+		if a.visible {
+			// While the panel is opening, openK drives the shell alone:
+			// freeze peek at its last drawn value so a second spring
+			// cannot fight openK or reverse the shell on reopen.
+			peekK = zone.Jump("peek", a.fx.peekK)
+		} else {
+			peekK = zone.AnimateTo("peek", peekTarget, peekAnim)
+		}
 		// The content follows its own channel, not openK: it springs in a
 		// beat after the shell (contentSpring's 30ms delay), scales from
 		// 0.88 and un-blurs as it fades in. While the panel is not expanded
@@ -312,6 +322,7 @@ func (a *shelf) view(c *ui.Context) {
 		// The mesh is the hardware notch: nothing is drawn, and the frame
 		// the next state starts from is the notch's own box.
 		a.fx.w, a.fx.h = float32(max(180, a.notchW)), float32(max(32, a.notchH))
+		a.fx.peekW, a.fx.peekH = 0, 0
 		a.fx.peek, a.fx.openMoving, a.fx.sizeMoving, a.fb.drawn = false, false, false, false
 		a.fx.openK, a.fx.peekK = 0, 0
 		a.fb.clearExpired(now, true)
@@ -338,6 +349,8 @@ func (a *shelf) view(c *ui.Context) {
 	// clipped first frame and no mid-drag resize.
 	if expanded {
 		a.dropZoneSnap(over)
+	} else {
+		a.drop.on, a.drop.need = false, 0
 	}
 	targetH := float32(a.panelH())
 	shownH := targetH
@@ -353,9 +366,21 @@ func (a *shelf) view(c *ui.Context) {
 	// player, capsule) when it changes while shown, e.g. a drag starting.
 	peekW, peekH := a.peekSize()
 	if a.win != nil {
-		peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
-		peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
+		if expanded || closing {
+			// Once the panel is opening or closing, openK drives the shell
+			// alone: freeze the peek shape so a concurrent peekW/peekH
+			// spring cannot fight openK or pull the shell back mid-flight.
+			if a.fx.peekK > 0 && a.fx.peekW > 0 && a.fx.peekH > 0 {
+				peekW, peekH = a.fx.peekW, a.fx.peekH
+			}
+			peekW = zone.Jump("peek-w", peekW)
+			peekH = zone.Jump("peek-h", peekH)
+		} else {
+			peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
+			peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
+		}
 	}
+	a.fx.peekW, a.fx.peekH = peekW, peekH
 	a.fx.sizeMoving = a.win != nil && (!zone.Settled("peek-w") || !zone.Settled("peek-h"))
 	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板
 	// （shellSize 是几何的唯一来源）。
@@ -425,8 +450,9 @@ func (a *shelf) view(c *ui.Context) {
 					s := 0.88 + 0.12*contentK
 					content.TransformOrigin(0.5, 0).Scale(s, s)
 					// 不可见的内容不值得一次离屏模糊：低于淡入起点
-					// (k ≤ 0.1 ⇒ opacity 0) 或残余模糊小于 0.05pt 时跳过。
-					if blur := 10 * (1 - contentK); contentK > 0.1 && blur >= 0.05 {
+					// (k ≤ 0.1 ⇒ opacity 0)、残余模糊已不可辨 (< 0.25pt)
+					// 或无原生窗口的纯软件测试表面（winH == 0）时跳过。
+					if blur := 6 * (1 - contentK); a.winH != 0 && contentK > 0.1 && blur >= 0.25 {
 						content.Blur(blur)
 					}
 				}

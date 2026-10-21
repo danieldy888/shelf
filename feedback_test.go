@@ -127,16 +127,16 @@ func TestSpringsMatchTheDesign(t *testing.T) {
 }
 
 // TestOpenFrameRoomHoldsTheOvershoot is the frame arithmetic on its own:
-// room for a 4% overshoot plus a tick of catch-up, never less.
+// room for the panel's opening overshoot plus both ears, never less.
 func TestOpenFrameRoomHoldsTheOvershoot(t *testing.T) {
 	for _, expH := range []float32{140, 328, 552} {
 		w, h := openFrameRoom(expH)
 		expW := float32(panelWidth - 16)
-		if float64(w) < float64(expW)*(1+openOvershoot) {
-			t.Fatalf("room %d px cannot hold a shell %.0f wide overshooting 4%%", w, expW)
+		if float64(w) < float64(expW)*(1+panelOpenOvershoot)+2*earR {
+			t.Fatalf("room %d px cannot hold a shell %.0f wide overshooting with ears", w, expW)
 		}
-		if float64(h) < float64(expH)*(1+openOvershoot) {
-			t.Fatalf("room %d px cannot hold a shell %.0f tall overshooting 4%%", h, expH)
+		if float64(h) < float64(expH)*(1+panelOpenOvershoot) {
+			t.Fatalf("room %d px cannot hold a shell %.0f tall overshooting", h, expH)
 		}
 	}
 }

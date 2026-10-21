@@ -59,14 +59,18 @@ var (
 
 // openOvershoot is the room the frame keeps for a spring that is still on
 // its way: the widest spring it must cover is the capsule's Bounce 0.28,
-// which peaks near 4%, plus a frame's worth of catch-up.
-const openOvershoot = 0.045
+// which peaks near 4%, plus a frame's worth of catch-up. The panel itself
+// opens on Bounce 0.18, which peaks near 1.1% (panelOpenOvershoot).
+const (
+	openOvershoot      = 0.045
+	panelOpenOvershoot = 0.015
+)
 
 // shellMotion is what view() drew last: the drawn shell's size, for the
 // window frame to hold while the springs are in flight, and whether a
 // spring is still on its way (the frame keeps overshoot room until then).
 type shellMotion struct {
-	w, h       float32
+	w, h, peekW, peekH float32
 	openK      float32 // the drawn open interpolation: 0 = folded to the peek shape
 	peekK      float32 // the drawn peek interpolation, for the close clamp
 	openMoving bool    // the opening spring has not come to rest
@@ -338,13 +342,13 @@ func (f *feedback) clearExpired(now time.Time, folded bool) {
 // while the opening spring is still in flight: room for the overshoot, plus
 // a tick of slack so the frame never trails the shell. The width also holds
 // the two ear corners (earR) the shell's top edge draws past its flanks,
-// and keeps the parity of the settled width (panelWidth+2*earR): the window
-// is centred by an integer X while the shell is centred inside it by a
-// float, so a room width that differs by an odd count would land the
-// settled shell half a point off where the flight frames had it.
+// and keeps the parity of the settled width (panelWidth+2*earR): at Bounce
+// 0.18 (~1.1% overshoot) the 16pt panel margin already absorbs the width
+// overshoot, so w equals panelWidth+2*earR and the window never shifts X
+// or changes width when the spring starts or comes to rest.
 func openFrameRoom(expH float32) (w, h int) {
 	expW := float32(panelWidth - 16)
-	w = int(math.Ceil(float64(expW*(1+openOvershoot)))) + 2 + 2*earR
+	w = max(int(math.Ceil(float64(expW*(1+panelOpenOvershoot)))), panelWidth) + 2*earR
 	if w%(panelWidth+2*earR)%2 != 0 {
 		w++
 	}

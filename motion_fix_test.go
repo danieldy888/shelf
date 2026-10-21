@@ -309,3 +309,52 @@ func TestDropZoneHeightSyncsTheWindowAtOnce(t *testing.T) {
 		t.Fatalf("the synced frame %d clips the ears of a %.0fpt shell", a.frame.Width, a.fx.w)
 	}
 }
+
+// Opening the shelf must size the window for the open flight from the
+// first frame and keep its horizontal position fixed when the spring
+// settles, while freezing any peek morph in flight so the shell grows
+// monotonically without a secondary height or width bounce.
+func TestOpeningFrameStaysAlignedAndFreezesPeekMorph(t *testing.T) {
+	a := motionWindow()
+	dir := t.TempDir()
+	img := writeFile(t, dir, "1.png", testPNGBytes(t))
+	t.Setenv("SHELF_DEBUG_DROP_FILES", img)
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	// Start a peek morph partway (as a drag or hover player does), then open.
+	a.dragging, a.peeking = true, true
+	view.Frame()
+	view.Advance(32 * time.Millisecond)
+	view.Frame()
+	a.visible, a.edgeOpened = true, true
+	a.dropZoneSnap(true)
+	a.fx.openMoving = true
+	a.syncMousePassThrough()
+	firstFrame := a.desiredFrame()
+	prevW, prevH := a.fx.w, a.fx.h
+	peaked := false
+	for i := range 60 {
+		view.Frame()
+		f := a.desiredFrame()
+		if f.X != firstFrame.X || f.Width != firstFrame.Width {
+			t.Fatalf("frame %d: window X/Width shifted from %+v to %+v during open", i, firstFrame, f)
+		}
+		if f.Height < int(a.fx.h+0.5) {
+			t.Fatalf("frame %d: window height %d clips shell %.1f", i, f.Height, a.fx.h)
+		}
+		if !peaked && a.fx.openK >= 1 && a.fx.h < prevH {
+			peaked = true
+		}
+		if !peaked && (a.fx.w < prevW-0.05 || a.fx.h < prevH-0.05) {
+			t.Fatalf("frame %d: shell reversed before peak (%.1fx%.1f -> %.1fx%.1f)", i, prevW, prevH, a.fx.w, a.fx.h)
+		}
+		if peaked && (a.fx.w > prevW+0.05 || a.fx.h > prevH+0.05) {
+			t.Fatalf("frame %d: shell grew again after peak (%.1fx%.1f -> %.1fx%.1f)", i, prevW, prevH, a.fx.w, a.fx.h)
+		}
+		prevW, prevH = a.fx.w, a.fx.h
+		view.Advance(16 * time.Millisecond)
+	}
+	settled := a.desiredFrame()
+	if settled.X != firstFrame.X || settled.Width != firstFrame.Width {
+		t.Fatalf("settled frame %+v shifted horizontally from flight frame %+v", settled, firstFrame)
+	}
+}

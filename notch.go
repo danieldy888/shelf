@@ -17,6 +17,15 @@ import (
 // animations and mouse pass-through. Content lives in panel.go and items.go.
 
 func (a *shelf) place(p mygo.Point) {
+	a.placeAt(p)
+	if a.win != nil {
+		a.syncWindowFrame()
+		a.win.SetOpacity(1)
+	}
+	a.syncDragGuard()
+}
+
+func (a *shelf) placeAt(p mygo.Point) {
 	d := mygo.Screen.DisplayNearestPoint(p)
 	a.dispBounds = d.Bounds
 	nx, ny, nw, nh, hasNotch := mac.NotchRect(d.ID)
@@ -30,11 +39,6 @@ func (a *shelf) place(p mygo.Point) {
 		a.x = a.notchX + a.notchW/2 - panelWidth/2
 	}
 	a.y = d.Bounds.Y
-	if a.win != nil {
-		a.syncWindowFrame()
-		a.win.SetOpacity(1)
-	}
-	a.syncDragGuard()
 }
 
 // overNotch 只认实测刘海几何：光标真正进入刘海热区（notchX/notchY 为原点，
@@ -84,12 +88,11 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 				w = max(w, fbMaxW+2*fbGlowPad)
 				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+fbGlowPad)
 			}
-		case a.fx.openMoving:
+		case a.fx.openMoving || a.winH != 0:
 			// The opening spring overshoots its final size for a moment:
-			// the frame holds room for the whole flight (Bounce 0.28 ⇒
-			// about 4%, plus a tick of catch-up) and shrinks back once the
-			// spring rests, so no frame is clipped.
-			ow, oh := openFrameRoom(float32(a.panelH() - 8))
+			// the frame holds room for the whole flight so no frame is
+			// clipped.
+			ow, oh := openFrameRoom(float32(h - 8))
 			if oh > h {
 				h = oh
 			}
@@ -337,25 +340,32 @@ func (a *shelf) show(edge bool) {
 		return
 	}
 	if a.win != nil {
-		a.place(mygo.Screen.CursorScreenPoint())
+		a.placeAt(mygo.Screen.CursorScreenPoint())
 	}
 	if a.store != nil {
 		a.store.Refresh()
 	}
 	a.visible, a.edgeOpened, a.received = true, edge, false
+	a.dropZoneSnap(edge)
 	// A fresh opening starts at its own height. Reversing an in-flight
 	// close keeps the height channel so the shell cannot jump.
 	if a.fx.openK == 0 {
 		a.openGen++
 		a.shownH = 0
 	}
+	a.fx.openMoving = true
 	a.animationFrom, a.animationStart = a.progress, time.Now()
+	prevFrame := a.frame
 	a.syncMousePassThrough()
+	a.syncDragGuard()
 	if a.win != nil {
+		a.win.SetOpacity(1)
 		a.win.ShowInactive()
 		// ShowInactive 不夺焦，面板收不到按键，只能临时注册全局 Esc 与空格。
 		a.holdKeys()
-		a.win.Invalidate()
+		if a.frame == prevFrame {
+			a.win.Invalidate()
+		}
 	}
 }
 
@@ -539,12 +549,14 @@ func (a *shelf) animate(now time.Time) {
 	if a.win == nil {
 		return
 	}
-	// 动画途中逐帧重绘；结束时补一次穿透状态同步与终帧。
+	// 动画途中由 zone.AnimateTo 以显示器帧率自驱动重绘；结束时补一次穿透状态同步。
 	if !a.animationStart.IsZero() || !a.peekAnimStart.IsZero() || finished {
 		if finished {
 			a.syncMousePassThrough()
 		}
-		a.win.Invalidate()
+		if !a.fx.openMoving && !a.fx.sizeMoving {
+			a.win.Invalidate()
+		}
 	}
 }
 
