@@ -77,6 +77,9 @@ const (
 	peekDrop
 	peekPlayer
 	peekCapsule
+	// peekHint is the drag-in-flight hint: a notch-high shell, a little
+	// wider, with no glyph inside — it must not outgrow the menu bar.
+	peekHint
 )
 
 // shellMotion is what view() drew last: the drawn shell's size, for the

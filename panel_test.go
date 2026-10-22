@@ -378,14 +378,14 @@ func TestNoNotchGeometryDisablesTriggers(t *testing.T) {
 		if a.overNotch(p) {
 			t.Fatalf("overNotch(%v) true with no notch geometry", p)
 		}
-		if a.nearTrigger(p) {
-			t.Fatalf("nearTrigger(%v) true with no notch geometry", p)
+		if a.dropBand(p) {
+			t.Fatalf("dropBand(%v) true with no notch geometry", p)
 		}
 	}
 }
 
-// 有效刘海几何时：悬停区紧贴刘海（含少量余量），拖拽触发区以其中心为准；
-// 屏幕左上角和远离刘海的位置都不得命中。
+// 有效刘海几何时：悬停区紧贴刘海（含少量余量），投放带是刘海宽+左右余量
+// × 菜单栏高的一条——菜单栏以下、远离刘海的位置都不得命中。
 func TestNotchTriggersBoundToRealRect(t *testing.T) {
 	a := &shelf{notchX: 645, notchY: 0, notchW: 180, notchH: 32}
 	if !a.overNotch(mygo.Point{X: 735, Y: 20}) {
@@ -397,11 +397,23 @@ func TestNotchTriggersBoundToRealRect(t *testing.T) {
 	if a.overNotch(mygo.Point{X: 735, Y: 60}) {
 		t.Fatal("cursor below hover pad must not hover")
 	}
-	if !a.nearTrigger(mygo.Point{X: 735, Y: 40}) {
-		t.Fatal("cursor in top-center trigger zone should activate drag trigger")
+	if !a.dropBand(mygo.Point{X: 735, Y: 31}) {
+		t.Fatal("cursor on the notch's bottom row should hit the drop band")
 	}
-	if a.nearTrigger(mygo.Point{X: 100, Y: 40}) {
-		t.Fatal("cursor far from notch center must not activate drag trigger")
+	if a.dropBand(mygo.Point{X: 735, Y: 32}) {
+		t.Fatal("cursor below the menu bar must leave the drop band")
+	}
+	if a.dropBand(mygo.Point{X: 645 - dropBandPadX - 1, Y: 10}) {
+		t.Fatal("cursor left of the band's pad must not hit it")
+	}
+	if !a.dropBand(mygo.Point{X: 645 - dropBandPadX, Y: 10}) {
+		t.Fatal("cursor on the band's left edge should hit it")
+	}
+	if !a.dropBand(mygo.Point{X: 645 + 180 + dropBandPadX - 1, Y: 10}) {
+		t.Fatal("cursor inside the band's right pad should hit it")
+	}
+	if a.dropBand(mygo.Point{X: 100, Y: 20}) {
+		t.Fatal("cursor far from notch center must not hit the drop band")
 	}
 }
 
@@ -474,9 +486,15 @@ func TestHoverKeepsWindowAnchored(t *testing.T) {
 	if idle.Y != 0 || idle.Y+idle.Height >= 380 {
 		t.Fatalf("collapsed surface must stay at the top, far above the Dock: %+v", idle)
 	}
+	// An incoming drag deliberately shrinks the surface to the notch's
+	// menu-bar band (task D): Shelf holds no sub-band real estate during a
+	// drag, so apps under the old strip get their windows back.
 	a.dragging = true
-	if got := a.desiredFrame(); got != idle {
-		t.Fatalf("starting a drag must keep the same approach surface: %+v", got)
+	drag := a.desiredFrame()
+	bandW := max(180, a.notchW) + 2*dropBandPadX
+	hintW := int(180+dropHintExtraW) + 2*earR
+	if drag.Height > max(32, a.notchH) || drag.Width != max(bandW, hintW) {
+		t.Fatalf("incoming-drag frame must be the menu-bar band (±ears), got %+v", drag)
 	}
 	a.visible = true
 	if got := a.desiredFrame(); got.Y != idle.Y || got.Height <= idle.Height {

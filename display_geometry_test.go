@@ -79,20 +79,20 @@ func TestSecondaryDisplayTriggersStayOnTheirDisplay(t *testing.T) {
 	if !a.overNotch(mygo.Point{X: 736, Y: 1440 + 20}) {
 		t.Fatal("hover inside the secondary display's notch band ignored")
 	}
-	if !a.nearTrigger(mygo.Point{X: 736, Y: 1440 + 40}) {
-		t.Fatal("drag trigger inside the secondary display's top ignored")
+	if !a.dropBand(mygo.Point{X: 736, Y: 1440 + 20}) {
+		t.Fatal("drop band inside the secondary display's menu bar ignored")
 	}
 	// The same local coordinates on the PRIMARY display must not fire —
 	// this is exactly where an unflipped Y would ghost-trigger.
 	if a.overNotch(mygo.Point{X: 736, Y: 20}) {
 		t.Fatal("primary-screen point hovered a notch 1440pt away")
 	}
-	if a.nearTrigger(mygo.Point{X: 736, Y: 40}) {
-		t.Fatal("primary-screen point armed a trigger 1440pt away")
+	if a.dropBand(mygo.Point{X: 736, Y: 20}) {
+		t.Fatal("primary-screen point armed the drop band 1440pt away")
 	}
 	// Just above the secondary display's top edge is the primary's bottom.
-	if a.nearTrigger(mygo.Point{X: 736, Y: 1439}) {
-		t.Fatal("point on the other display armed the trigger")
+	if a.dropBand(mygo.Point{X: 736, Y: 1439}) {
+		t.Fatal("point on the other display armed the drop band")
 	}
 	if a.overNotch(mygo.Point{X: 736, Y: 1439}) {
 		t.Fatal("point on the other display hovered the notch")
@@ -102,8 +102,8 @@ func TestSecondaryDisplayTriggersStayOnTheirDisplay(t *testing.T) {
 func TestNegativeCoordinateDisplayTriggers(t *testing.T) {
 	a := secondaryShelfNegative()
 	cx := a.notchX + a.notchW/2 // -1050
-	if !a.nearTrigger(mygo.Point{X: cx, Y: -1080}) {
-		t.Fatal("cursor on the display's top edge must arm the drag trigger")
+	if !a.dropBand(mygo.Point{X: cx, Y: -1080}) {
+		t.Fatal("cursor on the display's top edge must arm the drop band")
 	}
 	if !a.overNotch(mygo.Point{X: cx, Y: -1080 + 16}) {
 		t.Fatal("cursor in the notch band must hover")
@@ -111,7 +111,7 @@ func TestNegativeCoordinateDisplayTriggers(t *testing.T) {
 	// The primary display occupies Y≥0 and the display ends at Y=0; nothing
 	// outside its bounds may touch this shelf's triggers.
 	for _, p := range []mygo.Point{{X: cx, Y: 0}, {X: cx, Y: -1081}, {X: 500, Y: -1050}} {
-		if a.nearTrigger(p) || a.overNotch(p) {
+		if a.dropBand(p) || a.overNotch(p) {
 			t.Fatalf("point %+v outside the display fired a trigger", p)
 		}
 	}
@@ -143,8 +143,10 @@ func TestDragGuardRegionOnSecondaryDisplays(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			strip := a.desiredFrame()
 			g := a.dragGuardRegion()
-			if g.Y != strip.Y || g.X != a.stripCenter()-notchTriggerWidth/2 {
-				t.Fatalf("guard %+v not centred on the strip %+v", g, strip)
+			cx := a.stripCenter()
+			bandW := max(180, a.notchW) + 2*dropBandPadX
+			if g.Y != strip.Y || g.X != cx-bandW/2 || g.Width != bandW {
+				t.Fatalf("guard %+v not centred on the notch band %+v", g, strip)
 			}
 			if g.Y+g.Height > strip.Y+strip.Height {
 				t.Fatalf("guard landing below the drop strip: %+v vs %+v", g, strip)

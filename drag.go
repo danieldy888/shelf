@@ -4,6 +4,7 @@ package main
 
 import (
 	"log"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -24,6 +25,21 @@ type dragGuard struct {
 	trusted   bool // Accessibility state at the last attempt
 }
 
+// dropBand is the notch drop zone: a band around the hardware notch as
+// wide as the notch plus dropBandPadX on each side and as tall as the
+// menu bar. While a system drag is in flight this is the only screen
+// region where Shelf takes drags, opens the panel or swallows the mouse;
+// everything below the menu bar belongs to the apps underneath.
+// Requires notch geometry: no notch, no band (mirroring nearTrigger's
+// old rule — without measured geometry nothing may invent a drop area).
+func (a *shelf) dropBand(p mygo.Point) bool {
+	if a.notchW <= 0 || a.notchH <= 0 {
+		return false
+	}
+	return p.X >= a.notchX-dropBandPadX && p.X < a.notchX+a.notchW+dropBandPadX &&
+		p.Y >= a.notchY && p.Y < a.notchY+max(32, a.notchH)
+}
+
 // dragGuardRegion is the notch corridor the event filter clamps, in the
 // same coordinates as the resident drop strip.
 func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
@@ -36,9 +52,38 @@ func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
 		h = 8
 	}
 	return mac.DragGuardRegion{
-		X: a.stripCenter() - notchTriggerWidth/2, Y: a.y,
-		Width: notchTriggerWidth, Height: h,
+		X: a.stripCenter() - (max(180, a.notchW)+2*dropBandPadX)/2, Y: a.y,
+		Width: max(180, a.notchW) + 2*dropBandPadX, Height: h,
 	}
+}
+
+// dragSummonTypes are the drag pasteboard types whose shake may summon the
+// basket: anything carrying files or image data. Text, link and app-window
+// drags never summon it — they may still be dropped on the notch band.
+var dragSummonTypes = []string{
+	"public.file-url",
+	"NSFilenamesPboardType",
+	"com.apple.finder.node",
+	"com.apple.NSFilePromiseItemMetaData",
+	"com.apple.pasteboard.promised-file-url",
+	"public.file-promise",
+	"public.png",
+	"public.tiff",
+	"public.jpeg",
+	"public.heic",
+	"public.webp",
+	"public.image",
+}
+
+// dragSummonsBasket reports whether this drag's declared types may wake
+// the shake-to-summon basket. Pure; unit-tested.
+func dragSummonsBasket(types []string) bool {
+	for _, t := range types {
+		if slices.Contains(dragSummonTypes, t) {
+			return true
+		}
+	}
+	return false
 }
 
 // Protect the notch's approach corridor, including its centre. The lower edge
@@ -98,13 +143,14 @@ func (a *shelf) pointerDragged() {
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
+	a.dropHot = !a.suppressed && !a.ownDrag && a.dropBand(p)
 	if !a.suppressed {
 		a.setPeek(true)
 	}
 	a.syncDragGuard()
 	a.syncMousePassThrough()
-	if !a.suppressed && !a.visible && a.nearTrigger(p) {
-		// 拖入首次触及刘海触发区时给一下力反馈，提示落点在顶部。
+	if a.dropHot && !a.visible {
+		// 拖入首次触及刘海投放带时给一下力反馈，提示落点在顶部。
 		mac.HapticTick()
 		a.show(true)
 	}
@@ -129,8 +175,10 @@ func (a *shelf) monitorDrag(now time.Time) {
 		a.place(p)
 	}
 	// 摇晃召唤：只在系统拖拽进行中、且不是自己拖出或已放弃拖放的会话里
-	// 采样；竖直拖动没有 x 采样变化，不会误触发篮子。
-	if active && !a.suppressed && !a.ownDrag {
+	// 采样；竖直拖动没有 x 采样变化，不会误触发篮子。只有文件或图片
+	// 拖得动篮子——拖标签、链接、纯文字摇不响应（它们仍可放进刘海带）。
+	summonable := active && !a.suppressed && !a.ownDrag && dragSummonsBasket(mac.DragTypes())
+	if summonable {
 		if a.shake.add(now, float64(p.X)) {
 			a.showBasket(p)
 		}
@@ -138,7 +186,10 @@ func (a *shelf) monitorDrag(now time.Time) {
 		a.shake.reset()
 	}
 	overNotch := a.overNotch(p)
-	nearEdge := a.nearTrigger(p)
+	inBand := active && !a.ownDrag && a.dropBand(p)
+	// The pointer inside the notch drop band grows 「松开放入」 and takes
+	// the drop; outside it the shell only shows the narrow hint.
+	a.dropHot = inBand && !a.suppressed
 	// The peek player extends below the notch (and wider than it): the
 	// pointer must be able to rest on its controls without the pill
 	// folding shut under it.
@@ -152,7 +203,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	}
 	a.syncDragGuard()
 	a.syncMousePassThrough()
-	if active && !a.suppressed && !a.visible && nearEdge {
+	if inBand && !a.suppressed && !a.visible {
 		// Incoming drags open immediately; empty-handed hover never does.
 		mac.HapticTick()
 		a.show(true)
@@ -165,7 +216,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	// 动画途中不判离开。
 	if a.visible && a.edgeOpened && !a.received {
 		inside := p.X >= a.x-24 && p.X < a.x+panelWidth+24 && p.Y >= a.y && p.Y < a.y+a.panelH()+24
-		if !inside && !nearEdge && a.animationStart.IsZero() {
+		if !inside && !inBand && a.animationStart.IsZero() {
 			if a.leftSince.IsZero() {
 				a.leftSince = now
 			}

@@ -62,7 +62,7 @@ type shelf struct {
 	appIcons                                   map[string]*ui.Bitmap // bundle id → icon, cached for clipboard rows
 	write                                      clipWriter            // where copies go; nil = the system clipboard
 	dragSerial                                 int64
-	dragging, suppressed, pointerDrag, ownDrag bool
+	dragging, suppressed, pointerDrag, ownDrag, dropHot bool
 	drop                                       dropZoneState  // incoming-drag zone memory; zero while no drag hovers
 	dataDir                                    string         // where state.json and settings.json live
 	settingsBroken                             bool           // settings.json unreadable: never overwrite it

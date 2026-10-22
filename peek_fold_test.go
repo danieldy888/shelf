@@ -15,13 +15,13 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// dragPeekShelf builds the pre-fold state: an incoming system drag has the
-// drop pill up on the notch while a track is loaded.
+// dragPeekShelf builds the pre-fold state: an incoming system drag inside
+// the notch band has the drop pill up on the notch while a track is loaded.
 func dragPeekShelf() *shelf {
 	a := motionWindow()
 	fakeTrack(a, true)
 	a.settings.IslandNowPlaying = true
-	a.dragging = true
+	a.dragging, a.dropHot = true, true
 	a.peeking = true
 	a.peekProgress, a.peekFrom = 1, 1
 	return a
@@ -151,14 +151,14 @@ func TestPeekFoldInterruptedByNewDrag(t *testing.T) {
 	a := dragPeekShelf()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
 	view.Frame()
-	a.dragging = false
+	a.dragging, a.dropHot = false, false
 	a.peeking = false
 	for range 8 { // mid-fold
 		view.Frame()
 		view.Advance(16 * time.Millisecond)
 	}
 	mid := a.fx.w
-	a.dragging = true
+	a.dragging, a.dropHot = true, true // a new drag re-enters the band
 	a.peeking = true
 	var back bool
 	for i := range 30 {

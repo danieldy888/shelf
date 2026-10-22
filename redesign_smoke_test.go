@@ -184,13 +184,25 @@ func TestRedesignPeekPlain(t *testing.T) {
 	peekRestore(t, a)
 }
 
-// TestRedesignPeekDrop shoots the drop pill a file drag raises: the
-// 「松开放入」 line must sit wholly below the hardware notch.
+// TestRedesignPeekDrop shoots the drop pill a file drag raises inside the
+// notch band: the 「松开放入」 line must sit wholly below the hardware notch.
 func TestRedesignPeekDrop(t *testing.T) {
 	a := redesignShelf(t)
-	onMain(func() { a.dragging = true })
+	onMain(func() { a.dragging, a.dropHot = true, true })
 	peekShelf(a)
 	shotNotch(t, a, "peek-drop")
+	onMain(func() { a.dragging, a.dropHot = false, false })
+	peekRestore(t, a)
+}
+
+// TestRedesignPeekDragHint shoots the new drag-in-flight hint: a band-high
+// shell, a little wider than the notch, no glyph — the state every drag
+// outside the notch band now sees.
+func TestRedesignPeekDragHint(t *testing.T) {
+	a := redesignShelf(t)
+	onMain(func() { a.dragging, a.dropHot = true, false })
+	peekShelf(a)
+	shotNotch(t, a, "peek-drag-hint")
 	onMain(func() { a.dragging = false })
 	peekRestore(t, a)
 }

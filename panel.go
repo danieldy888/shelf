@@ -934,7 +934,15 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			kind = peekCapsule
 		case !over && a.np != nil && a.np.showsPlayer():
 			kind = peekPlayer
-		case over || (a.dragging && !a.ownDrag):
+		case a.dragging && !a.ownDrag:
+			// Inside the notch band the drop pill invites the release;
+			// outside it only the widened hint shows — never a glyph.
+			if over || a.dropHot {
+				kind = peekDrop
+			} else {
+				kind = peekHint
+			}
+		case over:
 			kind = peekDrop
 		default:
 			kind = peekChevron
@@ -957,6 +965,10 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		}
 		// The player's content is gone mid-fold (track ended): fold the
 		// shell silently rather than swapping in another glyph.
+		return
+	case peekHint:
+		// The drag hint draws nothing inside the shell: it only widens,
+		// band-height, never a glyph below the notch.
 		return
 	}
 	pw, ph := a.peekSize()

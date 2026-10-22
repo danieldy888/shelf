@@ -201,12 +201,17 @@ func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
 	if f := a.desiredFrame(); f.Width < npPlayerW || f.Height < 32+npPlayerBody {
 		t.Fatalf("idle strip %dx%d cannot hold the player", f.Width, f.Height)
 	}
-	// A file drag needs the drop pill — its 「松开放入」 line wholly below
-	// the hardware notch — and switching the feature off collapses the
-	// player even before the next tick stops the helper.
+	// A file drag inside the notch band needs the drop pill — its
+	// 「松开放入」 line wholly below the hardware notch. Outside the band
+	// the drag only gets the band-height hint. Switching the feature off
+	// collapses the player even before the next tick stops the helper.
 	a.dragging = true
+	if w, h := a.peekSize(); w != 180+dropHintExtraW || h != 32 {
+		t.Fatalf("a drag outside the band must show only the hint, got %.0fx%.0f", w, h)
+	}
+	a.dropHot = true
 	if w, h := a.peekSize(); w != 180+dropPillExtraW || h != 32+dropPillBody {
-		t.Fatalf("a drag must show the drop pill, got %.0fx%.0f", w, h)
+		t.Fatalf("a drag inside the band must show the drop pill, got %.0fx%.0f", w, h)
 	}
 	a.dragging = false
 	a.settings.IslandNowPlaying = false
@@ -215,21 +220,30 @@ func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
 	}
 }
 
-// The drop pill and the chevron bulge must fit the resident strip without
-// a native resize: resizing mid-drag would move the drop target under the
-// pointer.
+// The chevron bulge and the band-high drag hint must fit the resident
+// strip without a native resize. The drop pill no longer needs to fit:
+// on an incoming drag the window shrinks to the notch band first, then
+// grows only once the pointer is inside the band (task D).
 func TestPeekShapesFitTheIdleStrip(t *testing.T) {
 	a := &shelf{notchW: 185, notchH: 38}
 	strip := a.desiredFrame()
-	for _, drag := range []bool{false, true} {
-		a.dragging = drag
-		w, h := a.peekSize()
-		if int(w+0.5) > strip.Width || int(h+0.5) > strip.Height {
-			t.Fatalf("drag=%v: peek %.0fx%.0f exceeds the strip %dx%d", drag, w, h, strip.Width, strip.Height)
-		}
-		if a.desiredFrame() != strip {
-			t.Fatalf("drag=%v remapped the strip", drag)
-		}
+	w, h := a.peekSize()
+	if int(w+0.5) > strip.Width || int(h+0.5) > strip.Height {
+		t.Fatalf("idle peek %.0fx%.0f exceeds the strip %dx%d", w, h, strip.Width, strip.Height)
+	}
+	// An incoming drag deliberately remaps the surface to the band.
+	a.dragging = true
+	drag := a.desiredFrame()
+	if drag == strip {
+		t.Fatal("incoming drag kept the full strip — it must shrink to the band")
+	}
+	if drag.Height > max(32, a.notchH) {
+		t.Fatalf("drag band %dpt tall exceeds the menu bar", drag.Height)
+	}
+	// The hint stays inside the band it draws for.
+	w, h = a.peekSize()
+	if int(w+0.5)+2*earR > drag.Width || int(h+0.5) > drag.Height {
+		t.Fatalf("drag hint %.0fx%.0f exceeds its frame %+v", w, h, drag)
 	}
 }
 

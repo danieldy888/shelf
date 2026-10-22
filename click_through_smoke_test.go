@@ -118,7 +118,7 @@ func TestCapsuleTakesClicksOnlyOnItsBody(t *testing.T) {
 	f := a.desiredFrame()
 	for _, p := range [][2]float64{
 		{float64(r.X) - 14, float64(r.Y) + 4},
-		{float64(r.X + r.Width) + 14, float64(r.Y) + 4},
+		{float64(r.X+r.Width) + 14, float64(r.Y) + 4},
 	} {
 		if p[0] <= float64(f.X) || p[0] >= float64(f.X+f.Width) {
 			continue // outside the window: nothing to prove
@@ -191,4 +191,62 @@ func TestShakingCapsuleHitBoxFollowsTheOffset(t *testing.T) {
 		a.status = ""
 		a.syncMousePassThrough()
 	})
+}
+
+// Task D: during an incoming system drag the resident window must shrink
+// to the notch's menu-bar band — WindowServer must see points below the
+// menu bar at the notch's own X hit whatever is underneath (or nothing),
+// never Shelf. Only inside the band may the drop surface exist.
+// Run with SHELF_BASKET_SMOKE=1.
+func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
+	a := redesignShelf(t)
+	oldCursor := cursorPoint
+	t.Cleanup(func() {
+		onMain(func() {
+			cursorPoint = oldCursor
+			a.dragging, a.dropHot, a.pointerDrag = false, false, false
+			a.peeking, a.peekProgress, a.peekFrom = false, 0, 0
+			a.syncMousePassThrough()
+		})
+	})
+	onMain(func() {
+		a.place(mygo.Screen.CursorScreenPoint())
+		a.visible, a.progress, a.peeking, a.peekProgress = false, 0, false, 0
+		a.fb = feedback{}
+		a.np = nil
+		a.settings.IslandNowPlaying = false
+		a.dragging, a.pointerDrag, a.dropHot = true, true, false
+		a.setPeek(true) // the drag-hint widen the band shows
+		a.syncMousePassThrough()
+	})
+	time.Sleep(700 * time.Millisecond)
+
+	var shelf int
+	var frame mygo.Rectangle
+	onMain(func() {
+		shelf = mac.WindowNumber(a.win.NativeHandle())
+		frame = a.win.Bounds()
+	})
+	barH := max(32, a.notchH)
+	if frame.Height > barH+1 {
+		t.Fatalf("drag frame %+v exceeds the %dpt menu bar", frame, barH)
+	}
+	if frame.Width > max(180, a.notchW)+2*dropBandPadX+2*earR+2 {
+		t.Fatalf("drag frame %+v wider than the notch band", frame)
+	}
+
+	screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
+	// Below the menu bar at the notch's own centre X — the old strip lived
+	// here; WindowServer must now find anything-but-Shelf.
+	belowX := float64(a.stripCenter())
+	belowY := float64(a.dispBounds.Y) + float64(a.y) + float64(barH) + 20
+	onMain(func() {})
+	hit := mac.WindowAtPoint(belowX, belowY, screenH)
+	if hit == shelf {
+		t.Errorf("WindowAtPoint %.0f,%.0f hit Shelf below the menu bar during a drag", belowX, belowY)
+	}
+	// Inside the band at the strip's centre, Shelf's surface is present
+	// (Spaces-edge protection requires the drop to land on a window).
+	bandHit := mac.WindowAtPoint(belowX, float64(a.dispBounds.Y)+float64(a.y)+float64(barH)/2, screenH)
+	t.Logf("drag frame=%+v  below-band hit=%d (shelf=%d)  in-band hit=%d", frame, hit, shelf, bandHit)
 }

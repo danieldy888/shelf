@@ -404,6 +404,16 @@ var dragTypeKnown = []string{
 	"com.apple.pasteboard.promised-file-url",
 }
 
+// DragTypes returns the drag pasteboard's declared type identifiers right
+// now. Like pasteboardTypes it reads metadata only; the caller gates on
+// DragState so the stale types a finished session leaves behind are never
+// mistaken for a live drag. Main thread only.
+func DragTypes() []string {
+	var out []string
+	withPool(func() { out = pasteboardTypes(dragPasteboard()) })
+	return out
+}
+
 // dragPasteboardHasTypes reports whether the drag pasteboard declares at
 // least one known public type right now. Stale after a drop; only
 // meaningful at the moment a changeCount bump is observed.

@@ -12,15 +12,15 @@ const (
 	// 打开剪贴板搜索：显示托盘、切到剪贴板标签并把焦点放进搜索框。
 	clipboardShortcut = "Ctrl+Alt+V"
 	// searchLabel 是搜索框的无障碍名称（也是测试定位用的标签）。
-	searchLabel        = "搜索剪贴板"
-	notchTriggerWidth  = 280 // 刘海拖拽接收区与保护区的宽度，单位 pt。
-	notchTriggerHeight = 64  // 拖拽靠近刘海时的垂直感应高度，单位 pt。
-	notchHoverPadX     = 8   // 空手移入刘海探头的水平余量，单位 pt。
-	notchHoverPadY     = 4   // 空手移入刘海探头的垂直余量，单位 pt。
+	searchLabel       = "搜索剪贴板"
+	// dropBandPadX 是刘海投放带的左右余量：拖拽时 Shelf 只在「刘海宽
+	// + 两侧余量 × 菜单栏高」这一条里接拖放与响应鼠标。
+	dropBandPadX    = 24 // 投放带相对刘海的水平外扩，单位 pt。
+	dropHintExtraW  = 32 // 拖拽带外提示：壳比刘海多出的宽度（两侧各半），单位 pt。
+	notchHoverPadX  = 8  // 空手移入刘海探头的水平余量，单位 pt。
+	notchHoverPadY  = 4  // 空手移入刘海探头的垂直余量，单位 pt。
 	// Idle, hover and drag share one transparent strip. Only expansion
 	// changes the native window size; the drag filter protects its centre.
-	peekStripPadX   = 40 // 探头/拖拽窄条相对刘海的水平外扩，单位 pt。
-	peekStripPadH   = 40 // 探头/拖拽顶边条相对刘海的垂直外扩，单位 pt。
 	edgeLeaveDelay  = 350 * time.Millisecond
 	pointerInterval = 30 * time.Millisecond
 	panelAnimation  = 260 * time.Millisecond // 展开/收起 260ms 缓出（DESIGN.md「动效」）

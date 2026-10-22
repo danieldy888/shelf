@@ -50,16 +50,6 @@ func (a *shelf) overNotch(p mygo.Point) bool {
 		p.Y >= a.notchY && p.Y <= a.notchY+a.notchH+notchHoverPadY
 }
 
-// nearTrigger 是拖拽唤出托盘的顶部触发区（刘海中心 ± notchTriggerWidth/2、
-// 顶部 notchTriggerHeight 高），同样要求刘海几何有效。
-func (a *shelf) nearTrigger(p mygo.Point) bool {
-	if a.notchW <= 0 {
-		return false
-	}
-	centerX := a.notchX + a.notchW/2
-	return p.X >= centerX-notchTriggerWidth/2 && p.X <= centerX+notchTriggerWidth/2 &&
-		p.Y >= a.notchY && p.Y <= a.notchY+notchTriggerHeight
-}
 
 // Hover changes only the drawing, not the native window geometry. Keeping one
 // stable transparent strip for idle/peek avoids resizing the backing surface
@@ -102,9 +92,27 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
+	// An incoming system drag shrinks the resident strip to the notch's
+	// menu-bar band: outside it Shelf only shows a widened band-height
+	// hint, inside it the shell grows 「松开放入」. The frame always
+	// covers the shape being aimed at (plus ears) and the shell actually
+	// drawn, so the morph, a fold remnant and the Spaces edge guard stay
+	// covered — and the player/capsule's tall frames are never held
+	// through a drag.
+	if a.dragging && !a.ownDrag {
+		bandH := max(32, a.notchH)
+		w := max(180, a.notchW) + 2*dropBandPadX
+		h := bandH
+		pw, ph := a.peekSize()
+		w = max(w, int(math.Ceil(float64(pw)))+2*earR)
+		h = max(h, int(math.Ceil(float64(ph))))
+		if a.fx.peek {
+			w = max(w, int(math.Ceil(float64(a.fx.w)))+2*earR)
+			h = max(h, int(math.Ceil(float64(a.fx.h)))+1)
+		}
+		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
+	}
 	// The resident strip holds the largest peek shape for the current
-	// state, so hovering only redraws; it resizes when a track comes or
-	// goes, while nothing is drawn.
 	pw, ph := a.peekSize()
 	if a.np != nil && a.np.hasTrack() && a.settings.IslandNowPlaying {
 		// The capsule and the player can alternate on the same strip: keep
@@ -122,8 +130,8 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		// (Bounce 0.15); the strip keeps headroom so no frame is clipped.
 		pw, ph = pw*(1+openOvershoot), ph*(1+openOvershoot)
 	}
-	w := max(int(math.Ceil(float64(pw))), notchTriggerWidth) + 2*earR
-	h := max(int(math.Ceil(float64(ph))), max(32, a.notchH)+peekStripPadH, notchTriggerHeight)
+	w := int(math.Ceil(float64(pw))) + 2*earR
+	h := int(math.Ceil(float64(ph)))
 	if a.capsuleUp(time.Now()) || a.fb.drawn {
 		// The completion capsule is another peek shape: while it shows, the
 		// strip holds room for it at the widest the text can make it, plus
@@ -186,7 +194,8 @@ func (a *shelf) windowGeometryChanged() {
 // peekSize is the hover shape: the status capsule while the closed panel
 // has something to report, the now-playing player while a track is loaded
 // (the notch grows into it, Droppy style), the drop pill while a drag is
-// on, otherwise a bulge carrying a chevron. The glyphs sit wholly below
+// over the notch band, the narrow drag hint while one is in flight,
+// otherwise a bulge carrying a chevron. The glyphs sit wholly below
 // the hardware notch: nothing drawn inside it is visible.
 func (a *shelf) peekSize() (w, h float32) {
 	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
@@ -200,7 +209,12 @@ func (a *shelf) peekSize() (w, h float32) {
 		return a.playerSize()
 	}
 	if a.dragging && !a.ownDrag {
-		return baseW + dropPillExtraW, baseH + dropPillBody
+		if a.dropHot {
+			return baseW + dropPillExtraW, baseH + dropPillBody
+		}
+		// Drag hint: the notch's own height, a little wider — visible in
+		// the menu bar, never over the windows below it.
+		return baseW + dropHintExtraW, baseH
 	}
 	return baseW + 40, baseH + peekBody
 }
@@ -549,6 +563,7 @@ func (a *shelf) hide(exit hideExit) {
 	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
+	a.dropHot = false
 	a.syncMousePassThrough()
 	if restore {
 		a.activatePreviousApp(prev)
