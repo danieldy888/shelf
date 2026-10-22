@@ -25,35 +25,38 @@ type dragGuard struct {
 	trusted   bool // Accessibility state at the last attempt
 }
 
+// dropBandH is the notch band's height: menu bar plus the guard's landing
+// margin below it. The event filter pushes cursors to the corridor's lower
+// edge, which must still sit inside the band — otherwise the pushed cursor
+// would leave the drop surface it was protected into. guardDropPad keeps
+// the pre-shrink 16pt margin below the menu bar (the pre-shrink region
+// stood at max(notchH+16, 48)).
+func dropBandH(notchH int) int { return max(notchH+guardDropPad, 48) }
+
 // dropBand is the notch drop zone: a band around the hardware notch as
-// wide as the notch plus dropBandPadX on each side and as tall as the
-// menu bar. While a system drag is in flight this is the only screen
-// region where Shelf takes drags, opens the panel or swallows the mouse;
-// everything below the menu bar belongs to the apps underneath.
-// Requires notch geometry: no notch, no band (mirroring nearTrigger's
-// old rule — without measured geometry nothing may invent a drop area).
+// wide as the notch plus dropBandPadX on each side and dropBandH tall —
+// the menu bar plus the landing margin the drag guard pushes into. While
+// a system drag is in flight this is the only screen region where Shelf
+// takes drags, opens the panel or swallows the mouse; everything beyond
+// it belongs to the apps underneath. Requires notch geometry: no notch,
+// no band — without measured geometry nothing may invent a drop area.
 func (a *shelf) dropBand(p mygo.Point) bool {
 	if a.notchW <= 0 || a.notchH <= 0 {
 		return false
 	}
 	return p.X >= a.notchX-dropBandPadX && p.X < a.notchX+a.notchW+dropBandPadX &&
-		p.Y >= a.notchY && p.Y < a.notchY+max(32, a.notchH)
+		p.Y >= a.notchY && p.Y < a.notchY+dropBandH(a.notchH)
 }
 
 // dragGuardRegion is the notch corridor the event filter clamps, in the
-// same coordinates as the resident drop strip.
+// same coordinates as the resident drop strip. Its height is one row
+// shorter than the band so the clamped cursor lands inside the band (and
+// below the menu bar): landing below the corridor's own range would put
+// the drop outside the surface that just grew for it.
 func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
-	strip := a.desiredFrame()
-	// Land below the menu bar's exclusive strip, still inside the drop
-	// surface. A 40pt corridor on a 38pt notch sits inside the menu bar
-	// and Spaces still fires.
-	h := min(max(a.notchH+16, 48), strip.Height-1)
-	if h < 8 {
-		h = 8
-	}
 	return mac.DragGuardRegion{
 		X: a.stripCenter() - (max(180, a.notchW)+2*dropBandPadX)/2, Y: a.y,
-		Width: max(180, a.notchW) + 2*dropBandPadX, Height: h,
+		Width: max(180, a.notchW) + 2*dropBandPadX, Height: dropBandH(a.notchH) - 1,
 	}
 }
 
@@ -130,7 +133,7 @@ func (a *shelf) pointerDragged() {
 	if a.quitting {
 		return
 	}
-	active, serial := mac.DragState()
+	active, serial := dragState()
 	if serial != a.dragSerial {
 		a.dragSerial = serial
 		a.suppressed = false
@@ -139,11 +142,12 @@ func (a *shelf) pointerDragged() {
 		return
 	}
 	a.dragging, a.pointerDrag = true, true
-	p := mygo.Screen.CursorScreenPoint()
+	p := cursorPoint()
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
-	a.dropHot = !a.suppressed && !a.ownDrag && a.dropBand(p)
+	a.inBand = !a.ownDrag && a.dropBand(p)
+	a.dropHot = a.inBand && !a.suppressed
 	if !a.suppressed {
 		a.setPeek(true)
 	}
@@ -158,7 +162,7 @@ func (a *shelf) pointerDragged() {
 
 // monitorDrag updates placement, drag protection and interaction on the main thread.
 func (a *shelf) monitorDrag(now time.Time) {
-	active, serial := mac.DragState()
+	active, serial := dragState()
 	if serial != a.dragSerial {
 		a.dragSerial = serial
 		a.suppressed = false
@@ -166,18 +170,18 @@ func (a *shelf) monitorDrag(now time.Time) {
 	a.dragging = active
 	if !active {
 		a.suppressed = false
-		if !mac.LeftMouseDown() {
+		if !dragLeftDown() {
 			a.pointerDrag = false
 		}
 	}
-	p := mygo.Screen.CursorScreenPoint()
+	p := cursorPoint()
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
 	// 摇晃召唤：只在系统拖拽进行中、且不是自己拖出或已放弃拖放的会话里
 	// 采样；竖直拖动没有 x 采样变化，不会误触发篮子。只有文件或图片
 	// 拖得动篮子——拖标签、链接、纯文字摇不响应（它们仍可放进刘海带）。
-	summonable := active && !a.suppressed && !a.ownDrag && dragSummonsBasket(mac.DragTypes())
+	summonable := active && !a.suppressed && !a.ownDrag && dragSummonsBasket(dragTypes())
 	if summonable {
 		if a.shake.add(now, float64(p.X)) {
 			a.showBasket(p)
@@ -186,10 +190,10 @@ func (a *shelf) monitorDrag(now time.Time) {
 		a.shake.reset()
 	}
 	overNotch := a.overNotch(p)
-	inBand := active && !a.ownDrag && a.dropBand(p)
+	a.inBand = active && !a.ownDrag && a.dropBand(p)
 	// The pointer inside the notch drop band grows 「松开放入」 and takes
 	// the drop; outside it the shell only shows the narrow hint.
-	a.dropHot = inBand && !a.suppressed
+	a.dropHot = a.inBand && !a.suppressed
 	// The peek player extends below the notch (and wider than it): the
 	// pointer must be able to rest on its controls without the pill
 	// folding shut under it.
@@ -203,7 +207,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	}
 	a.syncDragGuard()
 	a.syncMousePassThrough()
-	if inBand && !a.suppressed && !a.visible {
+	if a.inBand && !a.suppressed && !a.visible {
 		// Incoming drags open immediately; empty-handed hover never does.
 		mac.HapticTick()
 		a.show(true)
@@ -216,7 +220,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	// 动画途中不判离开。
 	if a.visible && a.edgeOpened && !a.received {
 		inside := p.X >= a.x-24 && p.X < a.x+panelWidth+24 && p.Y >= a.y && p.Y < a.y+a.panelH()+24
-		if !inside && !inBand && a.animationStart.IsZero() {
+		if !inside && !a.inBand && a.animationStart.IsZero() {
 			if a.leftSince.IsZero() {
 				a.leftSince = now
 			}

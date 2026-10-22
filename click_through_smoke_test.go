@@ -201,10 +201,11 @@ func TestShakingCapsuleHitBoxFollowsTheOffset(t *testing.T) {
 func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 	a := redesignShelf(t)
 	oldCursor := cursorPoint
+	var point mygo.Point
 	t.Cleanup(func() {
 		onMain(func() {
 			cursorPoint = oldCursor
-			a.dragging, a.dropHot, a.pointerDrag = false, false, false
+			a.dragging, a.dropHot, a.inBand, a.pointerDrag = false, false, false, false
 			a.peeking, a.peekProgress, a.peekFrom = false, 0, 0
 			a.syncMousePassThrough()
 		})
@@ -215,7 +216,9 @@ func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 		a.fb = feedback{}
 		a.np = nil
 		a.settings.IslandNowPlaying = false
-		a.dragging, a.pointerDrag, a.dropHot = true, true, false
+		point = mygo.Point{X: 100, Y: a.dispBounds.Y + a.dispBounds.Height - 40} // parked outside the band
+		cursorPoint = func() mygo.Point { return point }
+		a.dragging, a.pointerDrag, a.dropHot, a.inBand = true, true, false, false
 		a.setPeek(true) // the drag-hint widen the band shows
 		a.syncMousePassThrough()
 	})
@@ -236,17 +239,48 @@ func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 	}
 
 	screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
-	// Below the menu bar at the notch's own centre X — the old strip lived
+	// Below the band at the notch's own centre X — the old strip lived
 	// here; WindowServer must now find anything-but-Shelf.
 	belowX := float64(a.stripCenter())
-	belowY := float64(a.dispBounds.Y) + float64(a.y) + float64(barH) + 20
-	onMain(func() {})
+	belowY := float64(a.dispBounds.Y) + float64(a.y) + float64(dropBandH(a.notchH)) + 20
 	hit := mac.WindowAtPoint(belowX, belowY, screenH)
 	if hit == shelf {
-		t.Errorf("WindowAtPoint %.0f,%.0f hit Shelf below the menu bar during a drag", belowX, belowY)
+		t.Errorf("WindowAtPoint %.0f,%.0f hit Shelf below the band during a drag", belowX, belowY)
 	}
 	// Inside the band at the strip's centre, Shelf's surface is present
 	// (Spaces-edge protection requires the drop to land on a window).
 	bandHit := mac.WindowAtPoint(belowX, float64(a.dispBounds.Y)+float64(a.y)+float64(barH)/2, screenH)
-	t.Logf("drag frame=%+v  below-band hit=%d (shelf=%d)  in-band hit=%d", frame, hit, shelf, bandHit)
+	if bandHit != shelf {
+		t.Errorf("WindowAtPoint inside the band hit %d, want Shelf %d", bandHit, shelf)
+	}
+	// Entering the band grows the frame past the menu bar so the guard's
+	// landing row stays inside the window: the pill and the landing row
+	// both hit Shelf, not the apps underneath.
+	onMain(func() {
+		point = mygo.Point{X: a.stripCenter(), Y: a.notchY + a.notchH - 1}
+		a.inBand, a.dropHot = true, true
+		a.syncMousePassThrough()
+	})
+	time.Sleep(250 * time.Millisecond)
+	onMain(func() { frame = a.win.Bounds() })
+	g := a.dragGuardRegion()
+	landingY := float64(a.dispBounds.Y) + float64(g.Y+g.Height) - 0.5
+	if frame.Height <= g.Y+g.Height {
+		t.Fatalf("in-band frame %+v does not cover the guard landing %d", frame, g.Y+g.Height)
+	}
+	landHit := mac.WindowAtPoint(belowX, landingY, screenH)
+	if landHit != shelf {
+		t.Errorf("WindowAtPoint on the guard landing row hit %d, want Shelf %d", landHit, shelf)
+	}
+	// Leaving the band again folds the window back to the menu-bar strip.
+	onMain(func() {
+		point = mygo.Point{X: 100, Y: a.dispBounds.Y + a.dispBounds.Height - 40}
+		a.inBand, a.dropHot = false, false
+		a.syncMousePassThrough()
+	})
+	time.Sleep(250 * time.Millisecond)
+	onMain(func() { frame = a.win.Bounds() })
+	if frame.Height > barH+1 {
+		t.Fatalf("after leaving the band the frame %+v did not fold back to the menu bar", frame)
+	}
 }

@@ -400,8 +400,11 @@ func TestNotchTriggersBoundToRealRect(t *testing.T) {
 	if !a.dropBand(mygo.Point{X: 735, Y: 31}) {
 		t.Fatal("cursor on the notch's bottom row should hit the drop band")
 	}
-	if a.dropBand(mygo.Point{X: 735, Y: 32}) {
-		t.Fatal("cursor below the menu bar must leave the drop band")
+	// The band extends one guard landing row below the menu bar: the
+	// point the push lands on must still be inside, or the pushed cursor
+	// drops outside the window it was protected into.
+	if !a.dropBand(mygo.Point{X: 735, Y: dropBandH(a.notchH) - 1}) {
+		t.Fatal("the guard's landing row left the drop band")
 	}
 	if a.dropBand(mygo.Point{X: 645 - dropBandPadX - 1, Y: 10}) {
 		t.Fatal("cursor left of the band's pad must not hit it")

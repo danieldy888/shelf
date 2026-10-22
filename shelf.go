@@ -20,83 +20,83 @@ import (
 
 // UI、历史与本机 API 由 mygo 主线程串行拥有。
 type shelf struct {
-	win                                        *mygo.Window
-	winH                                       uintptr // cached on creation; zero for a headless surface
-	tray                                       *mygo.Tray
-	store                                      *store.Store
-	stop                                       chan struct{}
-	quitting, visible, edgeOpened, received    bool
-	status                                     string
-	statusUntil                                time.Time
-	statusSeenAt                               time.Time     // 提示当前被看见的窗口起点（pill 或胶囊画出其一）
-	statusSeen                                 time.Duration // 累计被看见时长：胶囊/暂停时段不计入
-	statusKind                                 statusKind    // 提示级别：成功 / 普通信息 / 错误（pill 红点、胶囊配色）
-	statusCapsule                              bool          // 面板收起时是否转交刘海胶囊（后台信息不转交）
-	statusCapsuleLimit                         time.Duration // progress notes must not occupy the notch for the whole operation
-	x, y                                       int
-	dispBounds                                 mygo.Rectangle
-	frame                                      mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
-	settingFrame                               bool
-	buildingView, frameQueued                  bool // defer native resize until the current UI frame has painted
-	animationStart                             time.Time
-	animationFrom, progress                    float32
-	openGen                                    int     // counts openings; keys the panel's height animation
-	shownH                                     float32 // panel height the shell is drawn at (eases toward panelH)
-	settings                                   settings.Settings
-	modules                                    []module
-	np                                         *nowPlayingModule     // the peek player reads its state
-	conv                                       *converter            // image conversion jobs; nil until the app starts
-	usage                                      *usageFeature         // nil until the AI usage page registers itself
-	clip                                       *clipboardModule      // nil while clipboard history is off
-	awake                                      *awakeModule          // nil until the app starts
-	pages                                      []panelPage           // registered pages in ear order (built-ins first)
-	pagesReady                                 bool                  // built-in pages have been registered
-	tab                                        pageID                // current page of the expanded panel (registry in pages.go)
-	tabAt                                      time.Time             // when the tab last switched; drives the pages' crossfade
-	tabFrom                                    pageID                // the page being left by the last switch, drawn fading out
-	search                                     string                // clipboard page's search text
-	reveal                                     string                // row to keep in view after a keyboard move
-	focusMode                                  bool                  // the window took the keyboard for clipboard search
-	prevAppPID                                 int                   // app to hand the keyboard back to when focusMode ends
-	appNames                                   map[string]string     // bundle id → display name, cached for menu labels
-	appIcons                                   map[string]*ui.Bitmap // bundle id → icon, cached for clipboard rows
-	write                                      clipWriter            // where copies go; nil = the system clipboard
-	dragSerial                                 int64
-	dragging, suppressed, pointerDrag, ownDrag, dropHot bool
-	drop                                       dropZoneState  // incoming-drag zone memory; zero while no drag hovers
-	dataDir                                    string         // where state.json and settings.json live
-	settingsBroken                             bool           // settings.json unreadable: never overwrite it
-	settingsWin                                *mygo.Window   // the 设置 window; nil while closed
-	settingsPrevPID                            int            // app to hand the keyboard back to when it closes
-	loginOn                                    bool           // 开机时自动启动，read back each time the window opens
-	loginErr                                   string         // last SetOpenAtLogin failure, shown inline
-	rn                                         *renameUI      // 重新命名 window session; nil until first use
-	settingsScroll                             ui.ScrollState // the Settings window's scroll position
-	update                                     *mygo.Update   // version the feed offers, waiting for the user
-	updateChecking, updateInstalling           bool
-	updateInstalled                            bool    // swapped into place; runs at the next launch
-	updateProgress                             float64 // download progress while installing
-	updateNext                                 time.Time
-	guard                                      dragGuard
-	escHeld, spaceHeld, cmdCHeld               bool
-	selection                                  selection
-	stopMouseObservation, stopDragObservation  func()
-	leftSince                                  time.Time
-	h, topInset                                int
-	notchX, notchY, notchW, notchH             int
-	hasNotch                                   bool
-	peeking                                    bool
-	peekProgress, peekFrom                     float32
-	peekAnimStart                              time.Time
-	fb                                         feedback    // the notch's completion capsule (feedback.go)
-	fx                                         shellMotion // the shell drawn last, for the window frame
-	ignoringMouse                              bool
-	thumbnails                                 map[string]*ui.Bitmap
-	shake                                      shakeDetector // 摇晃召唤：拖拽中左右晃动检测
-	basket                                     basketState   // 摇晃召唤的拖放篮
-	thumbPending                               map[string]bool
-	thumbDiscard                               map[string]bool
-	thumbActive                                int
+	win                                                         *mygo.Window
+	winH                                                        uintptr // cached on creation; zero for a headless surface
+	tray                                                        *mygo.Tray
+	store                                                       *store.Store
+	stop                                                        chan struct{}
+	quitting, visible, edgeOpened, received                     bool
+	status                                                      string
+	statusUntil                                                 time.Time
+	statusSeenAt                                                time.Time     // 提示当前被看见的窗口起点（pill 或胶囊画出其一）
+	statusSeen                                                  time.Duration // 累计被看见时长：胶囊/暂停时段不计入
+	statusKind                                                  statusKind    // 提示级别：成功 / 普通信息 / 错误（pill 红点、胶囊配色）
+	statusCapsule                                               bool          // 面板收起时是否转交刘海胶囊（后台信息不转交）
+	statusCapsuleLimit                                          time.Duration // progress notes must not occupy the notch for the whole operation
+	x, y                                                        int
+	dispBounds                                                  mygo.Rectangle
+	frame                                                       mygo.Rectangle // 常驻窗口当前实际映射的屏幕矩形（desiredFrame 最近一次应用值）
+	settingFrame                                                bool
+	buildingView, frameQueued                                   bool // defer native resize until the current UI frame has painted
+	animationStart                                              time.Time
+	animationFrom, progress                                     float32
+	openGen                                                     int     // counts openings; keys the panel's height animation
+	shownH                                                      float32 // panel height the shell is drawn at (eases toward panelH)
+	settings                                                    settings.Settings
+	modules                                                     []module
+	np                                                          *nowPlayingModule     // the peek player reads its state
+	conv                                                        *converter            // image conversion jobs; nil until the app starts
+	usage                                                       *usageFeature         // nil until the AI usage page registers itself
+	clip                                                        *clipboardModule      // nil while clipboard history is off
+	awake                                                       *awakeModule          // nil until the app starts
+	pages                                                       []panelPage           // registered pages in ear order (built-ins first)
+	pagesReady                                                  bool                  // built-in pages have been registered
+	tab                                                         pageID                // current page of the expanded panel (registry in pages.go)
+	tabAt                                                       time.Time             // when the tab last switched; drives the pages' crossfade
+	tabFrom                                                     pageID                // the page being left by the last switch, drawn fading out
+	search                                                      string                // clipboard page's search text
+	reveal                                                      string                // row to keep in view after a keyboard move
+	focusMode                                                   bool                  // the window took the keyboard for clipboard search
+	prevAppPID                                                  int                   // app to hand the keyboard back to when focusMode ends
+	appNames                                                    map[string]string     // bundle id → display name, cached for menu labels
+	appIcons                                                    map[string]*ui.Bitmap // bundle id → icon, cached for clipboard rows
+	write                                                       clipWriter            // where copies go; nil = the system clipboard
+	dragSerial                                                  int64
+	dragging, suppressed, pointerDrag, ownDrag, dropHot, inBand bool
+	drop                                                        dropZoneState  // incoming-drag zone memory; zero while no drag hovers
+	dataDir                                                     string         // where state.json and settings.json live
+	settingsBroken                                              bool           // settings.json unreadable: never overwrite it
+	settingsWin                                                 *mygo.Window   // the 设置 window; nil while closed
+	settingsPrevPID                                             int            // app to hand the keyboard back to when it closes
+	loginOn                                                     bool           // 开机时自动启动，read back each time the window opens
+	loginErr                                                    string         // last SetOpenAtLogin failure, shown inline
+	rn                                                          *renameUI      // 重新命名 window session; nil until first use
+	settingsScroll                                              ui.ScrollState // the Settings window's scroll position
+	update                                                      *mygo.Update   // version the feed offers, waiting for the user
+	updateChecking, updateInstalling                            bool
+	updateInstalled                                             bool    // swapped into place; runs at the next launch
+	updateProgress                                              float64 // download progress while installing
+	updateNext                                                  time.Time
+	guard                                                       dragGuard
+	escHeld, spaceHeld, cmdCHeld                                bool
+	selection                                                   selection
+	stopMouseObservation, stopDragObservation                   func()
+	leftSince                                                   time.Time
+	h, topInset                                                 int
+	notchX, notchY, notchW, notchH                              int
+	hasNotch                                                    bool
+	peeking                                                     bool
+	peekProgress, peekFrom                                      float32
+	peekAnimStart                                               time.Time
+	fb                                                          feedback    // the notch's completion capsule (feedback.go)
+	fx                                                          shellMotion // the shell drawn last, for the window frame
+	ignoringMouse                                               bool
+	thumbnails                                                  map[string]*ui.Bitmap
+	shake                                                       shakeDetector // 摇晃召唤：拖拽中左右晃动检测
+	basket                                                      basketState   // 摇晃召唤的拖放篮
+	thumbPending                                                map[string]bool
+	thumbDiscard                                                map[string]bool
+	thumbActive                                                 int
 
 	// 拖出后从托盘移除：当前拖出会话从托盘带走的项目（剪贴板页为 nil），
 	// 以及已拖出、等待最终移除的托盘项目及其放下时刻。

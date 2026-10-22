@@ -67,7 +67,8 @@ var dropCellOpts = transfer.DropOptions{
 }
 
 // Seams: the pasteboard reads, the dropped data's file extraction,
-// AirDrop and the cursor probe are substituted in tests.
+// AirDrop, the drag session probe and the cursor probe are substituted
+// in tests.
 var (
 	dragFiles = func(a *shelf) []string {
 		if a.win == nil {
@@ -84,6 +85,9 @@ var (
 	dropFilesData = func(d transfer.Data) ([]string, error) { return d.Files() }
 	airDrop       = mac.AirDrop
 	cursorPoint   = func() mygo.Point { return mygo.Screen.CursorScreenPoint() }
+	dragState     = func() (bool, int64) { return mac.DragState() }
+	dragTypes     = mac.DragTypes
+	dragLeftDown  = func() bool { return mac.LeftMouseDown() }
 )
 
 // dropZoneState is the drop zone's memory of the drag in flight. paths

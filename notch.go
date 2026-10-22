@@ -50,7 +50,6 @@ func (a *shelf) overNotch(p mygo.Point) bool {
 		p.Y >= a.notchY && p.Y <= a.notchY+a.notchH+notchHoverPadY
 }
 
-
 // Hover changes only the drawing, not the native window geometry. Keeping one
 // stable transparent strip for idle/peek avoids resizing the backing surface
 // every time the pointer crosses the notch. Only opening the panel changes it.
@@ -110,9 +109,20 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 			w = max(w, int(math.Ceil(float64(a.fx.w)))+2*earR)
 			h = max(h, int(math.Ceil(float64(a.fx.h)))+1)
 		}
+		if a.inBand || (a.winH != 0 && a.dropBand(cursorPoint())) {
+			// The cursor is inside the band: the frame must hold the
+			// guard's landing row (dropBandH) even while the shell is
+			// still the small hint — a suppressed drag grows the window
+			// too, so the clamped cursor never leaves its surface. The
+			// live check on real windows closes the gap between the pin
+			// pushing the cursor and the monitor's next 30 ms tick.
+			h = max(h, dropBandH(a.notchH))
+		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
 	// The resident strip holds the largest peek shape for the current
+	// state, so hovering only redraws; it resizes when a track comes or
+	// goes, while nothing is drawn.
 	pw, ph := a.peekSize()
 	if a.np != nil && a.np.hasTrack() && a.settings.IslandNowPlaying {
 		// The capsule and the player can alternate on the same strip: keep
@@ -563,7 +573,7 @@ func (a *shelf) hide(exit hideExit) {
 	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
-	a.dropHot = false
+	a.dropHot, a.inBand = false, false
 	a.syncMousePassThrough()
 	if restore {
 		a.activatePreviousApp(prev)
