@@ -109,13 +109,14 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 			w = max(w, int(math.Ceil(float64(a.fx.w)))+2*earR)
 			h = max(h, int(math.Ceil(float64(a.fx.h)))+1)
 		}
-		if a.inBand || (a.winH != 0 && a.dropBand(cursorPoint())) {
-			// The cursor is inside the band: the frame must hold the
-			// guard's landing row (dropBandH) even while the shell is
-			// still the small hint — a suppressed drag grows the window
-			// too, so the clamped cursor never leaves its surface. The
-			// live check on real windows closes the gap between the pin
-			// pushing the cursor and the monitor's next 30 ms tick.
+		if a.inBand {
+			// The cursor is inside the band (entered through the menu
+			// bar): the frame must hold the guard's landing row even
+			// while the shell is still the small hint — a suppressed
+			// drag grows the window too, so the clamped cursor never
+			// leaves its surface. Before entry the window stays
+			// menu-bar high; the guard's push lands on the bar's last
+			// row, which is already inside this frame.
 			h = max(h, dropBandH(a.notchH))
 		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
@@ -573,7 +574,7 @@ func (a *shelf) hide(exit hideExit) {
 	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
-	a.dropHot, a.inBand = false, false
+	a.dropHot = false
 	a.syncMousePassThrough()
 	if restore {
 		a.activatePreviousApp(prev)

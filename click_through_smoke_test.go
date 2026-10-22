@@ -239,13 +239,15 @@ func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 	}
 
 	screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
-	// Below the band at the notch's own centre X — the old strip lived
-	// here; WindowServer must now find anything-but-Shelf.
+	// Below the menu bar at the notch's own centre X — before the drag
+	// ever enters the band, WindowServer must find anything-but-Shelf
+	// there, at 8pt and 20pt below the bar alike.
 	belowX := float64(a.stripCenter())
-	belowY := float64(a.dispBounds.Y) + float64(a.y) + float64(dropBandH(a.notchH)) + 20
-	hit := mac.WindowAtPoint(belowX, belowY, screenH)
-	if hit == shelf {
-		t.Errorf("WindowAtPoint %.0f,%.0f hit Shelf below the band during a drag", belowX, belowY)
+	for _, dy := range []float64{8, 20} {
+		py := float64(a.dispBounds.Y) + float64(a.y) + float64(barH) + dy
+		if hit := mac.WindowAtPoint(belowX, py, screenH); hit == shelf {
+			t.Errorf("WindowAtPoint %.0f,%.0f hit Shelf %.0fpt below the bar before band entry", belowX, py, dy)
+		}
 	}
 	// Inside the band at the strip's centre, Shelf's surface is present
 	// (Spaces-edge protection requires the drop to land on a window).

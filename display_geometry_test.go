@@ -134,7 +134,9 @@ func TestSecondaryDisplayPeekPillFollowsNotch(t *testing.T) {
 
 // The drag-guard corridor must reproduce the drop strip in the same global
 // space CGEvent locations use — including negative origins — so the filter
-// and the pin actually cover the secondary display's top edge.
+// and the pin actually cover the secondary display's top edge. Before the
+// drag enters the band it is menu-bar high; in-band it reaches the
+// landing row, which the grown strip covers.
 func TestDragGuardRegionOnSecondaryDisplays(t *testing.T) {
 	for name, a := range map[string]*shelf{
 		"built-in below external main": secondaryShelfBelow(),
@@ -151,8 +153,17 @@ func TestDragGuardRegionOnSecondaryDisplays(t *testing.T) {
 			if g.Y+g.Height > strip.Y+strip.Height {
 				t.Fatalf("guard landing below the drop strip: %+v vs %+v", g, strip)
 			}
-			if g.Height <= 38 {
-				t.Fatalf("guard height %d ends inside the menu bar; Spaces edge would fire", g.Height)
+			if g.Height != menuBandH(a.notchH)-1 {
+				t.Fatalf("unentered corridor %dpt high, want menu-bar %d", g.Height, menuBandH(a.notchH)-1)
+			}
+			a.dragging, a.inBand = true, true
+			g = a.dragGuardRegion()
+			strip = a.desiredFrame()
+			if g.Height != dropBandH(a.notchH)-1 {
+				t.Fatalf("in-band corridor %dpt high, want landing %d", g.Height, dropBandH(a.notchH)-1)
+			}
+			if g.Y+g.Height > strip.Y+strip.Height {
+				t.Fatalf("in-band landing below the grown strip: %+v vs %+v", g, strip)
 			}
 		})
 	}

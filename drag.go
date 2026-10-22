@@ -25,22 +25,22 @@ type dragGuard struct {
 	trusted   bool // Accessibility state at the last attempt
 }
 
-// dropBandH is the notch band's height: menu bar plus the guard's landing
-// margin below it. The event filter pushes cursors to the corridor's lower
-// edge, which must still sit inside the band — otherwise the pushed cursor
-// would leave the drop surface it was protected into. guardDropPad keeps
-// the pre-shrink 16pt margin below the menu bar (the pre-shrink region
-// stood at max(notchH+16, 48)).
+// dropBandH is the band's hold height: menu bar plus the guard's landing
+// margin below it. The menu bar itself is max(32, notchH); the landing
+// margin keeps the pre-shrink 16pt so the pushed cursor rests below the
+// bar and inside the grown window.
 func dropBandH(notchH int) int { return max(notchH+guardDropPad, 48) }
 
-// dropBand is the notch drop zone: a band around the hardware notch as
-// wide as the notch plus dropBandPadX on each side and dropBandH tall —
-// the menu bar plus the landing margin the drag guard pushes into. While
-// a system drag is in flight this is the only screen region where Shelf
-// takes drags, opens the panel or swallows the mouse; everything beyond
-// it belongs to the apps underneath. Requires notch geometry: no notch,
-// no band — without measured geometry nothing may invent a drop area.
-func (a *shelf) dropBand(p mygo.Point) bool {
+// menuBandH is the menu bar's height as the code knows it — the entry
+// boundary of the band (the true menu bar is a point taller on some
+// Macs, so the guard's first push still lands inside it).
+func menuBandH(notchH int) int { return max(32, notchH) }
+
+// dropBandX reports whether p lies within the band's horizontal reach:
+// the notch plus dropBandPadX on each side, from the top down to the
+// guard's landing row. Requires notch geometry: no notch, no band —
+// without measured geometry nothing may invent a drop area.
+func (a *shelf) dropBandX(p mygo.Point) bool {
 	if a.notchW <= 0 || a.notchH <= 0 {
 		return false
 	}
@@ -48,15 +48,42 @@ func (a *shelf) dropBand(p mygo.Point) bool {
 		p.Y >= a.notchY && p.Y < a.notchY+dropBandH(a.notchH)
 }
 
+// dropBand is the band's ENTRY edge: inside the band's width, the cursor
+// must be inside the menu bar itself. Reaching the landing rows below
+// the bar from underneath never counts as entering — ordinary windows
+// live there and a drag gliding past them must not wake the panel.
+func (a *shelf) dropBand(p mygo.Point) bool {
+	return a.dropBandX(p) && p.Y < a.notchY+menuBandH(a.notchH)
+}
+
+// updateDragBand applies the enter/hold state machine to a.inBand:
+// entered only from the menu-bar rows, held anywhere in the band's width
+// down to the guard's landing row. Callers reset a.inBand on a new drag
+// serial before calling. Pure beyond the field write.
+func (a *shelf) updateDragBand(p mygo.Point, active bool) {
+	if a.inBand {
+		a.inBand = active && !a.ownDrag && a.dropBandX(p)
+	} else {
+		a.inBand = active && !a.ownDrag && a.dropBand(p)
+	}
+	a.dropHot = a.inBand && !a.suppressed
+}
+
 // dragGuardRegion is the notch corridor the event filter clamps, in the
-// same coordinates as the resident drop strip. Its height is one row
-// shorter than the band so the clamped cursor lands inside the band (and
-// below the menu bar): landing below the corridor's own range would put
-// the drop outside the surface that just grew for it.
+// same coordinates as the resident drop strip. While the drag has never
+// entered the band the corridor is menu-bar high: its clamp lands on the
+// bar's last row — inside the entry range, so the push itself enters the
+// band. Once inside, the corridor reaches the landing row below the bar,
+// inside the window that just grew for it. Drags that never entered are
+// never pushed onto rows below the bar.
 func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
+	h := menuBandH(a.notchH) - 1
+	if a.inBand {
+		h = dropBandH(a.notchH) - 1
+	}
 	return mac.DragGuardRegion{
 		X: a.stripCenter() - (max(180, a.notchW)+2*dropBandPadX)/2, Y: a.y,
-		Width: max(180, a.notchW) + 2*dropBandPadX, Height: dropBandH(a.notchH) - 1,
+		Width: max(180, a.notchW) + 2*dropBandPadX, Height: h,
 	}
 }
 
@@ -136,7 +163,7 @@ func (a *shelf) pointerDragged() {
 	active, serial := dragState()
 	if serial != a.dragSerial {
 		a.dragSerial = serial
-		a.suppressed = false
+		a.suppressed, a.inBand = false, false // a new drag re-enters
 	}
 	if !active {
 		return
@@ -146,8 +173,7 @@ func (a *shelf) pointerDragged() {
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
-	a.inBand = !a.ownDrag && a.dropBand(p)
-	a.dropHot = a.inBand && !a.suppressed
+	a.updateDragBand(p, true)
 	if !a.suppressed {
 		a.setPeek(true)
 	}
@@ -165,7 +191,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	active, serial := dragState()
 	if serial != a.dragSerial {
 		a.dragSerial = serial
-		a.suppressed = false
+		a.suppressed, a.inBand = false, false // a new drag re-enters
 	}
 	a.dragging = active
 	if !active {
@@ -190,10 +216,9 @@ func (a *shelf) monitorDrag(now time.Time) {
 		a.shake.reset()
 	}
 	overNotch := a.overNotch(p)
-	a.inBand = active && !a.ownDrag && a.dropBand(p)
+	a.updateDragBand(p, active)
 	// The pointer inside the notch drop band grows 「松开放入」 and takes
 	// the drop; outside it the shell only shows the narrow hint.
-	a.dropHot = a.inBand && !a.suppressed
 	// The peek player extends below the notch (and wider than it): the
 	// pointer must be able to rest on its controls without the pill
 	// folding shut under it.

@@ -400,11 +400,14 @@ func TestNotchTriggersBoundToRealRect(t *testing.T) {
 	if !a.dropBand(mygo.Point{X: 735, Y: 31}) {
 		t.Fatal("cursor on the notch's bottom row should hit the drop band")
 	}
-	// The band extends one guard landing row below the menu bar: the
-	// point the push lands on must still be inside, or the pushed cursor
-	// drops outside the window it was protected into.
-	if !a.dropBand(mygo.Point{X: 735, Y: dropBandH(a.notchH) - 1}) {
-		t.Fatal("the guard's landing row left the drop band")
+	// The band's hold reach covers the guard's landing row below the
+	// menu bar — the pushed cursor stays in-band — but those rows are
+	// not an entry edge: arriving there from below does not enter.
+	if !a.dropBandX(mygo.Point{X: 735, Y: dropBandH(a.notchH) - 1}) {
+		t.Fatal("the guard's landing row left the band's hold range")
+	}
+	if a.dropBand(mygo.Point{X: 735, Y: dropBandH(a.notchH) - 1}) {
+		t.Fatal("the landing row below the bar must not be an entry edge")
 	}
 	if a.dropBand(mygo.Point{X: 645 - dropBandPadX - 1, Y: 10}) {
 		t.Fatal("cursor left of the band's pad must not hit it")
@@ -505,9 +508,12 @@ func TestHoverKeepsWindowAnchored(t *testing.T) {
 	}
 }
 
-// The event filter's landing line has to sit inside the collapsed drop
-// strip. Otherwise clamped drags miss the shelf and still hit the screen
-// edge that opens Mission Control.
+// The event filter's corridor has to sit inside the collapsed drop
+// strip: before the drag ever enters the band it is menu-bar high, so
+// the clamp lands on the bar's last row (inside the entry range), and
+// ordinary drags below the bar are never pushed there. Once the drag
+// is in-band the corridor reaches the landing row below the bar, which
+// the grown window covers.
 func TestDragGuardLandsInsideCollapsedStrip(t *testing.T) {
 	a := &shelf{x: 470, y: 0, h: 380, notchX: 600, notchW: 180, notchH: 32}
 	strip := a.desiredFrame()
@@ -521,8 +527,16 @@ func TestDragGuardLandsInsideCollapsedStrip(t *testing.T) {
 	if g.X < strip.X || g.X+g.Width > strip.X+strip.Width {
 		t.Fatalf("guard corridor %+v is wider than drop strip %+v", g, strip)
 	}
-	if g.Height <= 38 {
-		t.Fatalf("guard landing at %dpt is still inside the menu bar; Spaces would fire", g.Height)
+	// Unentered: the corridor is menu-bar high; its push lands on the
+	// last row — inside the band's entry edge, so pushing enters.
+	if g.Height != menuBandH(a.notchH)-1 {
+		t.Fatalf("unentered corridor %dpt high, want menu-bar %d", g.Height, menuBandH(a.notchH)-1)
+	}
+	// In-band: the corridor reaches the landing row below the bar.
+	a.inBand = true
+	g = a.dragGuardRegion()
+	if g.Height != dropBandH(a.notchH)-1 {
+		t.Fatalf("in-band corridor %dpt high, want landing %d", g.Height, dropBandH(a.notchH)-1)
 	}
 }
 
