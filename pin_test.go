@@ -651,3 +651,46 @@ func TestPinDragReleaseIsNotATap(t *testing.T) {
 		})
 	}
 }
+
+// TestPinMoveFollowsAcrossDisplays is review P4: the dragged card tracks
+// the cursor's display each tick, and a release — with or without a move
+// tick on the far side — settles on the display the cursor reached.
+func TestPinMoveFollowsAcrossDisplays(t *testing.T) {
+	ext := mygo.Display{ID: 2, Bounds: mygo.Rectangle{X: 1512, Y: 0, Width: 1920, Height: 1080},
+		WorkArea: mygo.Rectangle{X: 1512, Y: 25, Width: 1920, Height: 1055}}
+	withPinDisplays(t, append([]mygo.Display{pinTestDisplays[0]}, ext))
+	a := &shelf{dataDir: t.TempDir()}
+	a.setTools(layout.Default())
+	mk := func() *pinItem {
+		return a.pinRegister(&pinItem{cardID: "zip", cardW: pinCardW, display: 1,
+			frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	}
+	it := mk()
+	it.pressAt(10, 10)
+	a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, true, false) // moving
+	// The cursor crosses the seam; the card clamps into display 2's area.
+	a.pinTick(time.Now(), mygo.Point{X: 1600, Y: 500}, true, false)
+	if it.display != 2 {
+		t.Fatalf("the card stayed on display %d while the cursor crossed", it.display)
+	}
+	if it.frame.X != 1600 || it.frame.Y != 500 {
+		t.Fatalf("the card did not follow onto the new display: %+v", it.frame)
+	}
+	// Releasing on display 2's right edge docks there, not back on 1.
+	a.pinTick(time.Now(), mygo.Point{X: 3440, Y: 500}, false, false)
+	if it.display != 2 || it.edge != pinRight || it.expanded {
+		t.Fatalf("the release did not dock on display 2: display=%d edge=%v expanded=%v", it.display, it.edge, it.expanded)
+	}
+	if it.frame.X != 1512+1920-pinStripW {
+		t.Fatalf("the strip did not flush to display 2's right edge: %+v", it.frame)
+	}
+	// A fast release: the cursor crosses and the button lifts between two
+	// move ticks — the release still lands on display 2.
+	it = mk()
+	it.pressAt(10, 10)
+	a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, true, false)
+	a.pinTick(time.Now(), mygo.Point{X: 3440, Y: 500}, false, false)
+	if it.display != 2 || it.edge != pinRight {
+		t.Fatalf("the between-ticks release did not land on display 2: display=%d edge=%v", it.display, it.edge)
+	}
+}

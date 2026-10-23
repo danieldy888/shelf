@@ -417,6 +417,11 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 					it.grabX, it.grabY = 0, 0
 				}
 				if it.moving {
+					// The display is re-read from the cursor each tick so
+					// a drag across a monitor seam keeps following instead
+					// of snapping back to the old display's edge.
+					it.display = displayIDAt(p, it.display)
+					area = it.displayRect()
 					it.frame = it.pinMoveFrame(p, area)
 					it.applyFrame()
 					centre := mygo.Point{X: it.frame.X + it.frame.Width/2, Y: it.frame.Y + it.frame.Height/2}
@@ -490,7 +495,10 @@ func (a *shelf) pinRelease(it *pinItem, p mygo.Point, area mygo.Rectangle) {
 		a.unpin(it, true)
 		return
 	}
-	it.display = displayIDAt(centre, it.display)
+	// The release's own point picks the display — same point
+	// pinReleaseEdge reads — so a release just past a seam still lands on
+	// the display the cursor reached between two move ticks.
+	it.display = displayIDAt(p, it.display)
 	area = it.displayRect()
 	if edge := pinReleaseEdge(p, area); edge != pinFree {
 		it.edge, it.expanded = edge, false
@@ -508,7 +516,7 @@ func (a *shelf) pinRelease(it *pinItem, p mygo.Point, area mygo.Rectangle) {
 }
 
 // displayIDAt resolves the display a released card belongs to: the one
-// containing its centre, else the nearest, else the remembered one.
+// containing the point, else the nearest, else the remembered one.
 func displayIDAt(p mygo.Point, keep int64) int64 {
 	var nearest int64
 	best := -1
