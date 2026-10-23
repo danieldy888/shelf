@@ -630,6 +630,37 @@ func ConfigureNotchWindow(window uintptr) {
 	})
 }
 
+// ConfigurePinWindow turns a window into a desktop pin: a borderless
+// non-activating panel at the floating level (NSFloatingWindowLevel) so it
+// rides above normal windows but stays below the menu bar and the notch
+// overlay. Unlike ConfigureNotchWindow it keeps the menu-bar constraint —
+// pins live in the work area, never on the top strip — and registers the
+// same drop types so files land on the card. Main thread only.
+func ConfigurePinWindow(window uintptr) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() {
+		w := id(window)
+		send(w, "setStyleMask:", nsWindowStyleMaskNonactivatingPanel)
+		send(w, "setLevel:", uintptr(3)) // NSFloatingWindowLevel
+		send(w, "setHasShadow:", 1)      // the card's drop shadow, hugging its opaque pixels
+		send(w, "setHidesOnDeactivate:", 0)
+		send(w, "setMovable:", 0)
+		send(w, "setOpaque:", 0)
+		send(w, "setBackgroundColor:", uintptr(send(class("NSColor"), "clearColor")))
+		send(w, "setCollectionBehavior:", notchCollectionBehavior)
+		if send(w, "respondsToSelector:", uintptr(sel("setFloatingPanel:"))) != 0 {
+			send(w, "setFloatingPanel:", 1)
+		}
+		send(w, "setIgnoresMouseEvents:", 0)
+		registerOverlayDropTypes(w)
+	})
+}
+
 // SetWindowFrame moves and resizes window in one setFrame:display: and then
 // pins the top-left corner. x, y, w and h are MyGo top-left screen
 // coordinates (the same convention as mygo Window.SetBounds). Splitting the

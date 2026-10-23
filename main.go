@@ -186,6 +186,8 @@ func (a *shelf) ready(show bool) {
 	mygo.Screen.OnDisplaysChanged(func() {
 		// 常驻窗口跟随光标所在显示器重新定位（收起态无感）。
 		a.place(mygo.Screen.CursorScreenPoint())
+		// 拔掉显示器的固定项回主显示器同一边。
+		a.pinDisplaysChanged()
 	})
 	if a.store != nil {
 		if merr := a.store.MigrationError(); merr != nil {
@@ -202,6 +204,7 @@ func (a *shelf) ready(show bool) {
 		a.win.ShowInactive()
 	}
 	a.installServices()
+	a.pinRestore()
 	a.startMonitoring()
 	log.Print("Shelf ready")
 }

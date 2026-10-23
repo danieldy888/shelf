@@ -99,6 +99,8 @@ type shelf struct {
 	thumbPending                                                map[string]bool
 	thumbDiscard                                                map[string]bool
 	thumbActive                                                 int
+	pins                                                        []*pinItem    // desktop-pinned cards (pin.go)
+	layout                                                      layout.Layout // layout.json's runtime copy (tools page shares it)
 
 	// 框选文字：同一时间只有一轮（ocrScan，capture+识别全程）；ocrBusyAt
 	// 记这轮开始时刻给进行中胶囊的 250ms 延迟计时；ocrSheet 为真时展开

@@ -265,6 +265,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	}
 
 	a.basketTick(now, p)
+	a.pinTick(now, p, dragLeftDown(), summonable)
 }
 func insideRect(p mygo.Point, r mygo.Rectangle) bool {
 	return p.X >= r.X && p.X < r.X+r.Width && p.Y >= r.Y && p.Y < r.Y+r.Height
