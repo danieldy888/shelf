@@ -486,29 +486,15 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 		}
 		area := it.displayRect()
 		if it.pressed {
-			if down {
-				// The pointer events lock the move first (trackPress);
-				// this covers the press they never sampled.
-				it.lockMove(p.X-(it.frame.X+it.grabX), p.Y-(it.frame.Y+it.grabY))
-				if it.moving {
-					// The display is re-read from the cursor each tick so
-					// a drag across a monitor seam keeps following instead
-					// of snapping back to the old display's edge.
-					it.display = displayIDAt(p, it.display)
-					area = it.displayRect()
-					it.frame = it.pinMoveFrame(p, area)
-					it.applyFrame()
-					centre := mygo.Point{X: it.frame.X + it.frame.Width/2, Y: it.frame.Y + it.frame.Height/2}
-					returning = returning || a.pinReturnZone(centre)
-				}
-			} else {
-				// A session the pointer events ended leaves nothing here;
-				// this fallback settles one a poll-armed press still holds.
-				moved := it.moving
-				it.pressed, it.moving = false, false
-				if moved {
-					a.pinRelease(it, p)
-				}
+			if down && it.moving {
+				// Only follow an event-owned gesture. Sampling the
+				// button here must not create or finish a session.
+				it.display = displayIDAt(p, it.display)
+				area = it.displayRect()
+				it.frame = it.pinMoveFrame(p, area)
+				it.applyFrame()
+				centre := mygo.Point{X: it.frame.X + it.frame.Width/2, Y: it.frame.Y + it.frame.Height/2}
+				returning = returning || a.pinReturnZone(centre)
 			}
 			continue
 		}

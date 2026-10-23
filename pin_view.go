@@ -112,9 +112,7 @@ func (it *pinItem) trackPress(e ui.Element) {
 			if ev.Button != 0 {
 				return false // the context menu takes the secondary press
 			}
-			if !it.pressed {
-				it.pressAt(float64(ev.X), float64(ev.Y))
-			}
+			it.pressAt(float64(ev.X), float64(ev.Y))
 			return true
 		case ui.InputPointerMove:
 			if !it.pressed {

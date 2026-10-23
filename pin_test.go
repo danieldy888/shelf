@@ -193,7 +193,9 @@ func TestPinMoveSnapAndReturn(t *testing.T) {
 		cardID: "zip", cardW: pinCardW, display: 1,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
 	})
-	it.pressed, it.pressWas = true, true
+	tr := ui.NewTester(it.view, pinCardW, pinCardH)
+	tr.Press(0, 0)
+	tr.Move(20, 20)
 	t0 := time.Now()
 	// Press goes far → the window follows the cursor.
 	a.pinTick(t0, mygo.Point{X: 620, Y: 420}, true, false)
@@ -205,7 +207,7 @@ func TestPinMoveSnapAndReturn(t *testing.T) {
 		t.Fatalf("card did not follow the cursor: %+v", it.frame)
 	}
 	// Release near the left edge: docked as a strip.
-	a.pinTick(t0, mygo.Point{X: 10, Y: 500}, false, false)
+	tr.Release(float32(10-it.frame.X), float32(500-it.frame.Y))
 	if it.edge != pinLeft || it.expanded || it.frame != pinStripFrame(pinLeft, pinTestArea, 500) {
 		t.Fatalf("release at the edge: edge=%v frame=%+v", it.edge, it.frame)
 	}
@@ -223,7 +225,9 @@ func TestPinReturnToNotch(t *testing.T) {
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
 	})
 	a.mutateTools(func(l *layout.Layout) { l.Pins = []layout.Pin{{ID: "zip", Span: 1}} })
-	it.pressed, it.pressWas = true, true
+	tr := ui.NewTester(it.view, pinCardW, pinCardH)
+	tr.Press(0, 0)
+	tr.Move(100, -340)
 	t0 := time.Now()
 	a.pinTick(t0, mygo.Point{X: 700, Y: 60}, true, false)
 	if !it.moving {
@@ -234,6 +238,7 @@ func TestPinReturnToNotch(t *testing.T) {
 	if !a.pinReturning {
 		t.Fatal("a dragged pin over the notch did not set the return bulge")
 	}
+	tr.Release(float32(pinTestArea.Width/2-40-it.frame.X), float32(30-it.frame.Y))
 	a.pinTick(t0, mygo.Point{X: pinTestArea.Width/2 - 40, Y: 30}, false, false)
 	if len(a.pins) != 0 {
 		t.Fatalf("release on the notch kept the pin: %+v", it.frame)
@@ -605,14 +610,14 @@ func TestPinDropUnstartableShelves(t *testing.T) {
 
 // TestPinDragReleaseIsNotATap is review P3: a release that ends a window
 // move must not fire the card's tap, whether the release frame reaches
-// the view before the poll (the usual order) or after the poll already
-// settled the move. The 保持唤醒 card's power assertion is the real tap
+// the view before the poll (the usual order) or after the poll sampled
+// the lifted button. The 保持唤醒 card's power assertion is the real tap
 // effect the test watches — no execution seam.
 func TestPinDragReleaseIsNotATap(t *testing.T) {
 	for _, tickFirst := range []bool{false, true} {
 		name := "release frame beats the poll"
 		if tickFirst {
-			name = "the poll settles before the release frame"
+			name = "the poll samples release before the pointer event"
 		}
 		t.Run(name, func(t *testing.T) {
 			withPinDisplays(t, pinTestDisplays)
@@ -628,14 +633,17 @@ func TestPinDragReleaseIsNotATap(t *testing.T) {
 			if !it.pressed || it.didMove {
 				t.Fatal("the press did not arm a tap")
 			}
+			tr.Move(40, 40)
 			a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, true, false) // the press went far: a move
 			if !it.moving || !it.didMove {
 				t.Fatal("the move did not mark didMove")
 			}
 			if tickFirst {
-				// monitorDrag's tick settles the release before the view
-				// ever sees the pointer-up frame.
+				// A sampled button-up cannot end the event-owned session.
 				a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, false, false)
+				if !it.pressed || !it.moving {
+					t.Fatal("the poll ended the session before its PointerUp")
+				}
 				tr.Release(20, 20)
 			} else {
 				tr.Release(20, 20)
@@ -668,7 +676,9 @@ func TestPinMoveFollowsAcrossDisplays(t *testing.T) {
 			frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
 	}
 	it := mk()
-	it.pressAt(10, 10)
+	tr := ui.NewTester(it.view, pinCardW, pinCardH)
+	tr.Press(10, 10)
+	tr.Move(40, 40)
 	a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, true, false) // moving
 	// The cursor crosses the seam; the card clamps into display 2's area.
 	a.pinTick(time.Now(), mygo.Point{X: 1600, Y: 500}, true, false)
@@ -679,7 +689,7 @@ func TestPinMoveFollowsAcrossDisplays(t *testing.T) {
 		t.Fatalf("the card did not follow onto the new display: %+v", it.frame)
 	}
 	// Releasing on display 2's right edge docks there, not back on 1.
-	a.pinTick(time.Now(), mygo.Point{X: 3440, Y: 500}, false, false)
+	tr.Release(float32(3440-it.frame.X), float32(500-it.frame.Y))
 	if it.display != 2 || it.edge != pinRight || it.expanded {
 		t.Fatalf("the release did not dock on display 2: display=%d edge=%v expanded=%v", it.display, it.edge, it.expanded)
 	}
@@ -689,9 +699,11 @@ func TestPinMoveFollowsAcrossDisplays(t *testing.T) {
 	// A fast release: the cursor crosses and the button lifts between two
 	// move ticks — the release still lands on display 2.
 	it = mk()
-	it.pressAt(10, 10)
+	tr = ui.NewTester(it.view, pinCardW, pinCardH)
+	tr.Press(10, 10)
+	tr.Move(40, 40)
 	a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, true, false)
-	a.pinTick(time.Now(), mygo.Point{X: 3440, Y: 500}, false, false)
+	tr.Release(float32(3440-it.frame.X), float32(500-it.frame.Y))
 	if it.display != 2 || it.edge != pinRight {
 		t.Fatalf("the between-ticks release did not land on display 2: display=%d edge=%v", it.display, it.edge)
 	}
@@ -932,14 +944,16 @@ func TestPinReturnZoneReadsFinalReleasePoint(t *testing.T) {
 	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
 		edge: pinFree, expanded: true,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
-	it.pressAt(10, 10)
+	tr := ui.NewTester(it.view, pinCardW, pinCardH)
+	tr.Press(10, 10)
+	tr.Move(22, -350)
 	// The poll samples the frame with its centre on the notch...
 	a.pinTick(time.Now(), mygo.Point{X: 622, Y: 50}, true, false)
 	if !it.moving || !a.pinReturning {
 		t.Fatalf("fixture: the sampled centre was not on the notch: moving=%v returning=%v", it.moving, a.pinReturning)
 	}
 	// ...and the release happens far from it.
-	a.pinTick(time.Now(), mygo.Point{X: 1100, Y: 500}, false, false)
+	tr.Release(float32(1100-it.frame.X), float32(500-it.frame.Y))
 	if len(a.pins) != 1 || a.pins[0] != it {
 		t.Fatal("a release far from the notch returned the pin on the previous poll's centre")
 	}
@@ -957,9 +971,11 @@ func TestPinFreeReleaseLandsAtReleasePoint(t *testing.T) {
 	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
 		edge: pinFree, expanded: true,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
-	it.pressAt(10, 10)
+	tr := ui.NewTester(it.view, pinCardW, pinCardH)
+	tr.Press(10, 10)
+	tr.Move(50, 50)
 	a.pinTick(time.Now(), mygo.Point{X: 650, Y: 450}, true, false) // the sampled frame
-	a.pinTick(time.Now(), mygo.Point{X: 900, Y: 650}, false, false) // the release
+	tr.Release(float32(900-it.frame.X), float32(650-it.frame.Y))
 	if it.frame.X != 900 || it.frame.Y != 650 {
 		t.Fatalf("the release kept the previous poll's frame: %+v", it.frame)
 	}
@@ -1008,6 +1024,7 @@ func TestPinPressBeforeReleasePollIsFresh(t *testing.T) {
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
 	tr := ui.NewTester(func(c *ui.Context) { it.view(c) }, pinCardW, pinCardH)
 	tr.Press(20, 20)
+	tr.Move(80, 60)
 	a.pinTick(time.Now(), mygo.Point{X: 680, Y: 460}, true, false)
 	tr.Release(20, 20)
 	if a.awake.active() {
