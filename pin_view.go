@@ -3,6 +3,7 @@
 package main
 
 import (
+	"math"
 	"time"
 
 	"github.com/egoist/mygo/transfer"
@@ -46,6 +47,13 @@ func (it *pinItem) view(c *ui.Context) {
 	_, over := ui.DataDragOver(zone, opts)
 	zone.Children(func() {
 		card := a.toolCard(c, layout.Card{ID: it.cardID, Span: it.span}, cardDesktop).Fill()
+		if !it.jiggleAt.IsZero() && !c.Preferences().ReduceMotion {
+			k := float64(c.Now().Sub(it.jiggleAt)) / float64(toolJiggleSpan)
+			if k < 1 {
+				card.Rotate(float32(math.Sin(k*3*math.Pi)*3*(1-k))).TransformOrigin(0.5, 0.5)
+				c.AnimationFrame()
+			}
+		}
 		switch it.edge {
 		case pinLeft:
 			card.Translate(-float32(it.cardW-pinStripW)*(1-slide), 0)
@@ -60,7 +68,10 @@ func (it *pinItem) view(c *ui.Context) {
 	if it.pressWas && !it.didMove && zone.Clicked() {
 		// A press that never went far is a tap on the card; a press that
 		// moved the window or only woke the strip is not.
-		a.runToolCard(it.cardID)
+		if !a.runToolCard(it.cardID) {
+			it.jiggleAt = time.Now()
+			a.toolCardTapFeedback()
+		}
 	}
 	it.pinMenu(zone)
 	if drop, ok := ui.DropData(zone, opts); ok {

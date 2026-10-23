@@ -3,6 +3,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"shelf/internal/layout"
 	"shelf/internal/mac"
+	"shelf/internal/store"
 )
 
 func pinReviewDrag(t *testing.T, a *shelf, p *mygo.Point, active bool) {
@@ -150,5 +152,28 @@ func TestPinDragOutKeepsGridSpan(t *testing.T) {
 	cards := a.toolsLayout().Cards
 	if len(cards) != 1 || cards[0].ID != "awake" || cards[0].Span != 2 {
 		t.Fatalf("return lost width: %+v", cards)
+	}
+}
+
+func TestPinBusyTapShowsSharedFeedback(t *testing.T) {
+	a, it, tr := pinViewShelf(t, "zip", true)
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a.store = s
+	file := writeFile(t, t.TempDir(), "selected.txt", []byte("review"))
+	s.Items = []store.Item{{ID: "selected", Kind: store.KindFile, Path: filepath.Clean(file)}}
+	a.selection.onlyAll([]string{"selected"})
+	job := &convertJob{target: toJPEG}
+	a.conv = &converter{host: a, job: job}
+	tr.Press(20, 20)
+	tr.Release(20, 20)
+	if a.fb.text != "一次只跑一个任务，请稍候" || a.fb.kind != statusInfo || it.jiggleAt.IsZero() {
+		t.Fatalf("busy tap missing shared feedback: %+v jiggle=%v", a.fb, it.jiggleAt)
+	}
+	if a.conv.job != job || len(s.Items) != 1 {
+		t.Fatal("busy tap changed the running job or tray")
 	}
 }

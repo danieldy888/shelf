@@ -89,6 +89,7 @@ type pinItem struct {
 	frame     mygo.Rectangle
 	leftAt    time.Time
 	dropAt    time.Time // accent border lingers this long after a drop
+	jiggleAt  time.Time // a tap that could not act gave the card a brief shake
 	pressed   bool      // a press on the card is being held
 	pressWas  bool      // it was already expanded when that press began
 	moving    bool      // the press went far: it is a window move, not a click
