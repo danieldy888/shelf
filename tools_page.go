@@ -490,6 +490,12 @@ func (p *toolsPage) toolCardTapped(id string) {
 		return
 	}
 	p.jiggleID, p.jiggleAt = id, time.Now()
+	if a.conv != nil && a.conv.busy() {
+		// The card applied but the one-job converter is taken: same
+		// shake, the busy line instead of the empty-selection one.
+		a.toastStatus("一次只跑一个任务，请稍候", time.Now().Add(2*time.Second), statusInfo)
+		return
+	}
 	a.toastStatus("把文件拖到这里", time.Now().Add(2*time.Second), statusInfo)
 }
 

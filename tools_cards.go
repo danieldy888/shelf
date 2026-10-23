@@ -379,8 +379,11 @@ func (a *shelf) runToolCard(id string) bool {
 	if target < 0 {
 		return false
 	}
+	if a.conv != nil && a.conv.busy() {
+		return false // the tap was valid; the one running job is taken
+	}
 	a.startConvert(items, target)
-	return true
+	return true // consumed: the job runs, or its failure already reported
 }
 
 // toolCardTarget is the conversion a tap on the action card starts;

@@ -322,16 +322,16 @@ type convertTask struct {
 // touches the files, counting PDF pages included, runs on the worker so
 // a large PDF never stalls the panel; outputs are named there too, which
 // is safe because one job runs at a time.
-func (a *shelf) startConvert(items []store.Item, target convertTarget) {
+func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 	if a.conv == nil || a.conv.busy() || a.store == nil || len(items) == 0 {
-		return
+		return false
 	}
 	dir := a.store.ConvertedDir()
 	// Outputs are written straight into converted/; never into whatever a
 	// symlink or stray file there points at.
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 		a.report(fmt.Errorf("无法使用转换文件夹 %s", dir))
-		return
+		return false
 	}
 	srcs := make([]string, len(items))
 	names := make([]string, len(items))
@@ -438,6 +438,7 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) {
 		}
 		convertDispatch(func() { a.finishConvert(job, outs) })
 	})
+	return true
 }
 
 // fileSize is p's size in bytes, 0 when it cannot be read.
