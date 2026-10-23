@@ -35,13 +35,18 @@ const ocrProgressDelay = 250 * time.Millisecond
 // capture and the permission request are replaced; the worker goroutine and
 // the main-thread dispatch mirror convertWork/convertDispatch.
 var (
-	ocrPreflight = mac.ScreenCaptureAllowed
-	ocrGrant     = mac.RequestScreenCapture
-	ocrCapture   = captureRegion
-	ocrWork      = func(fn func()) { go fn() }
-	ocrDispatch  = mygo.RunOnMain
-	ocrRecognize = recognizeImageText
-	ocrAfterFunc = time.AfterFunc
+	ocrPreflight  = mac.ScreenCaptureAllowed
+	ocrGrant      = mac.RequestScreenCapture
+	ocrCapture    = captureRegion
+	ocrWork       = func(fn func()) { go fn() }
+	ocrDispatch   = mygo.RunOnMain
+	ocrRecognize  = recognizeImageText
+	ocrAfterFunc  = time.AfterFunc
+	ocrInvalidate = func(a *shelf) {
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
 )
 
 // captureRegion runs the system's own region picker (screencapture -i):
@@ -84,9 +89,7 @@ func (a *shelf) startScreenOCR() {
 			a.hide(hideExplicit)
 		}
 		timer := ocrAfterFunc(ocrProgressDelay, func() {
-			if a.win != nil {
-				a.win.Invalidate() // wakes the live progress capsule
-			}
+			ocrInvalidate(a) // wakes the live progress capsule
 		})
 		ocrWork(func() { a.screenOCRRound(timer) })
 	})
@@ -122,6 +125,9 @@ func (a *shelf) finishScreenOCR(timer *time.Timer, text string, produced bool, e
 		a.report(err)
 	case !produced:
 		// Esc 取消与系统拒绝都是安静地结束：设计稿 §5，Esc 不提示。
+		// A toast would repaint on its own; the silent end must too, or
+		// the live progress capsule breathes one more beat (~400ms).
+		ocrInvalidate(a)
 	case text == "":
 		a.toastStatus("没有识别到文字", time.Now().Add(3*time.Second), statusInfo)
 	case a.copyText(text):
@@ -149,9 +155,7 @@ func (a *shelf) copyDroppedText(paths []string) {
 	a.ocrBusyAt = time.Now()
 	a.ocrRunID++
 	timer := ocrAfterFunc(ocrProgressDelay, func() {
-		if a.win != nil {
-			a.win.Invalidate() // wakes the live progress capsule
-		}
+		ocrInvalidate(a) // wakes the live progress capsule
 	})
 	ocrWork(func() {
 		var parts []string

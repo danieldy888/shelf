@@ -18,9 +18,9 @@ import (
 // the test ends: nothing touches tcc, screencapture or a real goroutine.
 func ocrSeams(t *testing.T) {
 	t.Helper()
-	p, g, c, w, d, r, af := ocrPreflight, ocrGrant, ocrCapture, ocrWork, ocrDispatch, ocrRecognize, ocrAfterFunc
+	p, g, c, w, d, r, af, inv := ocrPreflight, ocrGrant, ocrCapture, ocrWork, ocrDispatch, ocrRecognize, ocrAfterFunc, ocrInvalidate
 	t.Cleanup(func() {
-		ocrPreflight, ocrGrant, ocrCapture, ocrWork, ocrDispatch, ocrRecognize, ocrAfterFunc = p, g, c, w, d, r, af
+		ocrPreflight, ocrGrant, ocrCapture, ocrWork, ocrDispatch, ocrRecognize, ocrAfterFunc, ocrInvalidate = p, g, c, w, d, r, af, inv
 	})
 	ocrWork = func(fn func()) { fn() }
 	ocrDispatch = func(fn func()) { fn() }
@@ -369,5 +369,18 @@ func TestCopyDroppedTextDuringScanIsRefused(t *testing.T) {
 	}
 	if a.ocrScan {
 		t.Fatal("the one round that ran could not finish")
+	}
+}
+
+// Esc 取消的静默收尾也要重画：进行中胶囊已经画出的那帧，没有 toast
+// 就得多留一拍呼吸（约 400ms）。取消分支补一次 Invalidate。
+func TestScreenOCRCancelRepaints(t *testing.T) {
+	ocrSeams(t)
+	paints := 0
+	ocrInvalidate = func(*shelf) { paints++ }
+	a := &shelf{}
+	a.finishScreenOCR(time.NewTimer(time.Hour), "", false, nil) // Esc 取消
+	if paints != 1 {
+		t.Fatalf("silent finish repainted %d times, want 1", paints)
 	}
 }
