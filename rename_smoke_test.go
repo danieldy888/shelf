@@ -53,6 +53,7 @@ func renameShot(t *testing.T, w *mygo.Window, name string) string {
 // the HID tap, as clickAt does for the primary button.
 func postRightClick(t *testing.T, x, y float64) {
 	t.Helper()
+	requireOwnMouseTarget(t, x, y)
 	lib, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_LAZY)
 	if err != nil {
 		t.Fatalf("CoreGraphics: %v", err)

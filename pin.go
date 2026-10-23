@@ -328,29 +328,36 @@ func (a *shelf) pinWakeDrag(p mygo.Point) {
 // catalog id; frame is the release rect (a strip frame when docked,
 // card-sized elsewhere). The tools page's drag-out calls this.
 func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, always bool, frame mygo.Rectangle) *pinItem {
-	homeIndex := slices.IndexFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == cardID })
-	area := pinArea(display)
-	if !a.mutateTools(func(l *layout.Layout) {
-		l.AddPin(layout.Pin{
-			ID: cardID, Span: span, Display: pinDisplayID(display), Edge: edge.layout(),
-			X: frame.X - area.X, Y: frame.Y - area.Y, AlwaysOpen: always,
-		})
-	}) {
-		return nil
-	}
 	w := pinCardW
 	if span == 2 {
 		w = pinCardW2
 	}
 	it := &pinItem{
 		owner: a, cardID: cardID, span: span, cardW: w,
-		homeIndex: homeIndex, display: display, edge: edge,
-		always: always, expanded: edge == pinFree,
-		// A display that shrank since the file was written still gets a
-		// visible pin: the frame clamps back into its work area.
-		frame: pinClamp(frame, pinArea(display)),
+		display: display, edge: edge, always: always,
+		expanded: edge == pinFree, frame: frame,
 	}
-	if edge != pinFree {
+	if !a.commitPin(it) {
+		return nil
+	}
+	return it
+}
+
+// commitPin publishes a placement only after its layout change succeeds.
+// A drag preview can lend its existing native window to the committed pin.
+func (a *shelf) commitPin(it *pinItem) bool {
+	it.homeIndex = slices.IndexFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == it.cardID })
+	it.frame = pinClamp(it.frame, pinArea(it.display))
+	area := it.displayRect()
+	if !a.mutateTools(func(l *layout.Layout) {
+		l.AddPin(layout.Pin{
+			ID: it.cardID, Span: it.span, Display: pinDisplayID(it.display), Edge: it.edge.layout(),
+			X: it.frame.X - area.X, Y: it.frame.Y - area.Y, AlwaysOpen: it.always,
+		})
+	}) {
+		return false
+	}
+	if it.edge != pinFree {
 		it.cy = it.frame.Y + pinStripH/2
 	}
 	a.pins = append(a.pins, it)
@@ -358,19 +365,24 @@ func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, alw
 	for _, other := range a.pins {
 		other.applyFrame() // restagger existing strips before the new window shows
 	}
-	pinOpenWindow(it)
+	if it.win == nil {
+		pinOpenWindow(it)
+	} else {
+		it.win.OnClose(it.onClose)
+		mac.ConfigurePinWindow(it.win.NativeHandle())
+		it.invalidate()
+	}
 	a.savePins()
-	return it
+	return true
 }
 
 // pinOpenWindow opens a pin's native window; a seam so the drag-out and
 // restore paths can be tested without a window server.
-var pinOpenWindow = func(it *pinItem) { it.show() }
+var pinOpenWindow = func(it *pinItem) { it.openWindow(false) }
 
-// show opens the pin's window: a borderless non-activating panel at the
-// floating level, visible on every Space, movable only through pinTick so
-// snap-on-release stays under the app's control.
-func (it *pinItem) show() {
+// openWindow creates a non-activating card panel. A preview ignores mouse
+// events and sits above the source panel; a committed pin floats at level 3.
+func (it *pinItem) openWindow(preview bool) {
 	f := it.frame
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title: appName + " 固定项", Width: f.Width, Height: f.Height,
@@ -382,9 +394,13 @@ func (it *pinItem) show() {
 	})
 	it.win = w
 	w.SetVisibleOnAllWorkspaces(true)
-	mac.ConfigurePinWindow(w.NativeHandle())
+	if preview {
+		mac.ConfigureDragPreview(w.NativeHandle(), it.owner.windowLevel()+1)
+	} else {
+		mac.ConfigurePinWindow(w.NativeHandle())
+		w.OnClose(it.onClose)
+	}
 	mac.SetWindowFrame(w.NativeHandle(), f.X, f.Y, f.Width, f.Height)
-	w.OnClose(it.onClose)
 	w.ShowInactive()
 }
 

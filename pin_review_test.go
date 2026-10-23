@@ -144,7 +144,7 @@ func TestPinDragOutKeepsGridSpan(t *testing.T) {
 	p := &toolsPage{host: a, editing: true}
 	a.x, a.y, a.h = 400, 0, 600
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} }
-	p.toolCardDrop(&toolPress{id: "awake", dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200})
+	p.toolCardDrop(&toolPress{id: "awake", dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}, cursorPoint())
 	if len(a.pins) != 1 || a.pins[0].span != 2 || a.pins[0].cardW != pinCardW2 {
 		t.Fatalf("grid width lost: %+v", a.pins)
 	}

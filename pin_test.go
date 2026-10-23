@@ -426,7 +426,7 @@ func TestToolsDragOutPins(t *testing.T) {
 
 	first := a.toolsLayout().Cards[0]
 	d := &toolPress{id: first.ID, dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}
-	p.toolCardDrop(d)
+	p.toolCardDrop(d, cursorPoint())
 
 	if len(a.pins) != 1 || a.pins[0].cardID != first.ID {
 		t.Fatalf("drag-out did not pin the card: %+v", a.pins)
@@ -449,7 +449,7 @@ func TestToolsDragOutPins(t *testing.T) {
 	second := a.toolsLayout().Cards[0]
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 700, Y: 100} } // inside the panel body
 	d2 := &toolPress{id: second.ID, dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}
-	p.toolCardDrop(d2)
+	p.toolCardDrop(d2, cursorPoint())
 	if len(a.pins) != 1 {
 		t.Fatalf("a release inside the panel pinned the card: %d pins", len(a.pins))
 	}

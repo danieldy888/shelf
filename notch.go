@@ -558,6 +558,7 @@ func (a *shelf) escape() {
 			if p.picking {
 				p.picking = false
 			} else {
+				p.closeDragPreview()
 				p.editing, p.press = false, nil
 			}
 			if a.win != nil {

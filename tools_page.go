@@ -70,8 +70,10 @@ type toolPress struct {
 
 // toolsPage is the card grid page.
 type toolsPage struct {
-	host   *shelf
-	scroll ui.ScrollState
+	host     *shelf
+	scroll   ui.ScrollState
+	viewport ui.Rect  // previous frame's scroll viewport, in window coordinates
+	preview  *pinItem // transient drag window; absent from layout and live pins
 
 	editing   bool
 	picking   bool
@@ -148,6 +150,7 @@ func (a *shelf) mutateTools(fn func(*layout.Layout)) bool {
 // leaving the page so re-entry starts clean.
 func (a *shelf) resetToolsEdit() {
 	if p := a.toolsPage(); p != nil {
+		p.closeDragPreview()
 		p.editing, p.picking, p.press = false, false, nil
 		p.jiggleID = ""
 		if a.win != nil {
@@ -188,6 +191,7 @@ func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element 
 			if p.picking {
 				p.picking = false
 			} else {
+				p.closeDragPreview()
 				p.editing, p.press = false, nil
 			}
 		}
@@ -286,6 +290,7 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 	}
 	return ui.Column(c.Key("tools-stage")).Grow(1).MinHeight(0).Children(func() {
 		scroll := ui.Scroll(c.Key("cards")).Grow(1).MinHeight(0).TrackScroll(&p.scroll)
+		p.viewport = scroll.Bounds()
 		// Pointer tracking makes the stage interactive and reports the
 		// viewport-local pointer for the press bookkeeping.
 		vpx, vpy, _ := scroll.PointerPosition()
@@ -302,7 +307,7 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 				for _, cell := range cells {
 					p.toolCell(c, cell, editing, live)
 				}
-				if d != nil && d.dragging {
+				if d != nil && d.dragging && p.preview == nil {
 					p.toolLiftedCard(c, *d)
 				}
 			})
@@ -391,10 +396,7 @@ func surfFor(editing bool) toolCardSurface {
 // lands on the same element the down did.
 func (p *toolsPage) toolLiftedCard(c *ui.Context, d toolPress) {
 	a := p.host
-	spec := layout.Card{ID: d.id, Span: 1}
-	if def := toolCardDefFor(d.id); def != nil {
-		spec.Span = def.span
-	}
+	spec := p.dragSpec(d.id)
 	w := toolColW(spec.Span)
 	card := a.toolCard(c, spec, cardEdit, "lift")
 	card.Absolute().Left(d.px-d.grabDX).Top(d.py-d.grabDY).
@@ -426,6 +428,7 @@ func (p *toolsPage) toolCardInput(c *ui.Context, card ui.Element, cell toolCell,
 			c.AnimationFrame() // the long-press deadline needs frames
 			return true
 		case ui.InputPointerMove:
+			defer p.syncDragPreview(p.toolPointer(ev))
 			d := p.press
 			if d == nil || d.id != cell.id || d.settling {
 				return d != nil && d.id == cell.id && d.settling
@@ -460,7 +463,7 @@ func (p *toolsPage) toolCardInput(c *ui.Context, card ui.Element, cell toolCell,
 			}
 			if d.dragging {
 				d.px, d.py = d.cardX+ev.X, d.cardY+ev.Y
-				p.toolCardDrop(d)
+				p.toolCardDrop(d, p.toolPointer(ev))
 				return true
 			}
 			p.skipClick = d.suppress // a moved press never becomes a tap
@@ -519,7 +522,8 @@ func hypot(dx, dy float32) float64 {
 // toolCardDrop ends a reorder: inside the stage it commits the index,
 // outside the panel it pins the card to the desktop (task B, design §2
 // 把卡片拖出面板边缘 = 固定到桌面), elsewhere it flies back.
-func (p *toolsPage) toolCardDrop(d *toolPress) {
+func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
+	defer p.closeDragPreview()
 	a := p.host
 	// The drop lands inside the stage when the release is within the
 	// viewport the scroll shows — the stage's own height. scrollEdges
@@ -544,24 +548,10 @@ func (p *toolsPage) toolCardDrop(d *toolPress) {
 		// A release beyond the panel's drawn body pins the card at the
 		// cursor (grab point preserved so the window lands under it);
 		// a release on another pane of the panel still flies back.
-		cursor := cursorPoint()
 		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 		if !insideRect(cursor, panel) {
-			w := pinCardW
-			// The grid's live span is authoritative — the user may have
-			// resized the card after the catalog default was read.
-			span := 0
-			for _, c := range a.toolsLayout().Cards {
-				if c.ID == d.id {
-					span = c.Span
-					break
-				}
-			}
-			if span == 0 {
-				if def := toolCardDefFor(d.id); def != nil {
-					span = def.span
-				}
-			}
+			spec := p.dragSpec(d.id)
+			span, w := spec.Span, pinCardW
 			if span == 2 {
 				w = pinCardW2
 			}
@@ -572,7 +562,17 @@ func (p *toolsPage) toolCardDrop(d *toolPress) {
 			if edge != pinFree {
 				frame = pinStripFrame(edge, area, cursor.Y) // the 24 pt edge rule, same as pin drags
 			}
-			if a.addPin(d.id, span, disp, edge, false, frame) != nil {
+			var committed bool
+			if it := p.preview; it != nil {
+				it.display, it.edge, it.expanded, it.frame = disp, edge, edge == pinFree, frame
+				committed = a.commitPin(it)
+				if committed {
+					p.preview = nil // the committed pin now owns this window
+				}
+			} else {
+				committed = a.addPin(d.id, span, disp, edge, false, frame) != nil
+			}
+			if committed {
 				p.press = nil // the parked cell is gone: no settle back
 				return
 			}

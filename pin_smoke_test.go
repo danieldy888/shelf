@@ -29,6 +29,10 @@ func pinSmokeEnv(t *testing.T) *shelf {
 		t.Fatal(err)
 	}
 	snapshotClipboard(t)
+	area := mygo.Screen.PrimaryDisplay().WorkArea
+	area.Y += 2
+	area.Height -= 2
+	newSmokePointerBackdrop(t, area)
 	a := smokeShelf
 	// The smoke harness never calls ready(), so these tests drive the
 	// production monitorDrag entry point on its own 30 ms ticker,
@@ -109,6 +113,7 @@ func pinShotRect(t *testing.T, r mygo.Rectangle, name string) {
 // 3 rightDown, 4 rightUp.
 func postMouse(t *testing.T, x, y float64, events ...uint32) {
 	t.Helper()
+	requireOwnMouseTarget(t, x, y)
 	lib, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_LAZY)
 	if err != nil {
 		t.Fatalf("CoreGraphics: %v", err)
@@ -258,6 +263,9 @@ func TestPinSmokeReturnBulge(t *testing.T) {
 			a.newNotchWindow()
 		}
 		a.place(mygo.Screen.CursorScreenPoint())
+		// Exercise the return zone below the real menu bar, over our
+		// own backdrop rather than the user's installed Shelf.
+		a.y, a.notchY = d.WorkArea.Y+120, d.WorkArea.Y+120
 		a.syncMousePassThrough()
 		a.win.ShowInactive()
 		it = a.addPin("tojpeg", 1, d.ID, pinFree, false,

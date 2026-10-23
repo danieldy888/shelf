@@ -190,6 +190,23 @@ func TestSmokeCapsuleSuccess(t *testing.T) {
 	var pill mygo.Rectangle
 	onMain(func() { pill = a.peekPillRect() })
 	if mac.AccessibilityTrusted() {
+		// The capsule intentionally passes through native hit-testing.
+		// Catch the click in our own small receiver, not another app.
+		x, y := pill.X+pill.Width/2, pill.Y+pill.Height-8
+		receiver := newSmokePointerBackdrop(t, mygo.Rectangle{X: x - 2, Y: y - 2, Width: 4, Height: 4})
+		onMain(func() { mac.SetWindowLevel(receiver.NativeHandle(), mac.StatusWindowLevel+1) })
+		var stopReceiver func()
+		onMain(func() {
+			stopReceiver = mac.ObserveMouseDown(receiver.NativeHandle(), func(inside bool, button int) {
+				if inside {
+					// Source observers ignore other test windows. Route
+					// this receiver as an outside-source click, the input
+					// the global monitor receives from another process.
+					a.mouseDown(false, button, mygo.Screen.CursorScreenPoint())
+				}
+			})
+		})
+		t.Cleanup(func() { onMain(stopReceiver) })
 		clickAt(t, float64(pill.X+pill.Width/2), float64(pill.Y+pill.Height-8))
 		var visible bool
 		onMain(func() { visible = a.visible })

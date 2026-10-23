@@ -181,6 +181,7 @@ func writePrivateClipboard(format string, data []byte) error {
 // topmost window. The pointer is put back afterwards.
 func clickAt(t *testing.T, x, y float64) {
 	t.Helper()
+	requireOwnMouseTarget(t, x, y)
 	lib, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_LAZY)
 	if err != nil {
 		t.Fatalf("CoreGraphics: %v", err)

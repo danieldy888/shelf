@@ -681,8 +681,9 @@ func ConfigurePinWindow(window uintptr) {
 	withPool(func() {
 		w := id(window)
 		send(w, "setStyleMask:", nsWindowStyleMaskNonactivatingPanel)
-		send(w, "setLevel:", uintptr(3)) // NSFloatingWindowLevel
-		send(w, "setHasShadow:", 1)      // the card's drop shadow, hugging its opaque pixels
+		send(w, "setLevel:", uintptr(3))    // NSFloatingWindowLevel
+		send(w, "setAnimationBehavior:", 0) // NSWindowAnimationBehaviorDefault
+		send(w, "setHasShadow:", 1)         // the card's drop shadow, hugging its opaque pixels
 		send(w, "setHidesOnDeactivate:", 0)
 		send(w, "setMovable:", 0)
 		send(w, "setOpaque:", 0)
@@ -711,6 +712,22 @@ func ConfigurePinWindow(window uintptr) {
 		send(w, "setBecomesKeyOnlyIfNeeded:", 1)
 		send(w, "setIgnoresMouseEvents:", 0)
 		registerOverlayDropTypes(w)
+	})
+}
+
+// ConfigureDragPreview uses the pin's non-activating appearance, but never
+// intercepts the source gesture or animates out over the returning grid copy.
+// The animation setting is per-window; it does not change system preferences.
+func ConfigureDragPreview(window uintptr, level int) {
+	ConfigurePinWindow(window)
+	if window == 0 {
+		return
+	}
+	withPool(func() {
+		w := id(window)
+		send(w, "setAnimationBehavior:", 2) // NSWindowAnimationBehaviorNone
+		send(w, "setIgnoresMouseEvents:", 1)
+		send(w, "setLevel:", uintptr(level))
 	})
 }
 
