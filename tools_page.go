@@ -15,6 +15,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/layout"
@@ -485,8 +486,8 @@ func hypot(dx, dy float32) float64 {
 }
 
 // toolCardDrop ends a reorder: inside the stage it commits the index,
-// outside it flies back. 拖出面板 = 固定到桌面 is task B's; a release
-// outside the stage bounds only reverts.
+// outside the panel it pins the card to the desktop (task B, design §2
+// 把卡片拖出面板边缘 = 固定到桌面), elsewhere it flies back.
 func (p *toolsPage) toolCardDrop(d *toolPress) {
 	a := p.host
 	_, _, viewH := scrollEdges(&p.scroll, float32(a.currentStageH()))
@@ -503,6 +504,32 @@ func (p *toolsPage) toolCardDrop(d *toolPress) {
 					target = cell
 				}
 			}
+		}
+	} else {
+		// A release beyond the panel's drawn body pins the card at the
+		// cursor (grab point preserved so the window lands under it);
+		// a release on another pane of the panel still flies back.
+		cursor := cursorPoint()
+		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
+		if !insideRect(cursor, panel) {
+			w := pinCardW
+			span := 1
+			if def := toolCardDefFor(d.id); def != nil {
+				span = def.span
+			}
+			if span == 2 {
+				w = pinCardW2
+			}
+			disp := displayIDAt(cursor, 0)
+			area := pinArea(disp)
+			edge := pinReleaseEdge(cursor, area)
+			frame := mygo.Rectangle{X: cursor.X - int(d.grabDX), Y: cursor.Y - int(d.grabDY), Width: w, Height: pinCardH}
+			if edge != pinFree {
+				frame = pinStripFrame(edge, area, cursor.Y) // the 24 pt edge rule, same as pin drags
+			}
+			a.addPin(d.id, span, disp, edge, false, frame)
+			p.press = nil // the parked cell is gone: no settle back
+			return
 		}
 	}
 	d.settling, d.dragging = true, false

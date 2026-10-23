@@ -80,6 +80,9 @@ const (
 	// peekHint is the drag-in-flight hint: a notch-high shell, a little
 	// wider, with no glyph inside — it must not outgrow the menu bar.
 	peekHint
+	// peekReturn is a desktop-pinned card held over the notch: the same
+	// pill as the drop shape, inviting 松开放回 (pin.go pinReturning).
+	peekReturn
 )
 
 // shellMotion is what view() drew last: the drawn shell's size, for the

@@ -944,6 +944,10 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			kind = peekCapsule
 		case !over && a.np != nil && a.np.showsPlayer():
 			kind = peekPlayer
+		case a.pinReturning:
+			// A pinned card held over the notch: the same pill shape as
+			// the drop invite, reading 松开放回 (design §4).
+			kind = peekReturn
 		case a.dragging && !a.ownDrag:
 			// Inside the notch band the drop pill invites the release;
 			// outside it only the widened hint shows — never a glyph.
@@ -1001,6 +1005,9 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 				if kind == peekDrop {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
 					ui.Text(c, "松开放入").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
+				} else if kind == peekReturn {
+					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
+					ui.Text(c, "松开放回").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
 				} else {
 					ui.Icon(c, chevronDownSym).Size(12, 12).TextColor(ink2)
 				}

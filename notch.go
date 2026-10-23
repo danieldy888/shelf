@@ -219,6 +219,11 @@ func (a *shelf) peekSize() (w, h float32) {
 	if a.np != nil && a.np.showsPlayer() {
 		return a.playerSize()
 	}
+	if a.pinReturning {
+		// A pinned card held over the notch: the drop-pill shape,
+		// inviting the release that puts it back (design §4 松开放回).
+		return baseW + dropPillExtraW, baseH + dropPillBody
+	}
 	if a.dragging && !a.ownDrag {
 		if a.dropHot {
 			return baseW + dropPillExtraW, baseH + dropPillBody

@@ -63,7 +63,7 @@ type shelf struct {
 	appIcons                                                    map[string]*ui.Bitmap // bundle id → icon, cached for clipboard rows
 	write                                                       clipWriter            // where copies go; nil = the system clipboard
 	dragSerial                                                  int64
-	dragOpenTools                                               bool          // 本次外部拖拽开始时面板开在工具页（design §1: 只有这时才用卡片接文件）
+	dragOpenTools                                               bool // 本次外部拖拽开始时面板开在工具页（design §1: 只有这时才用卡片接文件）
 	dragging, suppressed, pointerDrag, ownDrag, dropHot, inBand bool
 	drop                                                        dropZoneState  // incoming-drag zone memory; zero while no drag hovers
 	dataDir                                                     string         // where state.json and settings.json live
@@ -99,8 +99,8 @@ type shelf struct {
 	thumbPending                                                map[string]bool
 	thumbDiscard                                                map[string]bool
 	thumbActive                                                 int
-	pins                                                        []*pinItem    // desktop-pinned cards (pin.go)
-	layout                                                      layout.Layout // layout.json's runtime copy (tools page shares it)
+	pins                                                        []*pinItem // desktop-pinned cards (pin.go)
+	pinReturning                                                bool       // a pin drag holds the notch's 松开放回 bulge
 
 	// 框选文字：同一时间只有一轮（ocrScan，capture+识别全程）；ocrBusyAt
 	// 记这轮开始时刻给进行中胶囊的 250ms 延迟计时；ocrSheet 为真时展开

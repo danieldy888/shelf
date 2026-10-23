@@ -31,7 +31,9 @@ func pinSmokeEnv(t *testing.T) *shelf {
 	a := smokeShelf
 	// The smoke harness never calls ready(), so pinTick gets its own
 	// 30 ms ticker for these tests — the same cadence monitorDrag gives
-	// it in production — driven by the real cursor and button state.
+	// it in production — driven by the real cursor and button state. It
+	// also keeps the shelf placed on the cursor's display, as
+	// monitorDrag does, so the notch's return zone is live geometry.
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	go func() {
@@ -43,7 +45,14 @@ func pinSmokeEnv(t *testing.T) *shelf {
 				return
 			case now := <-tk.C:
 				mygo.RunOnMain(func() {
-					a.pinTick(now, cursorPoint(), dragLeftDown(), false)
+					p := cursorPoint()
+					if !a.visible && !insideRect(p, a.dispBounds) {
+						a.place(p)
+					}
+					// animate drives the peek/pull timelines exactly as
+					// shelf.startMonitoring does before monitorDrag.
+					a.animate(now)
+					a.pinTick(now, p, dragLeftDown(), false)
 				})
 			}
 		}
@@ -229,4 +238,92 @@ func TestPinSmokeDragSnap(t *testing.T) {
 		t.Fatalf("docked frame wrong: %+v", f)
 	}
 	pinShot(t, it.win, "pin-docked-left")
+}
+
+// TestPinSmokeReturnBulge drags a pin to the notch with a real pointer
+// drag and holds it there: the shelf's peek shows the 松开放回 pill
+// (design §4), the release puts the card back on the tools page.
+func TestPinSmokeReturnBulge(t *testing.T) {
+	a := pinSmokeEnv(t)
+	d := mygo.Screen.PrimaryDisplay()
+	var it *pinItem
+	// The other pin shots photograph pin windows of their own; this one
+	// also needs the shelf's notch window, so bring up the same idle
+	// notch window ready(false) does — placed, shown, mouse-synced.
+	// If this test created the shared window, it takes it down again:
+	// a later smoke test expects the window it finds to still be hidden
+	// (an already-shown panel ordered in by show() becomes the key
+	// window, which the ⌘C global-key test asserts against).
+	onMain(func() {
+		if a.win == nil {
+			a.newNotchWindow()
+		}
+		a.place(mygo.Screen.CursorScreenPoint())
+		a.syncMousePassThrough()
+		a.win.ShowInactive()
+		it = a.addPin("tojpeg", 1, d.ID, pinFree, false,
+			mygo.Rectangle{X: d.WorkArea.X + 700, Y: d.WorkArea.Y + 400, Width: pinCardW, Height: pinCardH})
+	})
+	t.Cleanup(func() {
+		// Back to the idle shelf the next smoke test expects: peek folded,
+		// nothing visible, and the notch window gone (a later show() must
+		// order in a hidden window, or macOS makes an already-shown panel
+		// the key window and the ⌘C global-key test fails).
+		onMain(func() {
+			a.pinReturning, a.peeking, a.visible = false, false, false
+			a.progress, a.peekProgress, a.peekFrom = 0, 0, 0
+			a.animationStart, a.peekAnimStart = time.Time{}, time.Time{}
+			if a.win != nil {
+				a.win.Hide()
+				a.win.Destroy()
+				a.win, a.winH = nil, 0
+			}
+			a.frame, a.fx = mygo.Rectangle{}, shellMotion{}
+		})
+	})
+	defer onMain(func() {
+		if len(a.pins) > 0 { // the release may already have unpinned it
+			a.unpin(it, false)
+		}
+	})
+	time.Sleep(700 * time.Millisecond)
+
+	f := settlePin(t, it, 0)
+	x, y := float64(f.X+f.Width/2), float64(f.Y+f.Height/2)
+	var notchCx float64
+	onMain(func() { notchCx = float64(a.notchX + a.notchW/2) })
+	if a.notchW <= 0 {
+		t.Skip("the test display has no measured notch")
+	}
+	postMouse(t, x, y, 5, 1)
+	for i := 1; i <= 12; i++ {
+		nx := x + (notchCx-x)*float64(i)/12
+		ny := y + (float64(a.notchY+30)-y)*float64(i)/12
+		postMouse(t, nx, ny, 6)
+		time.Sleep(40 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond) // hold at the notch: the bulge shows
+	var returning, drawn bool
+	onMain(func() {
+		returning = a.pinReturning
+		drawn = a.pinReturning && a.fx.peekKind == peekReturn && a.peekProgress > 0.99
+	})
+	if !returning {
+		t.Error("the pin over the notch did not raise the return bulge")
+	}
+	if !drawn {
+		t.Error("the notch did not draw the 松开放回 pill")
+	}
+	r := mygo.Rectangle{}
+	onMain(func() {
+		pr := a.peekPillRect()
+		r = mygo.Rectangle{X: pr.X - 24, Y: pr.Y - 12, Width: pr.Width + 48, Height: pr.Height + 36}
+	})
+	pinShot(t, a.win, "pin-return")
+	pinShotRect(t, r, "pin-return-screen")
+	postMouse(t, notchCx, float64(a.notchY+30), 2)
+	time.Sleep(500 * time.Millisecond)
+	if len(a.pins) != 0 {
+		t.Fatalf("release on the bulge kept the pin: %d pins", len(a.pins))
+	}
 }

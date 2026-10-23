@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/layout"
@@ -208,28 +208,39 @@ func TestPinMoveSnapAndReturn(t *testing.T) {
 	}
 }
 
+// setTools seeds the shared layout the tools page accessor serves.
+func (a *shelf) setTools(l layout.Layout) { a.toolsLay = &l }
+
 func TestPinReturnToNotch(t *testing.T) {
 	withPinDisplays(t, pinTestDisplays)
-	a := &shelf{dataDir: t.TempDir(), notchW: 200}
-	a.layout = layout.Layout{}
+	a := &shelf{dataDir: t.TempDir(), notchX: pinTestArea.Width/2 - 100, notchY: 0, notchW: 200, notchH: 32}
+	a.setTools(layout.Layout{})
 	it := a.pinRegister(&pinItem{
 		cardID: "zip", cardW: pinCardW, display: 1, homeIndex: 0,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
 	})
-	a.layout.Pins = []layout.Pin{{ID: "zip", Span: 1}}
+	a.mutateTools(func(l *layout.Layout) { l.Pins = []layout.Pin{{ID: "zip", Span: 1}} })
 	it.pressed, it.pressWas = true, true
 	t0 := time.Now()
 	a.pinTick(t0, mygo.Point{X: 700, Y: 60}, true, false)
 	if !it.moving {
 		t.Fatal("drag did not start")
 	}
+	// The pin's centre crosses the return zone → the bulge is up.
+	a.pinTick(t0, mygo.Point{X: pinTestArea.Width / 2, Y: 80}, true, false)
+	if !a.pinReturning {
+		t.Fatal("a dragged pin over the notch did not set the return bulge")
+	}
 	a.pinTick(t0, mygo.Point{X: pinTestArea.Width/2 - 40, Y: 30}, false, false)
 	if len(a.pins) != 0 {
 		t.Fatalf("release on the notch kept the pin: %+v", it.frame)
 	}
+	if a.pinReturning {
+		t.Fatal("the bulge flag did not clear on release")
+	}
 	// putBack: the card went back to the tools page at its home slot.
-	if len(a.layout.Cards) != 1 || a.layout.Cards[0].ID != "zip" {
-		t.Fatalf("the card did not return to the grid: %+v", a.layout.Cards)
+	if l := a.toolsLayout(); len(l.Cards) != 1 || l.Cards[0].ID != "zip" {
+		t.Fatalf("the card did not return to the grid: %+v", l.Cards)
 	}
 }
 
@@ -237,26 +248,28 @@ func TestPinUnpinSemantics(t *testing.T) {
 	withPinDisplays(t, pinTestDisplays)
 	a := &shelf{dataDir: t.TempDir()}
 	// 放回刘海: the card rejoins the grid at its home slot.
-	a.layout = layout.Layout{Cards: []layout.Card{{ID: "awake", Span: 1}}}
+	a.setTools(layout.Layout{Cards: []layout.Card{{ID: "awake", Span: 1}}})
 	it := a.pinRegister(&pinItem{
 		cardID: "topdf", cardW: pinCardW, display: 1, homeIndex: 1,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
 	})
-	a.layout.Pins = []layout.Pin{{ID: "topdf", Span: 1}}
+	a.mutateTools(func(l *layout.Layout) { l.Pins = []layout.Pin{{ID: "topdf", Span: 1}} })
 	a.unpin(it, true)
-	if len(a.layout.Cards) != 2 || a.layout.Cards[0].ID != "awake" || a.layout.Cards[1].ID != "topdf" {
-		t.Fatalf("放回刘海 did not restore the home slot: %+v", a.layout.Cards)
+	if l := a.toolsLayout(); len(l.Cards) != 2 || l.Cards[0].ID != "awake" || l.Cards[1].ID != "topdf" {
+		t.Fatalf("放回刘海 did not restore the home slot: %+v", l.Cards)
 	}
 	// 从桌面移除: the pin goes, the card stays off the page.
 	it2 := a.pinRegister(&pinItem{
 		cardID: "awake", cardW: pinCardW, display: 1, homeIndex: 0,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
 	})
-	a.layout.Pins = []layout.Pin{{ID: "awake", Span: 1}}
-	a.layout.Cards = a.layout.Cards[1:] // awake was pinned out of the grid; topdf stays
+	a.mutateTools(func(l *layout.Layout) {
+		l.Pins = []layout.Pin{{ID: "awake", Span: 1}}
+		l.Cards = l.Cards[1:] // awake was pinned out of the grid; topdf stays
+	})
 	a.unpin(it2, false)
-	if len(a.layout.Cards) != 1 || a.layout.Cards[0].ID != "topdf" {
-		t.Fatalf("从桌面移除 put the card back: %+v", a.layout.Cards)
+	if l := a.toolsLayout(); len(l.Cards) != 1 || l.Cards[0].ID != "topdf" {
+		t.Fatalf("从桌面移除 put the card back: %+v", l.Cards)
 	}
 	// A home slot inserts at that index (design §4 原位/被占放末尾由
 	// RemovePin 的 putBack clamp 处理).
@@ -264,10 +277,10 @@ func TestPinUnpinSemantics(t *testing.T) {
 		cardID: "zip", cardW: pinCardW, display: 1, homeIndex: 0,
 		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
 	})
-	a.layout.Pins = []layout.Pin{{ID: "zip", Span: 1}}
+	a.mutateTools(func(l *layout.Layout) { l.Pins = []layout.Pin{{ID: "zip", Span: 1}} })
 	a.unpin(it3, true)
-	if len(a.layout.Cards) != 2 || a.layout.Cards[0].ID != "zip" {
-		t.Fatalf("home slot insert wrong: %+v", a.layout.Cards)
+	if l := a.toolsLayout(); len(l.Cards) != 2 || l.Cards[0].ID != "zip" {
+		t.Fatalf("home slot insert wrong: %+v", l.Cards)
 	}
 }
 
@@ -293,7 +306,7 @@ func TestPinLayoutRoundTrip(t *testing.T) {
 	withPinDisplays(t, pinTestDisplays)
 	dir := t.TempDir()
 	a := &shelf{dataDir: dir}
-	a.layout = layout.Layout{Version: layout.Version}
+	a.setTools(layout.Layout{Version: layout.Version})
 	a.pinRegister(&pinItem{
 		cardID: "awake", span: 1, cardW: pinCardW, display: 1, edge: pinRight, always: true,
 		frame: mygo.Rectangle{X: 1512 - 8, Y: 300, Width: pinStripW, Height: pinStripH},
@@ -311,9 +324,8 @@ func TestPinLayoutRoundTrip(t *testing.T) {
 		t.Fatalf("layout.json wrong: %v %+v", err, f.Pins)
 	}
 	b := &shelf{dataDir: dir}
-	b.layout = layout.LoadQuiet(dir)
-	if len(b.layout.Pins) != 1 || b.layout.Pins[0].ID != "awake" {
-		t.Fatalf("restored pins wrong: %+v", b.layout.Pins)
+	if l := b.toolsLayout(); len(l.Pins) != 1 || l.Pins[0].ID != "awake" {
+		t.Fatalf("restored pins wrong: %+v", l.Pins)
 	}
 }
 
@@ -380,4 +392,78 @@ func TestPinViewMenuItems(t *testing.T) {
 	}
 }
 
-var _ = transfer.Copy // transfer stays imported for the drop plumbing
+func TestPinReturnPeekDrawsBulge(t *testing.T) {
+	// The 松开放回 pill is the existing peek-shape mechanism, one new
+	// kind: the drop pill's size, the put-back's words.
+	a := motionWindow()
+	a.pinReturning, a.peeking = true, true
+	a.peekProgress, a.peekFrom = 1, 1
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view.Frame()
+	if _, ok := view.Find("松开放回"); !ok {
+		t.Fatal("the return pill is not up while a pin drag holds the notch")
+	}
+	if w, _ := a.peekSize(); w < float32(max(180, a.notchW))+dropPillExtraW {
+		t.Fatalf("return peek narrower than the drop pill: %.1f", w)
+	}
+	// The drag leaves the zone: the kind is re-derived and folds away.
+	a.pinReturning, a.peeking = false, false
+	foldFrames(t, a, view, "松开放回")
+}
+
+// TestToolsDragOutPins is the phase-3 hook end to end: an edit-mode drag
+// released outside the panel's drawn body pins the card at the cursor and
+// takes it out of the tools page grid; a release back on another pane of
+// the panel still flies back.
+func TestToolsDragOutPins(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	oldOpen := pinOpenWindow
+	pinOpenWindow = func(*pinItem) {}
+	t.Cleanup(func() { pinOpenWindow = oldOpen })
+	oldCursor := cursorPoint
+	t.Cleanup(func() { cursorPoint = oldCursor })
+
+	a := &shelf{dataDir: t.TempDir()}
+	a.setTools(layout.Default())
+	p := &toolsPage{host: a, editing: true}
+
+	// Panel at 400..760 x 0..600 on the test display.
+	placePanel := func() {
+		a.x, a.y, a.h = 400, 0, 600
+	}
+	placePanel()
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} } // far right of the panel
+
+	first := a.toolsLayout().Cards[0]
+	d := &toolPress{id: first.ID, dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}
+	p.toolCardDrop(d)
+
+	if len(a.pins) != 1 || a.pins[0].cardID != first.ID {
+		t.Fatalf("drag-out did not pin the card: %+v", a.pins)
+	}
+	if a.pins[0].edge != pinFree {
+		t.Fatalf("a release away from an edge should float, got edge %v", a.pins[0].edge)
+	}
+	if slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == first.ID }) {
+		t.Fatalf("the pinned card stayed in the grid: %+v", a.toolsLayout().Cards)
+	}
+	if len(a.toolsLayout().Pins) != 1 || a.toolsLayout().Pins[0].ID != first.ID {
+		t.Fatalf("layout.json's pin list missed the drag-out: %+v", a.toolsLayout().Pins)
+	}
+	if !d.settling && p.press != nil {
+		t.Fatal("a pinned drag should not leave a settle press behind")
+	}
+
+	// A release over the panel but outside the stage is not a pin: it
+	// flies back to its cell.
+	second := a.toolsLayout().Cards[0]
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 700, Y: 100} } // inside the panel body
+	d2 := &toolPress{id: second.ID, dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}
+	p.toolCardDrop(d2)
+	if len(a.pins) != 1 {
+		t.Fatalf("a release inside the panel pinned the card: %d pins", len(a.pins))
+	}
+	if !d2.settling {
+		t.Fatal("a release inside the panel should settle back")
+	}
+}

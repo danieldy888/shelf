@@ -3,7 +3,6 @@
 package main
 
 import (
-	"log"
 	"slices"
 	"sort"
 	"strconv"
@@ -28,8 +27,8 @@ import (
 // The card the window shows comes from the tool catalog (tools_cards.go):
 // a.toolCard(c, layout.Card{...}, cardDesktop) draws it, a.runToolCard(id)
 // runs its tap and a.runToolCardDrop(id, data) takes its file drop. The
-// placement lives in layout.json's pins list (internal/layout); a.layout
-// is the runtime copy the tools page shares.
+// placement lives in layout.json's pins list (internal/layout), written
+// through the tools page's mutateTools so Cards and Pins stay one file.
 const (
 	pinSnapDist  = 24 // release this close to a screen edge and it docks
 	pinWakeDist  = 40 // a file drag this close to a strip wakes it
@@ -40,7 +39,6 @@ const (
 	pinExpand    = 240 * time.Millisecond
 	pinCardH     = 84
 	pinReturnH   = 120                    // release this high, centred on the notch, returns the card
-	pinReturnPad = 180                    // horizontal room on each side of the notch
 	pinHoldAfter = 900 * time.Millisecond // drop confirmation on the card
 	pinDragStart = 4                      // a press that goes this far is a window move
 )
@@ -178,18 +176,24 @@ func pinReleaseEdge(p mygo.Point, area mygo.Rectangle) pinEdge {
 	return pinFree
 }
 
-// pinReturnZone reports whether the card's centre lands on the notch: a
-// band down the menu bar centred on the notch, where a release hands the
-// card back.
-func (a *shelf) pinReturnZone(centre mygo.Point, area mygo.Rectangle) bool {
-	if centre.Y >= area.Y+pinReturnH {
+// pinReturnZone reports whether the dragged pin's centre lands on the
+// notch: the hardware notch when the shelf tracks this display, else a
+// release-band the same shape at the top of the display the centre is
+// on. The same zone drives the 松开放回 bulge and the put-back release.
+func (a *shelf) pinReturnZone(centre mygo.Point) bool {
+	if centre.Y >= a.notchY+notchHoverPadY+pinReturnH {
 		return false
 	}
-	nw := a.notchW
+	// The shelf follows the cursor across displays (monitorDrag places
+	// it on the cursor's): a pin dragged at the notch is by definition
+	// on the shelf's display. The zone centres on the hardware notch,
+	// widening like overNotch does.
+	nx, nw := a.notchX, a.notchW
 	if nw <= 0 {
-		nw = 200
+		nw = 200 // no measured notch: the strip's default centre
 	}
-	return abs(centre.X-(area.X+area.Width/2)) <= nw/2+pinReturnPad
+	half := float64(nw)/2 + notchHoverPadX
+	return abs(centre.X-(nx+nw/2)) <= int(half)
 }
 
 // pinStagger spaces collapsed strips on one edge of one display
@@ -255,11 +259,13 @@ func pinNear(p mygo.Point, r mygo.Rectangle, dist int) bool {
 // catalog id; frame is the release rect (a strip frame when docked,
 // card-sized elsewhere). The tools page's drag-out calls this.
 func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, always bool, frame mygo.Rectangle) *pinItem {
-	homeIndex := slices.IndexFunc(a.layout.Cards, func(c layout.Card) bool { return c.ID == cardID })
+	homeIndex := slices.IndexFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == cardID })
 	area := pinArea(display)
-	a.layout.AddPin(layout.Pin{
-		ID: cardID, Span: span, Display: pinDisplayID(display), Edge: edge.layout(),
-		X: frame.X - area.X, Y: frame.Y - area.Y, AlwaysOpen: always,
+	a.mutateTools(func(l *layout.Layout) {
+		l.AddPin(layout.Pin{
+			ID: cardID, Span: span, Display: pinDisplayID(display), Edge: edge.layout(),
+			X: frame.X - area.X, Y: frame.Y - area.Y, AlwaysOpen: always,
+		})
 	})
 	w := pinCardW
 	if span == 2 {
@@ -274,10 +280,18 @@ func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, alw
 		frame: pinClamp(frame, pinArea(display)),
 	}
 	a.pins = append(a.pins, it)
-	it.show()
+	pinStagger(a.pins)
+	for _, other := range a.pins {
+		other.applyFrame() // restagger existing strips before the new window shows
+	}
+	pinOpenWindow(it)
 	a.savePins()
 	return it
 }
+
+// pinOpenWindow opens a pin's native window; a seam so the drag-out and
+// restore paths can be tested without a window server.
+var pinOpenWindow = func(it *pinItem) { it.show() }
 
 // show opens the pin's window: a borderless non-activating panel at the
 // floating level, visible on every Space, movable only through pinTick so
@@ -318,7 +332,7 @@ func (a *shelf) unpin(it *pinItem, putBack bool) {
 			break
 		}
 	}
-	a.layout.RemovePin(it.cardID, putBack, it.homeIndex)
+	a.mutateTools(func(l *layout.Layout) { l.RemovePin(it.cardID, putBack, it.homeIndex) })
 	w := it.win
 	it.win = nil
 	if w != nil {
@@ -367,6 +381,7 @@ func (a *shelf) pinDisplaysChanged() {
 // always-open state. p is the cursor, down the left button, fileDrag a
 // system drag the cards can receive.
 func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
+	returning := false
 	for _, it := range append([]*pinItem{}, a.pins...) {
 		if it.wantKill {
 			a.unpin(it, it.putBack)
@@ -387,6 +402,8 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 				if it.moving {
 					it.frame = it.pinMoveFrame(p, area)
 					it.applyFrame()
+					centre := mygo.Point{X: it.frame.X + it.frame.Width/2, Y: it.frame.Y + it.frame.Height/2}
+					returning = returning || a.pinReturnZone(centre)
 				}
 			} else {
 				moved := it.moving
@@ -430,6 +447,16 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 			it.invalidate()
 		}
 	}
+	// A pin held over the notch bulges 松开放回: peekView reads
+	// a.pinReturning for the shape, the release in pinRelease reads the
+	// same zone. The flag clears the tick the drag ends; monitorDrag's
+	// own fold takes the shell down on the next pass.
+	if a.pinReturning != returning {
+		a.pinReturning = returning
+		if returning && !a.visible {
+			a.setPeek(true)
+		}
+	}
 }
 
 func (it *pinItem) invalidate() {
@@ -442,7 +469,7 @@ func (it *pinItem) invalidate() {
 // docked to an edge, or floating where it landed.
 func (a *shelf) pinRelease(it *pinItem, p mygo.Point, area mygo.Rectangle) {
 	centre := mygo.Point{X: it.frame.X + it.frame.Width/2, Y: it.frame.Y + it.frame.Height/2}
-	if a.pinReturnZone(centre, area) {
+	if a.pinReturnZone(centre) {
 		a.unpin(it, true)
 		return
 	}
@@ -515,7 +542,7 @@ func abs(v int) int {
 
 // savePins mirrors the live pins into layout.json's pin list: positions
 // are stored inside each display's visible frame, as layout.Pin wants.
-// Cards stay untouched — the tools page owns a.layout.Cards.
+// mutateTools keeps the tools page's Cards untouched and writes the file.
 func (a *shelf) savePins() {
 	pins := make([]layout.Pin, 0, len(a.pins))
 	for _, it := range a.pins {
@@ -526,21 +553,15 @@ func (a *shelf) savePins() {
 			AlwaysOpen: it.always,
 		})
 	}
-	a.layout.Pins = pins
-	if a.dataDir == "" {
-		return
-	}
-	if err := layout.Write(a.dataDir, a.layout); err != nil {
-		log.Printf("pins: save: %v", err)
-	}
+	a.mutateTools(func(l *layout.Layout) { l.Pins = pins })
 }
 
-// pinRestore loads the layout once (the tools page shares a.layout) and
-// opens the pinned cards' windows. A card the catalog does not know yet
-// still pins — an unknown id draws the empty cell toolCard reserves.
+// pinRestore opens the pinned cards' windows from the shared layout (the
+// tools page reads the same toolsLayout copy). A card the catalog does
+// not know yet still pins — an unknown id draws the empty cell toolCard
+// reserves.
 func (a *shelf) pinRestore() {
-	a.layout = layout.LoadQuiet(a.dataDir)
-	for _, p := range a.layout.Pins {
+	for _, p := range a.toolsLayout().Pins {
 		disp := pinParseDisplay(p.Display)
 		edge := pinEdgeOf(p.Edge)
 		w := pinCardW
@@ -560,6 +581,6 @@ func (a *shelf) pinRestore() {
 			expanded: edge == pinFree, frame: frame,
 		}
 		a.pins = append(a.pins, it)
-		it.show()
+		pinOpenWindow(it)
 	}
 }
