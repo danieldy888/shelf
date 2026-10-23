@@ -12,10 +12,8 @@ package main
 // general pasteboard — AddClipImage is called directly, the same call the
 // clipboard module makes). Screenshots land in /tmp/shelf-ocr/.
 //
-// Side effect: the one recognized-text clipboard write happens without a
-// Concealed marker (copyText writes a plain string), so an installed
-// Shelf records that one line — deliberate, to exercise the real
-// clipboard path; the snapshot restores the user's previous contents.
+// Clipboard writes carry the concealed marker and snapshotClipboard
+// restores the user's contents after the test.
 
 import (
 	"bytes"
@@ -82,6 +80,9 @@ func TestSmokeOCRSearchAndCopy(t *testing.T) {
 	}
 
 	snapshotClipboard(t)
+	var oldWrite clipWriter
+	onMain(func() { oldWrite, a.write = a.write, fix2PrivateClipboard{} })
+	t.Cleanup(func() { onMain(func() { a.write = oldWrite }) })
 
 	onMain(func() {
 		// The smoke harness never runs ready(); register the module the

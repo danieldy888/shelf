@@ -59,6 +59,9 @@ func TestSmokeScreenOCRSheetAndCopy(t *testing.T) {
 	}
 	a := dropSmokeShelf(t)
 	snapshotClipboard(t)
+	var oldWrite clipWriter
+	onMain(func() { oldWrite, a.write = a.write, fix2PrivateClipboard{} })
+	t.Cleanup(func() { onMain(func() { a.write = oldWrite }) })
 
 	preflight, capture := ocrPreflight, ocrCapture
 	t.Cleanup(func() { ocrPreflight, ocrCapture = preflight, capture })
