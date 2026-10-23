@@ -23,21 +23,19 @@ import (
 const (
 	pageTools pageID = "tools" // 工具：用户排版的卡片页
 
-	toolCols      = 4                             // 4 列网格
-	toolCellH     = 84                            // 行高
-	toolCellGap   = 6                             // 卡片间距
-	toolMaxRows   = 3                             // 最多 3 行可见，再多在舞台内滚动
-	toolStageW    = panelWidth - 16 - 2*panelPadX // 舞台内容宽（panel.go 的 560-16-2·16）
-	toolPickRows  = 3                             // 目录页行数
-	toolPickTileH = 72                            // 目录一格高
-	toolPickTileW = (toolStageW - 2*toolCellGap) / 3
-
-	toolLongPress    = 500 * time.Millisecond // 长按进入编辑
-	toolDragSlop     = 6                      // 普通态拖动超过此距离作废点击
-	toolJiggleSpan   = 300 * time.Millisecond // 无可执行项时的轻摇
-	toolSettleAnim   = 240 * time.Millisecond // 松手吸附
-	toolWobblePeriod = 520 * time.Millisecond // 编辑摆动周期
-	toolWobbleDeg    = 0.7                    // 编辑摆动 ±0.7°
+	toolCols         = 4                             // 4 列网格
+	toolCellH        = 84                            // 行高
+	toolCellGap      = 6                             // 卡片间距
+	toolMaxRows      = 3                             // 最多 3 行可见，再多在舞台内滚动
+	toolStageW       = panelWidth - 16 - 2*panelPadX // 舞台内容宽（panel.go 的 560-16-2·16）
+	toolPickRows     = 3                             // 目录页行数
+	toolPickTileH    = 72                            // 目录一格高
+	toolLongPress    = 500 * time.Millisecond        // 长按进入编辑
+	toolDragSlop     = 6                             // 普通态拖动超过此距离作废点击
+	toolJiggleSpan   = 300 * time.Millisecond        // 无可执行项时的轻摇
+	toolSettleAnim   = 240 * time.Millisecond        // 松手吸附
+	toolWobblePeriod = 520 * time.Millisecond        // 编辑摆动周期
+	toolWobbleDeg    = 0.7                           // 编辑摆动 ±0.7°
 )
 
 // toolCell is one card's position in content coordinates.

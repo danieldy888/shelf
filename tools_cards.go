@@ -310,6 +310,9 @@ func (a *shelf) runToolCardDrop(id string, data transfer.Data) {
 	if def == nil || def.kind != cardAction {
 		return
 	}
+	// The card answered the release: clear the drag snapshot so the hot
+	// state and subtitles do not linger through the hold grace.
+	a.drop.done = true
 	files, class := a.drop.files, a.drop.class
 	if len(files) == 0 {
 		f, err := dropFilesData(data)
