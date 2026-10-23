@@ -291,16 +291,10 @@ func (a *shelf) setRetention(days int) {
 	a.removeExpired(time.Now())
 }
 
-// clipboardMenu offers the clipboard history toggle and the text limits.
-// It is disabled while settings.json could not be read, so a broken file is
-// never overwritten. Both act at once: the module starts or stops, and the
-// new limit applies on the next copy.
+// clipboardMenu offers the retained text limits. A broken settings file locks
+// these choices, but never disables the clipboard recorder itself.
 func (a *shelf) clipboardMenu() []*mygo.MenuItem {
-	items := []*mygo.MenuItem{{
-		Label: "记录剪贴板", Type: mygo.MenuItemCheckbox, Checked: a.settings.ClipboardHistory, Disabled: a.settingsBroken,
-		Click: func(*mygo.MenuItem, *mygo.Window) { a.setClipboardHistory(!a.settings.ClipboardHistory) },
-	}}
-	items = append(items, mygo.Separator())
+	var items []*mygo.MenuItem
 	limit := a.settings.ClipboardLimit
 	if limit < 1 {
 		limit = settings.Default().ClipboardLimit

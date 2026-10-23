@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
 	"shelf/internal/settings"
@@ -122,4 +123,40 @@ func TestSettingsWindowAnswersClicksAndScroll(t *testing.T) {
 	if !mac.SurfaceHitTest(a.basket.win.NativeHandle(), 110, 80) {
 		t.Error("basket surface rejected a centered hit")
 	}
+}
+
+func TestSettingsClipboardAlwaysOnNative(t *testing.T) {
+	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
+		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native window smoke test")
+	}
+	stubSettingsSeams(t, false, nil, nil)
+	a := &shelf{dataDir: t.TempDir(), settings: settings.Default(),
+		appNames: map[string]string{}, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	onMain(a.openSettings)
+	t.Cleanup(func() {
+		onMain(func() {
+			if a.settingsWin != nil {
+				a.settingsWin.Close()
+			}
+		})
+	})
+	time.Sleep(300 * time.Millisecond)
+	onMain(func() {
+		a.settingsScroll.Y = min(400, a.settingsScroll.MaxY)
+		a.settingsWin.Invalidate()
+	})
+	time.Sleep(250 * time.Millisecond)
+	var id int
+	onMain(func() { id = mac.WindowNumber(a.settingsWin.NativeHandle()) })
+	if id == 0 {
+		t.Fatal("settings window was not published to WindowServer")
+	}
+	if err := os.MkdirAll("/tmp/shelf-fix-L", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := "/tmp/shelf-fix-L/after-settings-clipboard.png"
+	if b, err := exec.Command("screencapture", "-l", strconv.Itoa(id), "-x", "-o", path).CombinedOutput(); err != nil {
+		t.Fatalf("settings screenshot: %v: %s", err, b)
+	}
+	t.Log(path)
 }

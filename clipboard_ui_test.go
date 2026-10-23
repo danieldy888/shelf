@@ -9,14 +9,18 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/png"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"time"
 
 	"shelf/internal/settings"
 	"shelf/internal/store"
@@ -418,7 +422,7 @@ func TestHideLeavesKeyboardMode(t *testing.T) {
 	}
 }
 
-// 菜单的「保留 N 条」与开关写进设置并立即生效。
+// 菜单的「保留 N 条」写进设置并立即生效。
 func TestClipboardMenuSettings(t *testing.T) {
 	a, _, _ := clipShelf(t)
 	a.setClipboardLimit(100)
@@ -432,25 +436,10 @@ func TestClipboardMenuSettings(t *testing.T) {
 	if prefs.ClipboardLimit != 100 {
 		t.Fatalf("settings.json kept %d, want 100", prefs.ClipboardLimit)
 	}
-	a.setClipboardHistory(false)
-	if a.clip != nil || len(a.modules) != 0 {
-		t.Fatal("turning history off did not remove the module")
-	}
-	a.setClipboardHistory(true)
-	if a.clip == nil || len(a.modules) != 1 {
-		t.Fatal("turning history on did not add the module")
-	}
-	prefs, err = settings.Load(a.dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !prefs.ClipboardHistory {
-		t.Fatal("settings.json did not record history back on")
-	}
 	a.settingsBroken = true
-	a.setClipboardHistory(false)
-	if !a.settings.ClipboardHistory {
-		t.Fatal("a broken settings file must not be overwritten")
+	a.setClipboardLimit(300)
+	if a.settings.ClipboardLimit != 100 {
+		t.Fatal("a broken settings file must lock the retained count")
 	}
 }
 
@@ -537,5 +526,77 @@ func TestCaptureSourceSkipsShelfItself(t *testing.T) {
 	}
 	if got := captureSource(10, 42, "com.example.App"); got != "com.example.App" {
 		t.Fatalf("real source dropped: %q", got)
+	}
+}
+
+type copyEventReader struct {
+	serial  int64
+	formats []string
+	app     string
+	value   string
+	png     []byte
+}
+
+func (b *copyEventReader) changeCount() int64 { return b.serial }
+func (b *copyEventReader) sourceApp() string  { return b.app }
+func (b *copyEventReader) types() []string    { return b.formats }
+func (b *copyEventReader) text() string       { return b.value }
+func (b *copyEventReader) image() []byte      { return b.png }
+
+func TestLegacyDisabledClipboardStillRecordsAndDropsOldKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, settings.FileName)
+	if err := os.WriteFile(path, []byte(`{"clipboardHistory":false,"clipboardLimit":100,"excludedApps":["com.example.Blocked"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := settings.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &shelf{store: mustStore(t), dataDir: dir, settings: prefs}
+	a.applyClipboardHistory()
+	if a.clip == nil {
+		t.Fatal("the legacy false setting prevented clipboard recording from starting")
+	}
+	board := &copyEventReader{serial: a.clip.count, app: "com.example.Source"}
+	a.clip.board = board
+	copyNow := func() {
+		board.serial++
+		a.clip.tick(time.Now())
+	}
+	board.formats, board.value = []string{"public.utf8-plain-text"}, "Captured despite the legacy false setting"
+	copyNow()
+	if !slices.ContainsFunc(a.store.Items, func(it store.Item) bool { return it.Text == board.value && it.SourceApp == board.app }) {
+		t.Fatal("a new text copy was not recorded")
+	}
+	board.formats, board.png = []string{"public.png"}, testPNGBytes(t)
+	copyNow()
+	if !slices.ContainsFunc(a.store.Items, func(it store.Item) bool { return it.Kind == store.KindImage && it.SourceApp == board.app }) {
+		t.Fatal("a new clipboard image was not recorded")
+	}
+	board.formats, board.value = []string{"org.nspasteboard.ConcealedType", "public.utf8-plain-text"}, "private fixture"
+	copyNow()
+	board.formats, board.app = []string{"public.utf8-plain-text"}, "com.example.Blocked"
+	copyNow()
+	if len(a.store.Items) != 2 {
+		t.Fatal("private or excluded-app copies were recorded")
+	}
+	if err := settings.Save(dir, a.settings); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := saved["clipboardHistory"]; exists {
+		t.Fatal("saving settings retained the obsolete clipboardHistory key")
+	}
+	again, err := settings.Load(dir)
+	if err != nil || again.ClipboardLimit != 100 || !slices.Equal(again.ExcludedApps, []string{"com.example.Blocked"}) {
+		t.Fatalf("saving dropped retained clipboard preferences: %+v, %v", again, err)
 	}
 }

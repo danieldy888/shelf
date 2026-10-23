@@ -33,9 +33,6 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.ClipboardHistory {
-		t.Fatal("missing clipboardHistory turned clipboard history off")
-	}
 	if s.ClipboardLimit != 30 {
 		t.Fatalf("missing clipboardLimit = %d, want 30", s.ClipboardLimit)
 	}
@@ -63,22 +60,8 @@ func TestNowPlayingToggleAndLegacyIslandKeysLoad(t *testing.T) {
 	if s.IslandNowPlaying {
 		t.Fatal("islandNowPlaying: false was ignored")
 	}
-	if !s.ClipboardHistory || !s.AutoCheckUpdates {
+	if !s.AutoCheckUpdates {
 		t.Fatalf("unrelated keys must keep their defaults: %+v", s)
-	}
-}
-
-func TestExplicitValueIsHonoured(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.ClipboardHistory {
-		t.Fatal("clipboardHistory: false was ignored")
 	}
 }
 
@@ -87,7 +70,7 @@ func TestExplicitValueIsHonoured(t *testing.T) {
 // explicit false is honoured.
 func TestAutoCheckUpdatesLoad(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Load(dir)
@@ -109,7 +92,7 @@ func TestAutoCheckUpdatesLoad(t *testing.T) {
 // their missing keys too, and an explicit enabled is honoured.
 func TestAIUsageLoad(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Load(dir)
@@ -139,7 +122,7 @@ func TestAIUsageLoad(t *testing.T) {
 
 func TestSaveRoundTrips(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{ClipboardHistory: false, RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}
+	want := Settings{RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +154,7 @@ func TestNonPositiveClipboardLimitLoadsAsDefault(t *testing.T) {
 func TestInvalidFileIsNeverRewritten(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
-	bad := []byte(`{"clipboardHistory": fals`)
+	bad := []byte(`{"clipboardLimit": invalid`)
 	if err := os.WriteFile(path, bad, 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -194,10 +194,7 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	a := p.host
 	list := p.items()
 	if len(list) == 0 {
-		hint := "文件、文件夹、文字和图片"
-		if a.settings.ClipboardHistory {
-			hint += "\n复制的文字与截图也会自动收好"
-		}
+		hint := "文件、文件夹、文字和图片\n复制的文字与截图也会自动收好"
 		return a.emptyState(c, shelfSymbol, "把文件拖到这里", hint)
 	}
 	rows := (len(list) + gridCols - 1) / gridCols
@@ -300,11 +297,8 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 		list := p.items()
 		if len(list) == 0 {
 			icon, title, hint := textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
-			switch {
-			case a.search != "":
+			if a.search != "" {
 				icon, title, hint = searchSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
-			case !a.settings.ClipboardHistory:
-				icon, title, hint = textSymbol, "剪贴板记录已关闭", "在设置里打开「记录复制的内容」"
 			}
 			a.emptyState(c, icon, title, hint)
 			return

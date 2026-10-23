@@ -17,8 +17,6 @@ const FileName = "settings.json"
 // Settings are the user-adjustable preferences. Every field must have its
 // default in Default: a key missing from the file keeps that default.
 type Settings struct {
-	// ClipboardHistory records copied text and images into the shelf.
-	ClipboardHistory bool `json:"clipboardHistory"`
 	// RetentionDays removes items older than this many days; 0 or less
 	// keeps everything.
 	RetentionDays int `json:"retentionDays"`
@@ -61,7 +59,6 @@ const defaultClipboardLimit = 30
 // Default is what a fresh install uses.
 func Default() Settings {
 	return Settings{
-		ClipboardHistory: true,
 		ClipboardLimit:   defaultClipboardLimit,
 		IslandNowPlaying: true,
 		AutoCheckUpdates: true,

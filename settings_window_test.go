@@ -167,29 +167,10 @@ func TestChoiceSegments(t *testing.T) {
 func TestSettingsViewShowsSections(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	_, view := newSettingsShelf(t)
-	for _, s := range []string{"通用", "剪贴板", "托盘", "快捷键", "开机时自动启动", "自动检查更新", "刘海拖放保护", "记录复制的内容", "保留条数", "排除的应用", "自动清理旧内容", "刘海显示正在播放", "显示 / 收起", "剪贴板搜索", "打开数据文件夹"} {
+	for _, s := range []string{"通用", "剪贴板", "托盘", "快捷键", "开机时自动启动", "自动检查更新", "刘海拖放保护", "保留条数", "排除的应用", "自动清理旧内容", "刘海显示正在播放", "显示 / 收起", "剪贴板搜索", "打开数据文件夹"} {
 		if !view.HasText(s) {
 			t.Fatalf("settings view missing %q; texts=%v", s, view.Texts())
 		}
-	}
-}
-
-func TestSettingsViewToggleAppliesAndSaves(t *testing.T) {
-	stubSettingsSeams(t, false, nil, nil)
-	a, view := newSettingsShelf(t)
-	clickVisible(t, view, "记录复制的内容")
-	if a.settings.ClipboardHistory {
-		t.Fatal("toggle did not flip the running setting")
-	}
-	saved, err := settings.Load(a.dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.ClipboardHistory {
-		t.Fatal("settings.json was not updated by the window toggle")
-	}
-	if a.clip != nil {
-		t.Fatal("turning recording off must stop the clipboard module")
 	}
 }
 
@@ -264,10 +245,10 @@ func TestSettingsViewBrokenDisablesEditing(t *testing.T) {
 		t.Fatalf("broken banner missing; texts=%v", view.Texts())
 	}
 	// Clicks on disabled controls must change nothing and write nothing.
-	clickVisible(t, view, "记录复制的内容")
+	clickVisible(t, view, "刘海显示正在播放")
 	clickVisible(t, view, "100")
 	clickVisible(t, view, "移除 com.example.One")
-	if !a.settings.ClipboardHistory || a.settings.ClipboardLimit != 30 || len(a.settings.ExcludedApps) != 1 {
+	if !a.settings.IslandNowPlaying || a.settings.ClipboardLimit != 30 || len(a.settings.ExcludedApps) != 1 {
 		t.Fatalf("broken settings were mutated: %+v", a.settings)
 	}
 	if _, err := os.Stat(filepath.Join(dir, settings.FileName)); !errors.Is(err, os.ErrNotExist) {
@@ -398,8 +379,7 @@ func TestSettingsKeyboardExit(t *testing.T) {
 	}
 }
 
-// One settings row per control: the switch and the segmented controls carry
-// accessible names, the switch the same name as its row.
+// Segmented settings controls carry the same accessible name as their row.
 func TestSettingsViewControlLabels(t *testing.T) {
 	stubSettingsSeams(t, false, nil, nil)
 	a, _ := newSettingsShelf(t)
@@ -411,9 +391,6 @@ func TestSettingsViewControlLabels(t *testing.T) {
 			}
 		}
 		return n
-	}
-	if n := find("记录复制的内容"); n < 2 {
-		t.Fatalf("row label and switch must both carry the name, got %d", n)
 	}
 	for _, name := range []string{"保留条数", "自动清理旧内容"} {
 		if n := find(name); n < 2 {

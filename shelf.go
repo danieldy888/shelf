@@ -48,7 +48,7 @@ type shelf struct {
 	np                                                          *nowPlayingModule     // the peek player reads its state
 	conv                                                        *converter            // image conversion jobs; nil until the app starts
 	usage                                                       *usageFeature         // nil until the AI usage page registers itself
-	clip                                                        *clipboardModule      // nil while clipboard history is off
+	clip                                                        *clipboardModule      // nil until monitoring starts
 	awake                                                       *awakeModule          // nil until the app starts
 	pages                                                       []panelPage           // registered pages in ear order (built-ins first)
 	pagesReady                                                  bool                  // built-in pages have been registered
@@ -394,45 +394,14 @@ func (a *shelf) applySettings(next settings.Settings) bool {
 	return true
 }
 
-// setClipboardHistory saves the clipboardHistory setting and starts or
-// stops the clipboard module at once, without a restart. Disabled while
-// settings.json could not be read, so a broken file is never overwritten.
-func (a *shelf) setClipboardHistory(on bool) {
-	if a.settings.ClipboardHistory == on {
-		return
-	}
-	next := a.settings
-	next.ClipboardHistory = on
-	if !a.applySettings(next) {
-		return
-	}
-	a.applyClipboardHistory()
-}
-
-// applyClipboardHistory makes the running modules match the setting: the
-// clipboard module records while clipboardHistory is on, and stops (its
-// poll simply no longer runs) while it is off. Called on the main thread
-// from setClipboardHistory and ready.
+// applyClipboardHistory starts the recorder once for this session. Recording
+// is always enabled; settings still control retention and excluded apps.
 func (a *shelf) applyClipboardHistory() {
-	if a.settings.ClipboardHistory {
-		if a.clip == nil {
-			a.clip = newClipboardModule(a)
-			a.modules = append(a.modules, a.clip)
-		}
+	if a.clip != nil {
 		return
 	}
-	if a.clip == nil {
-		return
-	}
-	rest := a.modules[:0]
-	for _, m := range a.modules {
-		if m == module(a.clip) {
-			continue
-		}
-		rest = append(rest, m)
-	}
-	a.modules = rest
-	a.clip = nil
+	a.clip = newClipboardModule(a)
+	a.modules = append(a.modules, a.clip)
 }
 
 // setClipboardLimit saves the new clipboard text limit and applies it to

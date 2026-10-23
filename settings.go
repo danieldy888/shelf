@@ -405,12 +405,10 @@ func (a *shelf) applyOpenAtLogin(on bool) {
 	a.repaintSettings()
 }
 
-// settingsClipboardSection: 记录复制的内容, the 保留条数 segments and the
-// 排除的应用 list, all through the same setters the tray menu uses.
+// settingsClipboardSection contains the retained count and excluded apps,
+// through the same setters the tray menu uses. Recording is always enabled.
 func (a *shelf) settingsClipboardSection(c *ui.Context) {
 	settingsSection(c, "剪贴板", "", a.settingsBroken, func() {
-		settingsToggle(c, "clip", "记录复制的内容", a.settings.ClipboardHistory, a.setClipboardHistory)
-		settingsSep(c, "clip")
 		limit := a.settings.ClipboardLimit
 		if limit < 1 {
 			limit = settings.Default().ClipboardLimit
