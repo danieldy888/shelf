@@ -85,6 +85,7 @@ type pinItem struct {
 	edge      pinEdge
 	always    bool // always expanded; the hide delay never collapses it
 	expanded  bool // valid only while edge != pinFree
+	cy        int  // the collapsed strip's centre-Y while docked — the slot it returns to
 	frame     mygo.Rectangle
 	leftAt    time.Time
 	dropAt    time.Time // accent border lingers this long after a drop
@@ -201,7 +202,8 @@ func (a *shelf) pinReturnZone(centre mygo.Point) bool {
 // pinStripGap apart, top to bottom, holding the column inside the work
 // area — strips that would overhang pull back up; a column taller than
 // the area squeezes instead. Expanded cards keep their frame: the
-// overlap is theirs while the pointer is on them.
+// overlap is theirs while the pointer is on them. The pass also refreshes
+// each strip's dock slot (cy).
 func pinStagger(pins []*pinItem) {
 	type edgeKey struct {
 		disp int64
@@ -261,6 +263,9 @@ func pinStagger(pins []*pinItem) {
 				}
 			}
 		}
+		for _, it := range g {
+			it.cy = it.frame.Y + pinStripH/2
+		}
 	}
 }
 
@@ -308,6 +313,9 @@ func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, alw
 		// A display that shrank since the file was written still gets a
 		// visible pin: the frame clamps back into its work area.
 		frame: pinClamp(frame, pinArea(display)),
+	}
+	if edge != pinFree {
+		it.cy = it.frame.Y + pinStripH/2
 	}
 	a.pins = append(a.pins, it)
 	pinStagger(a.pins)
@@ -406,6 +414,7 @@ func (a *shelf) pinDisplaysChanged() {
 		area := it.displayRect()
 		if it.edge != pinFree {
 			it.frame = pinStripFrame(it.edge, area, it.frame.Y+it.frame.Height/2)
+			it.cy = it.frame.Y + pinStripH/2
 		} else {
 			it.frame = pinClamp(it.frame, area)
 		}
@@ -471,7 +480,10 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 		if it.always {
 			if !it.expanded {
 				it.expanded = true
-				it.frame = pinExpandFrame(it.edge, area, it.cardW, it.frame.Y+pinStripH/2)
+				if it.cy == 0 {
+					it.cy = it.frame.Y + pinStripH/2
+				}
+				it.frame = pinExpandFrame(it.edge, area, it.cardW, it.cy)
 				it.applyFrame()
 				it.invalidate()
 			}
@@ -486,7 +498,15 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 			} else if now.Sub(it.leftAt) >= pinHideDelay {
 				it.expanded = false
 				it.leftAt = time.Time{}
-				it.frame = pinStripFrame(it.edge, area, it.frame.Y+pinCardH/2)
+				// The card returns to its own dock slot — it may have
+				// been clamped while open, so its centre is not the
+				// strip's. The edge's column then re-spaces.
+				cy := it.cy
+				if cy == 0 {
+					cy = it.frame.Y + pinCardH/2
+				}
+				it.frame = pinStripFrame(it.edge, area, cy)
+				it.cy = it.frame.Y + pinStripH/2
 				pinStagger(a.pins)
 				for _, other := range a.pins {
 					other.applyFrame()
@@ -496,7 +516,10 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 		} else if over {
 			it.expanded = true
 			it.leftAt = time.Time{}
-			it.frame = pinExpandFrame(it.edge, area, it.cardW, it.frame.Y+pinStripH/2)
+			if it.cy == 0 {
+				it.cy = it.frame.Y + pinStripH/2
+			}
+			it.frame = pinExpandFrame(it.edge, area, it.cardW, it.cy)
 			it.applyFrame()
 			it.invalidate()
 		}
@@ -535,12 +558,13 @@ func (a *shelf) pinRelease(it *pinItem, p mygo.Point, area mygo.Rectangle) {
 	if edge := pinReleaseEdge(p, area); edge != pinFree {
 		it.edge, it.expanded = edge, false
 		it.frame = pinStripFrame(edge, area, p.Y)
+		it.cy = it.frame.Y + pinStripH/2
 		pinStagger(a.pins)
 		for _, other := range a.pins {
 			other.applyFrame() // the stagger may move strips it did not release
 		}
 	} else {
-		it.edge, it.expanded = pinFree, true
+		it.edge, it.expanded, it.cy = pinFree, true, 0
 		it.frame = pinClamp(it.frame, area)
 	}
 	it.applyFrame()
@@ -607,9 +631,21 @@ func (a *shelf) savePins() {
 	pins := make([]layout.Pin, 0, len(a.pins))
 	for _, it := range a.pins {
 		area := it.displayRect()
+		f := it.frame
+		if it.edge != pinFree {
+			// A docked pin's stored rect is always its strip — the slot
+			// it collapses back to. An open card's frame is bigger and,
+			// clamped to the work area, not even centred on the strip;
+			// saving it would drift the pin every cycle.
+			cy := it.cy
+			if cy == 0 {
+				cy = f.Y + f.Height/2
+			}
+			f = pinStripFrame(it.edge, area, cy)
+		}
 		pins = append(pins, layout.Pin{
 			ID: it.cardID, Span: it.span, Display: pinDisplayID(it.display),
-			Edge: it.edge.layout(), X: it.frame.X - area.X, Y: it.frame.Y - area.Y,
+			Edge: it.edge.layout(), X: f.X - area.X, Y: f.Y - area.Y,
 			AlwaysOpen: it.always,
 		})
 	}
@@ -639,6 +675,9 @@ func (a *shelf) pinRestore() {
 			owner: a, cardID: p.ID, span: p.Span, cardW: w, homeIndex: -1,
 			display: disp, edge: edge, always: p.AlwaysOpen,
 			expanded: edge == pinFree, frame: frame,
+		}
+		if edge != pinFree {
+			it.cy = it.frame.Y + pinStripH/2
 		}
 		a.pins = append(a.pins, it)
 		pinOpenWindow(it)

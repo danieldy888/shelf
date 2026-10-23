@@ -785,3 +785,75 @@ func TestPinStaggerOverflowAndCollapse(t *testing.T) {
 		}
 	})
 }
+
+// TestPinSaveWritesStripFrame is review P6: an expanded docked pin saves
+// its collapsed strip rect, not the open card.
+func TestPinSaveWritesStripFrame(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	a := &shelf{dataDir: t.TempDir()}
+	a.setTools(layout.Default())
+	a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
+		edge: pinRight, expanded: true,
+		frame: mygo.Rectangle{X: pinTestArea.Width - pinCardW, Y: 400, Width: pinCardW, Height: pinCardH}})
+	a.savePins()
+	p := a.toolsLayout().Pins[0]
+	if p.X != pinTestArea.Width-pinStripW {
+		t.Fatalf("saved X=%d is the card's left edge, not the strip's", p.X)
+	}
+	wantY := 400 + pinCardH/2 - pinStripH/2 - pinTestArea.Y
+	if p.Y != wantY {
+		t.Fatalf("saved Y=%d want strip top %d", p.Y, wantY)
+	}
+}
+
+// TestPinSaveRestoreStable is review P6's drift: an always-expanded
+// docked pin is what gets saved while open, so save → restore → re-expand
+// must converge immediately and repeat identically — including clamped
+// at the work area's bottom edge, where the card's centre is not the
+// strip's.
+func TestPinSaveRestoreStable(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	old := pinOpenWindow
+	pinOpenWindow = func(*pinItem) {}
+	t.Cleanup(func() { pinOpenWindow = old })
+	a := &shelf{dataDir: dir}
+	a.setTools(layout.Default())
+	// The strip at the last legal slot: its expanded card clamps against
+	// the work area's bottom, the boundary case for centre math.
+	cy := pinTestArea.Y + pinTestArea.Height - pinStripH/2
+	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
+		edge: pinRight, always: true,
+		frame: pinStripFrame(pinRight, pinTestArea, cy)})
+	a.pinTick(time.Now(), mygo.Point{X: 1200, Y: 200}, false, false) // 始终展开 re-opens it
+	if !it.expanded {
+		t.Fatal("the always-open pin did not expand")
+	}
+	var prev layout.Pin
+	for cycle := 0; cycle < 3; cycle++ {
+		a.savePins()
+		got := a.toolsLayout().Pins[0]
+		if cycle > 0 && got != prev {
+			t.Fatalf("cycle %d drifted: %+v → %+v", cycle, prev, got)
+		}
+		prev = got
+		a.pins = nil
+		a.pinRestore()
+		if len(a.pins) != 1 {
+			t.Fatalf("restore lost the pin: %+v", a.pins)
+		}
+		it := a.pins[0]
+		if it.expanded || it.frame.Width != pinStripW {
+			t.Fatalf("a docked pin must restore as its strip: %+v", it.frame)
+		}
+		if it.frame.X != pinTestArea.X+pinTestArea.Width-pinStripW {
+			t.Fatalf("the restored strip is not flush to the right edge: %+v", it.frame)
+		}
+		// The next tick re-expands the always-open pin; that card is what
+		// the next quit's savePins would see.
+		a.pinTick(time.Now(), mygo.Point{X: 1200, Y: 200}, false, false)
+		if !it.expanded {
+			t.Fatal("the always-open pin did not re-expand after restore")
+		}
+	}
+}
