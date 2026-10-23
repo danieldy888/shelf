@@ -72,3 +72,22 @@ func TestPinReturnPillBeatsOtherContent(t *testing.T) {
 		})
 	}
 }
+
+func TestPinSuppressedDragStillWakes(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	a := motionShelf()
+	a.dispBounds = pinTestDisplays[0].Bounds
+	a.suppressed = true
+	it := a.pinRegister(&pinItem{cardID: "zip", cardW: pinCardW, display: 1, edge: pinRight,
+		frame: pinStripFrame(pinRight, pinTestArea, 400)})
+	p := mygo.Point{X: 1470, Y: 400}
+	pinReviewDrag(t, a, &p, true)
+	a.monitorDrag(time.Now())
+	if !it.expanded || a.visible || !a.suppressed {
+		t.Fatalf("suppressed drag: expanded=%v visible=%v suppressed=%v", it.expanded, a.visible, a.suppressed)
+	}
+	a.monitorDrag(time.Now().Add(2 * pinHideDelay))
+	if !it.expanded || !it.leftAt.IsZero() {
+		t.Fatal("file drag near the pin did not hold it open")
+	}
+}

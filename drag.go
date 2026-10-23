@@ -222,8 +222,11 @@ func (a *shelf) monitorDrag(now time.Time) {
 	}
 	overNotch := a.overNotch(p)
 	a.updateDragBand(p, active)
-	// Resolve pin return before deciding whether the peek can fold.
-	a.pinTick(now, p, dragLeftDown(), summonable)
+	// pinTick runs before the peek logic below so holdPeek and the fold
+	// both see the pinReturning this tick computed; its fileDrag flag is
+	// the summonable drag minus the panel-suppression — a drag the user
+	// cancelled on the panel still wakes the desktop strips.
+	a.pinTick(now, p, dragLeftDown(), active && !a.ownDrag && dragSummonsBasket(dragTypes()))
 	// The pointer inside the notch drop band grows 「松开放入」 and takes
 	// the drop; outside it the shell only shows the narrow hint.
 	// The peek player extends below the notch (and wider than it): the
