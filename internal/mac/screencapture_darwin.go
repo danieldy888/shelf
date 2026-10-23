@@ -23,12 +23,14 @@ var (
 	cgRequestScreenCaptureAccess   func() bool
 )
 
-// tccutilResetDone limits the stale-record reset to the first request per
-// process: CGPreflightScreenCaptureAccess caches its answer for the
-// process's lifetime, so a user can grant in System Settings and press
-// 「打开系统设置」 again in the same run — a second reset would wipe the
-// grant it was meant to repair. tccutilReset and openURL are seams for
-// the tests, which must never spawn either.
+// tccutilResetDone limits the stale-record reset to the first failed
+// preflight per process. It runs there — while the permission sheet is
+// drawn, before the user can grant — because CGPreflightScreenCaptureAccess
+// caches its answer for the process's lifetime: a user who grants in
+// System Settings and then presses 「打开系统设置」 still reads false, so a
+// reset on that click would wipe the grant it was meant to repair.
+// tccutilReset and openURL are seams for the tests, which must never
+// spawn either.
 var (
 	tccutilResetDone atomic.Bool
 	tccutilReset     = func(id string) { _ = exec.Command("/usr/bin/tccutil", "reset", "ScreenCapture", id).Run() }
@@ -37,8 +39,11 @@ var (
 )
 
 // ScreenCaptureAllowed reports whether this process may capture the
-// screen right now. It never prompts. Note macOS caches the answer for
-// the lifetime of the process: a grant made while the app is running can
+// screen right now. It never prompts. The first false answer clears any
+// stale record of this app — one that grants nothing to the current
+// build and suppresses the system prompt — once per process, before any
+// grant could exist to lose. Note macOS caches the answer for the
+// lifetime of the process: a grant made while the app is running can
 // keep answering false until the next launch.
 func ScreenCaptureAllowed() bool {
 	if err := Init(); err != nil {
@@ -48,27 +53,31 @@ func ScreenCaptureAllowed() bool {
 		purego.RegisterLibFunc(&cgPreflightScreenCaptureAccess, libCG, "CGPreflightScreenCaptureAccess")
 		purego.RegisterLibFunc(&cgRequestScreenCaptureAccess, libCG, "CGRequestScreenCaptureAccess")
 	})
-	return cgPreflightScreenCaptureAccess()
-}
-
-// RequestScreenCapture is the user-initiated path to grant the
-// permission: any stale record of this app is cleared first (it grants
-// nothing to the current build and suppresses the system prompt), macOS
-// is then asked to prompt or register the app, and System Settings is
-// opened on the 屏幕录制 pane. It reports whether the permission was
-// already active; an already-trusted call leaves the settings page alone.
-func RequestScreenCapture() bool {
-	if ScreenCaptureAllowed() {
+	if cgPreflightScreenCaptureAccess() {
 		return true
-	}
-	if cgRequestScreenCaptureAccess == nil {
-		return false // Init failed; preflight could not have passed either
 	}
 	if tccutilResetDone.CompareAndSwap(false, true) {
 		if id := requestBundleID(); id != "" {
 			// Fails harmlessly when there is no record yet (first grant).
 			tccutilReset(id)
 		}
+	}
+	return false
+}
+
+// RequestScreenCapture is the user-initiated path to grant the
+// permission: macOS is asked to prompt or register the app, and System
+// Settings is opened on the 屏幕录制 pane. The stale-record reset lives
+// with the failed preflight (ScreenCaptureAllowed), so this call never
+// wipes a grant the user just made. It reports whether the permission
+// was already active; an already-trusted call leaves the settings page
+// alone.
+func RequestScreenCapture() bool {
+	if ScreenCaptureAllowed() {
+		return true
+	}
+	if cgRequestScreenCaptureAccess == nil {
+		return false // Init failed; preflight could not have passed either
 	}
 	ok := cgRequestScreenCaptureAccess()
 	// The request adds the app to the list and (never-asked builds) asks;
