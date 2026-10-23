@@ -567,8 +567,11 @@ func (p *toolsPage) toolCardDrop(d *toolPress) {
 	d.settleX, d.settleY = target.x, target.y
 }
 
-// toolSettle animates the released card from the pointer to its cell;
-// Arrived clears the press so the parked copy hands input back.
+// toolSettle animates the released card from the pointer to its cell.
+// The press clears once the flight rests: Settled, not Arrived — Arrived
+// reports only the frame a moving value comes to rest, so a flight that
+// starts at its goal (an edit drag released back where it began, index
+// unchanged) never moves and never arrives, and the press would stick.
 func (p *toolsPage) toolSettle(card ui.Element, d *toolPress) {
 	if !d.settleJump {
 		card.Jump("cx", d.px-d.grabDX)
@@ -581,7 +584,7 @@ func (p *toolsPage) toolSettle(card ui.Element, d *toolPress) {
 	sc := card.AnimateTo("sc", 1, ui.Animation{Spring: ui.SpringOptions{Duration: toolSettleAnim, Bounce: 0.12}})
 	card.Left(cx).Top(cy).Scale(sc, sc).TransformOrigin(0.5, 0.5)
 	d.cardX, d.cardY = cx, cy
-	if card.Arrived("cx") || card.Arrived("cy") {
+	if card.Settled("cx") && card.Settled("cy") && card.Settled("sc") {
 		p.press = nil
 	}
 }

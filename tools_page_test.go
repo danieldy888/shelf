@@ -351,3 +351,49 @@ func TestToolsEscapeInPickerClosesPickerOnly(t *testing.T) {
 		t.Fatal("Esc hid the panel")
 	}
 }
+
+// A settle whose flight starts where it ends (an edit-mode drag released
+// back at the press position, insertion unchanged) must still end the
+// press: Arrived only reports the frame a moving value comes to rest, so
+// a flight that never moves never arrives and the press sticks — every
+// later card press is refused.
+func TestToolsSettleEndsWhenFlightNeverMoves(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s, tab: pageTools, visible: true, dataDir: t.TempDir()}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view.SetPreferences(ui.Preferences{ReduceMotion: true})
+	r, ok := view.Find("打成 zip")
+	if !ok {
+		t.Fatal("zip card missing")
+	}
+	x, y := r.X+20, r.Y+20
+	view.Press(x, y)
+	view.Advance(toolLongPress + 80*time.Millisecond)
+	p := a.toolsPage()
+	if !p.editing {
+		t.Fatal("long press did not enter edit")
+	}
+	view.Move(x+10, y)
+	view.Release(x, y) // released back at the press point: the flight starts at its goal
+	// The flight rests at once (it starts where it ends) or within the
+	// animation; either way the press must be gone after it.
+	view.Advance(2 * time.Second)
+	if p.press != nil {
+		t.Fatalf("a settle that starts at its goal never ended: %+v", *p.press)
+	}
+	// The handback works: another card starts its own drag.
+	next, ok := view.Find("压缩到 1 MB")
+	if !ok {
+		t.Fatal("second card missing")
+	}
+	view.Press(next.X+20, next.Y+20)
+	view.Move(next.X+40, next.Y+20)
+	if p.press == nil || p.press.id != "fit1m" {
+		t.Fatalf("the next card could not start its own drag: %+v", p.press)
+	}
+	view.Release(next.X+40, next.Y+20)
+}
