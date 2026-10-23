@@ -570,3 +570,40 @@ func TestToolsExactFitGridDoesNotScroll(t *testing.T) {
 		t.Fatalf("an exact-fit grid has false overflow and edge fading: MaxY=%.1f", p.scroll.MaxY)
 	}
 }
+
+func TestToolsEditBadgeIsVisibleAndClickableAtGridEdges(t *testing.T) {
+	for _, edge := range []string{"top", "left"} {
+		t.Run(edge, func(t *testing.T) {
+			a := &shelf{tab: pageTools, visible: true, store: mustStore(t)}
+			view := ui.NewTester(a.view, panelWidth, panelHeight)
+			view.SetPreferences(ui.Preferences{ReduceMotion: true})
+			p := a.toolsPage()
+			p.editing = true
+			view.Frame()
+			r, ok := view.Find("移除")
+			if !ok {
+				t.Fatal("first card has no remove badge")
+			}
+			// Tester labels report the visible intersection, so a clipped
+			// badge can still be found. The whole 18pt circle must remain.
+			if r.W != 18 || r.H != 18 {
+				t.Errorf("remove badge lost part of its circle: visible=%+v", r)
+			}
+			v := p.viewport
+			if r.X < v.X || r.Y < v.Y || r.X+r.W > v.X+v.W || r.Y+r.H > v.Y+v.H {
+				t.Errorf("remove badge is clipped: badge=%+v viewport=%+v", r, v)
+			}
+			x, y := r.X+r.W/2, r.Y+2
+			if edge == "left" {
+				x, y = r.X+2, r.Y+r.H/2
+			}
+			view.ClickAt(x, y)
+			if slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "ocr" }) {
+				t.Errorf("the %s edge of the first badge cannot remove its card", edge)
+			}
+			if p.press != nil {
+				t.Fatal("the remove badge also started a card press")
+			}
+		})
+	}
+}

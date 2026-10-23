@@ -610,9 +610,9 @@ func (p *toolsPage) toolSettle(card ui.Element, d *toolPress) {
 func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell, live bool) {
 	a := p.host
 	card.Children(func() {
-		// ⊖: 18pt #3A3A3C circle ringed 1.5pt black with a white dash
-		// (design §2 .minus), sticking out 6pt at the top-left.
-		badge := ui.Row(c.Key("minus")).Absolute().Top(-6).Left(-6).Size(18, 18).Radius(9).
+		// Keep the full 18pt circle inside the card, with enough inset
+		// for its edit wobble, without moving the grid or its hit space.
+		badge := ui.Row(c.Key("minus")).Absolute().Top(2).Left(2).Size(18, 18).Radius(9).
 			Background(ui.Hex("#3A3A3C")).Border(1.5, ui.Hex("#000000")).
 			Center().Label("移除")
 		if live {
