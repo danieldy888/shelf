@@ -136,6 +136,15 @@ func (a *shelf) finishScreenOCR(timer *time.Timer, text string, produced bool, e
 // finishScreenOCR's wording. A file that fails is skipped; a batch with
 // nothing recognized reports the last error.
 func (a *shelf) copyDroppedText(paths []string) {
+	if a.ocrScan {
+		// One round at a time, same as startScreenOCR: a drop landing
+		// while a capture (or an earlier batch) is still recognizing
+		// must not start a second round — the two would share ocrScan,
+		// so the first to finish would kill the other's progress
+		// capsule and re-arm a new box early.
+		a.toastProgress("正在识别，请稍候", time.Now().Add(3*time.Second))
+		return
+	}
 	a.ocrScan = true
 	a.ocrBusyAt = time.Now()
 	a.ocrRunID++

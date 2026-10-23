@@ -323,3 +323,51 @@ func TestScreenOCRCleansTheShot(t *testing.T) {
 		t.Fatalf("shot file left behind: %v", err)
 	}
 }
+
+// 框选进行中把图片拖到「框选文字」卡：不开第二轮、不把进行中的
+// 标志提前清掉。旧代码里两轮共用 ocrScan，先结束的那轮清旗后另一轮
+// 仍在跑——进度胶囊提前消失、下一轮框选也提前放闸。
+func TestCopyDroppedTextDuringScanIsRefused(t *testing.T) {
+	ocrSeams(t)
+	ocrPreflight = func() bool { return true }
+	var workers, dispatched []func()
+	ocrWork = func(fn func()) { workers = append(workers, fn) }
+	ocrDispatch = func(fn func()) { dispatched = append(dispatched, fn) }
+	ocrCapture = func(path string) error {
+		writePixelPNG(t, path)
+		return nil
+	}
+	ocrRecognize = func(string) ([]string, error) { return []string{"字"}, nil }
+	a := &shelf{write: recordClipFunc(func(string) error { return nil })}
+	drain := func() {
+		for _, fn := range dispatched {
+			fn()
+		}
+		dispatched = dispatched[:0]
+	}
+	a.startScreenOCR() // 第一轮框选：worker 被扣住，ocrScan 挂起
+	drain()
+	if a.ocrRunID != 1 || len(workers) != 1 || !a.ocrScan {
+		t.Fatalf("first round did not arm: runID=%d workers=%d scan=%v", a.ocrRunID, len(workers), a.ocrScan)
+	}
+	a.copyDroppedText([]string{"/tmp/drop.png"})
+	if len(workers) != 1 || a.ocrRunID != 1 {
+		t.Fatalf("a dropped image started a second round: workers=%d runID=%d", len(workers), a.ocrRunID)
+	}
+	if !a.ocrScan {
+		t.Fatal("the in-flight round lost its busy flag")
+	}
+	if a.status != "正在识别，请稍候" {
+		t.Fatalf("refused drop gave %q, want the busy hint", a.status)
+	}
+	// 放行第一轮：旧代码下被拖入起出的第二个 worker 此时仍排队，
+	// finishScreenOCR 会把标志清掉而留下一个在跑的轮次。
+	workers[0]()
+	drain()
+	if len(workers) != 1 {
+		t.Fatalf("refused drop still queued a worker: %d", len(workers))
+	}
+	if a.ocrScan {
+		t.Fatal("the one round that ran could not finish")
+	}
+}
