@@ -11,6 +11,7 @@ package mac
 import (
 	"os/exec"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ebitengine/purego"
 )
@@ -20,6 +21,19 @@ var preflightOnce sync.Once
 var (
 	cgPreflightScreenCaptureAccess func() bool
 	cgRequestScreenCaptureAccess   func() bool
+)
+
+// tccutilResetDone limits the stale-record reset to the first request per
+// process: CGPreflightScreenCaptureAccess caches its answer for the
+// process's lifetime, so a user can grant in System Settings and press
+// 「打开系统设置」 again in the same run — a second reset would wipe the
+// grant it was meant to repair. tccutilReset and openURL are seams for
+// the tests, which must never spawn either.
+var (
+	tccutilResetDone atomic.Bool
+	tccutilReset     = func(id string) { _ = exec.Command("/usr/bin/tccutil", "reset", "ScreenCapture", id).Run() }
+	openURL          = func(url string) { _ = exec.Command("/usr/bin/open", url).Start() }
+	requestBundleID  = bundleIdentifier
 )
 
 // ScreenCaptureAllowed reports whether this process may capture the
@@ -50,14 +64,16 @@ func RequestScreenCapture() bool {
 	if cgRequestScreenCaptureAccess == nil {
 		return false // Init failed; preflight could not have passed either
 	}
-	if id := bundleIdentifier(); id != "" {
-		// Fails harmlessly when there is no record yet (first grant).
-		_ = exec.Command("/usr/bin/tccutil", "reset", "ScreenCapture", id).Run()
+	if tccutilResetDone.CompareAndSwap(false, true) {
+		if id := requestBundleID(); id != "" {
+			// Fails harmlessly when there is no record yet (first grant).
+			tccutilReset(id)
+		}
 	}
 	ok := cgRequestScreenCaptureAccess()
 	// The request adds the app to the list and (never-asked builds) asks;
 	// a build that was denied before is not re-prompted, so the pane is
 	// opened either way and the user flips the switch there.
-	_ = exec.Command("/usr/bin/open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture").Start()
+	openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 	return ok
 }

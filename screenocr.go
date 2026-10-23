@@ -154,10 +154,10 @@ func (a *shelf) ocrSheetStage(c *ui.Context) {
 		ui.Column(c.Key("txt")).Grow(1).MinWidth(0).Children(func() {
 			ui.Text(c, "框选文字需要「屏幕录制」权限").FontSize(13).FontWeight(600).TextColor(ink)
 			ui.Text(c, "只在你框选的那一下截取所选区域，识别在本机完成，不保存截图、不联网。").
-				FontSize(11).TextColor(ink2).Margin(0, 0, 4, 0)
+				FontSize(11).TextColor(ink2).Margin(4, 0, 0, 0)
 			ui.Text(c, "在「系统设置」里打开 Shelf 的开关后，需要退出并重新打开 Shelf 才会生效；每次更新也要重新授权一次。再点「框选文字」即可。").
-				FontSize(11).TextColor(ink3)
-			ui.Row(c.Key("acts")).Gap(8).Margin(0, 0, 10, 0).Children(func() {
+				FontSize(11).TextColor(ink3).Margin(4, 0, 0, 0)
+			ui.Row(c.Key("acts")).Gap(8).Margin(10, 0, 0, 0).Children(func() {
 				primary := ui.ButtonBase(c.Key("grant")).Height(24).Radius(12).Padding(0, 10, 0, 10).
 					Background(accent).Center().Label("打开系统设置")
 				primary.Children(func() {
