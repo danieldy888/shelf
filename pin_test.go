@@ -282,6 +282,18 @@ func TestPinUnpinSemantics(t *testing.T) {
 	if l := a.toolsLayout(); len(l.Cards) != 2 || l.Cards[0].ID != "zip" {
 		t.Fatalf("home slot insert wrong: %+v", l.Cards)
 	}
+	// A pin restored from layout.json has no remembered slot: 放回刘海
+	// appends it, it does not jump to the front.
+	a.setTools(layout.Layout{Cards: []layout.Card{{ID: "awake", Span: 1}}})
+	it4 := a.pinRegister(&pinItem{
+		cardID: "resize", cardW: pinCardW, display: 1, homeIndex: -1,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH},
+	})
+	a.mutateTools(func(l *layout.Layout) { l.Pins = []layout.Pin{{ID: "resize", Span: 1}} })
+	a.unpin(it4, true)
+	if l := a.toolsLayout(); len(l.Cards) != 2 || l.Cards[1].ID != "resize" {
+		t.Fatalf("a restored pin did not append at the end: %+v", l.Cards)
+	}
 }
 
 func TestPinDisplaysChanged(t *testing.T) {

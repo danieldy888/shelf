@@ -332,7 +332,15 @@ func (a *shelf) unpin(it *pinItem, putBack bool) {
 			break
 		}
 	}
-	a.mutateTools(func(l *layout.Layout) { l.RemovePin(it.cardID, putBack, it.homeIndex) })
+	a.mutateTools(func(l *layout.Layout) {
+		// A pin restored from layout.json has no remembered slot (-1):
+		// 放回刘海 appends it to the page's end rather than the front.
+		before := it.homeIndex
+		if before < 0 {
+			before = len(l.Cards)
+		}
+		l.RemovePin(it.cardID, putBack, before)
+	})
 	w := it.win
 	it.win = nil
 	if w != nil {
