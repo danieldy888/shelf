@@ -490,9 +490,12 @@ func (p *toolsPage) toolCardTapped(id string) {
 		return
 	}
 	p.jiggleID, p.jiggleAt = id, time.Now()
+	a.toolCardTapFeedback()
+}
+
+// toolCardTapFeedback is shared by tools-page and desktop-card taps.
+func (a *shelf) toolCardTapFeedback() {
 	if a.conv != nil && a.conv.busy() {
-		// The card applied but the one-job converter is taken: same
-		// shake, the busy line instead of the empty-selection one.
 		a.toastStatus("一次只跑一个任务，请稍候", time.Now().Add(2*time.Second), statusInfo)
 		return
 	}

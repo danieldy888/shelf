@@ -196,7 +196,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	if serial != a.dragSerial {
 		a.dragSerial = serial
 		a.dragOpenTools = a.visible && a.tab == pageTools // 同 pointerDragged
-		a.suppressed, a.inBand = false, false // a new drag re-enters
+		a.suppressed, a.inBand = false, false             // a new drag re-enters
 	}
 	a.dragging = active
 	if !active {
