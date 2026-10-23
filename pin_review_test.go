@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"shelf/internal/layout"
 	"shelf/internal/mac"
 )
 
@@ -89,5 +90,26 @@ func TestPinSuppressedDragStillWakes(t *testing.T) {
 	a.monitorDrag(time.Now().Add(2 * pinHideDelay))
 	if !it.expanded || !it.leftAt.IsZero() {
 		t.Fatal("file drag near the pin did not hold it open")
+	}
+}
+
+func TestPinDragOutKeepsGridSpan(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	oldOpen, oldCursor := pinOpenWindow, cursorPoint
+	pinOpenWindow = func(*pinItem) {}
+	t.Cleanup(func() { pinOpenWindow, cursorPoint = oldOpen, oldCursor })
+	a := &shelf{dataDir: t.TempDir()}
+	a.mutateTools(func(l *layout.Layout) { l.Cards = []layout.Card{{ID: "awake", Span: 2}} })
+	p := &toolsPage{host: a, editing: true}
+	a.x, a.y, a.h = 400, 0, 600
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} }
+	p.toolCardDrop(&toolPress{id: "awake", dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200})
+	if len(a.pins) != 1 || a.pins[0].span != 2 || a.pins[0].cardW != pinCardW2 {
+		t.Fatalf("grid width lost: %+v", a.pins)
+	}
+	a.unpin(a.pins[0], true)
+	cards := a.toolsLayout().Cards
+	if len(cards) != 1 || cards[0].ID != "awake" || cards[0].Span != 2 {
+		t.Fatalf("return lost width: %+v", cards)
 	}
 }

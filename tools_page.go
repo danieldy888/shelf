@@ -534,9 +534,19 @@ func (p *toolsPage) toolCardDrop(d *toolPress) {
 		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
 		if !insideRect(cursor, panel) {
 			w := pinCardW
-			span := 1
-			if def := toolCardDefFor(d.id); def != nil {
-				span = def.span
+			// The grid's live span is authoritative — the user may have
+			// resized the card after the catalog default was read.
+			span := 0
+			for _, c := range a.toolsLayout().Cards {
+				if c.ID == d.id {
+					span = c.Span
+					break
+				}
+			}
+			if span == 0 {
+				if def := toolCardDefFor(d.id); def != nil {
+					span = def.span
+				}
 			}
 			if span == 2 {
 				w = pinCardW2
