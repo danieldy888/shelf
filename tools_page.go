@@ -119,16 +119,23 @@ func (a *shelf) toolsLayout() layout.Layout {
 	return *a.toolsLay
 }
 
-// mutateTools applies fn to the layout and saves it.
+// mutateTools applies fn to a copy of the layout and saves it. The
+// in-memory copy is replaced only after the write succeeds, so a failed
+// Write leaves both the file and the shown arrangement as they were; a
+// load that failed (toolsLayBroken) latches writes off entirely — the
+// page mutates for the session, the recoverable file stays put.
 func (a *shelf) mutateTools(fn func(*layout.Layout)) {
 	l := a.toolsLayout()
+	l.Cards = slices.Clone(l.Cards)
+	l.Pins = slices.Clone(l.Pins)
 	fn(&l)
-	a.toolsLay = &l
-	if a.dataDir != "" {
+	if a.dataDir != "" && !a.toolsLayBroken {
 		if err := layout.Write(a.dataDir, l); err != nil {
 			a.report(fmt.Errorf("tools layout: %w", err))
+			return // keep the pre-change layout and the file as they were
 		}
 	}
+	a.toolsLay = &l
 	if a.win != nil {
 		a.win.Invalidate()
 	}
