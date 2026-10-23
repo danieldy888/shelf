@@ -582,6 +582,15 @@ func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 			return
 		}
 	}
+	a.runDropActionFiles(act, files, data)
+}
+
+// runDropActionFiles is runDropAction with the file set decided by the
+// caller: the pin windows' drops never pass through a.drop.files (their
+// drag is its own), so they hand the paths over directly. A release whose
+// action cannot run — the pipeline is busy or the convert job fails to
+// start — still shelves the files rather than losing them.
+func (a *shelf) runDropActionFiles(act dropAction, files []string, data transfer.Data) {
 	if act.isOCRCopy {
 		// 识别文字并复制：产出是剪贴板，不进托盘，页面留在原地。
 		a.copyDroppedText(files)
@@ -596,10 +605,6 @@ func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 		}
 		return
 	}
-	if a.conv != nil && a.conv.busy() {
-		a.receive(data)
-		return
-	}
 	items := make([]store.Item, len(files))
 	for i, p := range files {
 		if abs, err := filepath.Abs(p); err == nil {
@@ -608,7 +613,12 @@ func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 		_, missing := os.Stat(p)
 		items[i] = store.Item{ID: "drop-" + p, Kind: store.KindFile, Path: p, Missing: missing != nil}
 	}
-	a.startConvert(items, act.target)
+	if !a.startConvert(items, act.target) {
+		// The pipeline refused — busy with a job, or its own already-
+		// reported failure — so the files go to the tray like a release
+		// on a cell that could not run, instead of vanishing on the drop.
+		a.receive(data)
+	}
 }
 
 // dropThumbs caches one thumbnail per dragged path for the tray row's

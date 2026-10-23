@@ -161,8 +161,11 @@ func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface, 
 	// with the accent treatment; the rest dim to 38% (design §1) and
 	// stay out of the drop's way, so a release falls through to the
 	// panel's plain 放入托盘 receive.
-	dragging := len(a.drop.files) > 0
-	class := a.drop.class
+	dragging := surf != cardDesktop && len(a.drop.files) > 0
+	class := classMixed
+	if dragging {
+		class = a.drop.class
+	}
 	accepts := dragging && def.accepts(class)
 	var hot bool
 	if surf != cardEdit && accepts {
@@ -190,7 +193,11 @@ func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface, 
 	if surf == cardEdit {
 		a.toolCardEditBody(c, card, def)
 	} else {
-		a.toolCardBody(c, card, def, class, spec.Span)
+		sub := ""
+		if dragging {
+			sub = a.toolCardSub(def, class)
+		}
+		a.toolCardBody(c, card, def, sub, spec.Span)
 	}
 	if accepts && surf != cardEdit {
 		if drop, ok := ui.DropData(card, dropCellOpts); ok {
@@ -218,12 +225,12 @@ func (a *shelf) toolCardEditBody(c *ui.Context, card ui.Element, def *toolCardDe
 // subtitle, widgets lay out per card. While files hover the panel the
 // action's subtitle becomes the dragged count (design §1: 副标题换成拖
 // 入的数量).
-func (a *shelf) toolCardBody(c *ui.Context, card ui.Element, def *toolCardDef, class dropClass, span int) {
+func (a *shelf) toolCardBody(c *ui.Context, card ui.Element, def *toolCardDef, sub string, span int) {
 	if def.kind == cardAction {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
 			ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-			if sub := a.toolCardSub(def, class); sub != "" {
+			if sub != "" {
 				ui.Text(c, sub).SingleLine().FontSize(10).TextColor(ink3)
 			}
 		})
@@ -295,11 +302,9 @@ func (a *shelf) toolCardDropAction(id string, paths []string) dropAction {
 	}
 }
 
-// runToolCardDrop executes a release on card id: the drop zone's own
-// runner on a cell shaped like the card's action — the dragged files it
-// sees are the panel's frozen drop.files, and the transfer data is the
-// fallback for the pin windows, which never saw a panel drag. B calls
-// this for its pins' drops exactly as the page does inside toolCard.
+// runToolCardDrop executes a release on a tools-page card using the
+// panel's frozen drop snapshot. Desktop pins receive their own transfer
+// data through pinReceive instead.
 func (a *shelf) runToolCardDrop(id string, data transfer.Data) {
 	def := toolCardDefFor(id)
 	if def == nil || def.kind != cardAction {

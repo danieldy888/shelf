@@ -38,8 +38,7 @@ func (it *pinItem) view(c *ui.Context) {
 		it.viewStrip(c)
 		return
 	}
-	// The card's own drop target lives inside toolCard; the zone takes
-	// whatever lands so a release on the pin never loses files.
+	// Desktop drops belong to this zone, not the tools-page snapshot.
 	opts := transfer.DropOptions{Formats: []transfer.Format{transfer.FileList, transfer.URIList, transfer.PNG, transfer.Text}, Operations: transfer.Copy}
 	zone := ui.Column(c.Key("pin")).Fill().Radius(18).Clip()
 	zone.Background(ui.Hex("#000000")).Border(0.5, pinEdgeColor)

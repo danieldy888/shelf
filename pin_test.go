@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/layout"
+	"shelf/internal/store"
 )
 
 var pinTestArea = mygo.Rectangle{X: 0, Y: 25, Width: 1512, Height: 920}
@@ -341,36 +342,6 @@ func TestPinLayoutRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPinReceiveActionAndFallback(t *testing.T) {
-	// Files the card accepts run its drop action; other drops take the
-	// tray intake so a release on a pin never loses files. runToolCardDrop
-	// needs the full converter; the seam check here is the class gate.
-	def := toolCardDefFor("toword")
-	if def == nil {
-		t.Skip("no catalog")
-	}
-	img := filepath.Join(t.TempDir(), "a.png")
-	if err := os.WriteFile(img, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !def.accepts(classifyDrop([]string{img})) {
-		t.Fatal("toword should accept an image drop")
-	}
-	// The tray fallback path: zip takes any class, tojpeg does not take
-	// archives — the gate chooses the intake.
-	a := &shelf{}
-	it := a.pinRegister(&pinItem{cardID: "tojpeg", cardW: pinCardW, display: 1,
-		frame: mygo.Rectangle{X: 0, Y: 0, Width: pinCardW, Height: pinCardH}})
-	zip := filepath.Join(t.TempDir(), "b.zip")
-	if err := os.WriteFile(zip, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_ = it
-	if def := toolCardDefFor("tojpeg"); def.accepts(classifyDrop([]string{zip})) {
-		t.Fatal("tojpeg must not accept archives; pinReceive would shelve instead")
-	}
-}
-
 // pinViewShelf is a headless shelf whose pin view builds in a Tester.
 func pinViewShelf(t *testing.T, cardID string, expanded bool) (*shelf, *pinItem, *ui.Tester) {
 	t.Helper()
@@ -491,6 +462,17 @@ func pinDiskPins(t *testing.T, dir string) []layout.Pin {
 	return l.Pins
 }
 
+// mustStore opens a throwaway tray store for the drop-fallback tests.
+func mustStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
 // TestPinQuitCloseKeepsPin is review P1: a window close while quitting is
 // the app closing, not a put-back — the live pin and its layout.json
 // entry survive, so the next launch restores it.
@@ -524,4 +506,97 @@ func TestPinQuitCloseKeepsPin(t *testing.T) {
 	if !slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "zip" }) {
 		t.Fatal("a real close did not return the card to the grid")
 	}
+}
+
+// TestPinDropUsesOnlyItsOwnFiles is review P2's class-match trap: the
+// cached panel-drag class happens to suit the card, so the pre-fix code
+// converted the previous drag's paths. The pin must act on the files its
+// own transfer carried.
+func TestPinDropUsesOnlyItsOwnFiles(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	stale := writeFile(t, dir, "stale.png", testPNGBytes(t))
+	fresh := writeFile(t, dir, "fresh.png", testPNGBytes(t))
+	a := &shelf{dataDir: dir}
+	a.store = mustStore(t)
+	a.conv = &converter{host: a}
+	f := fakeConverters(t)
+	// The leftover panel-drag snapshot: same class the card accepts.
+	a.drop.files, a.drop.class = []string{stale}, classImages
+	it := a.pinRegister(&pinItem{cardID: "topdf", cardW: pinCardW, display: 1, edge: pinFree,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	a.pinReceive(it, fileDrop(t, fresh))
+	if len(f.pdfSrcs) != 1 || len(f.pdfSrcs[0]) != 1 || f.pdfSrcs[0][0] != fresh {
+		t.Fatalf("the pin's drop ran on %v, not the file it carried", f.pdfSrcs)
+	}
+	if slices.ContainsFunc(a.store.Items, func(it store.Item) bool { return it.Path == stale || it.Path == fresh }) {
+		t.Fatal("the pin's drop shelved the source file")
+	}
+}
+
+// TestPinDropUnsupportedShelves is review P2's other half: the card does
+// not take this drop's class — even though the stale snapshot's class
+// would match — so the files land in the tray instead of vanishing.
+func TestPinDropUnsupportedShelves(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	stale := writeFile(t, dir, "stale.png", testPNGBytes(t))
+	fresh := writeFile(t, dir, "fresh.zip", []byte("PK\x03\x04fake"))
+	a := &shelf{dataDir: dir}
+	a.store = mustStore(t)
+	a.conv = &converter{host: a}
+	f := fakeConverters(t)
+	// The stale snapshot accepts what tojpeg wants; this drop does not.
+	a.drop.files, a.drop.class = []string{stale}, classImages
+	it := a.pinRegister(&pinItem{cardID: "tojpeg", cardW: pinCardW, display: 1, edge: pinFree,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	a.pinReceive(it, fileDrop(t, fresh))
+	if len(f.formats) != 0 {
+		t.Fatalf("an unsupported drop still converted: %v", f.formats)
+	}
+	if len(a.store.Items) != 1 || a.store.Items[0].Path != fresh {
+		t.Fatalf("the unsupported drop did not land in the tray: %+v", a.store.Items)
+	}
+}
+
+// TestPinDropUnstartableShelves covers the rest of review P2's contract:
+// when the action's pipeline cannot run — a job already in flight, or a
+// start that fails — the files still land in the tray.
+func TestPinDropUnstartableShelves(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	fresh := writeFile(t, dir, "fresh.png", testPNGBytes(t))
+	mkPin := func(a *shelf) *pinItem {
+		return a.pinRegister(&pinItem{cardID: "tojpeg", cardW: pinCardW, display: 1, edge: pinFree,
+			frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	}
+	t.Run("busy", func(t *testing.T) {
+		a := &shelf{dataDir: dir}
+		a.store = mustStore(t)
+		a.conv = &converter{host: a, job: &convertJob{target: toJPEG, started: time.Now()}}
+		f := fakeConverters(t)
+		a.pinReceive(mkPin(a), fileDrop(t, fresh))
+		if len(f.formats) != 0 {
+			t.Fatalf("a busy pipeline still converted: %v", f.formats)
+		}
+		if len(a.store.Items) != 1 || a.store.Items[0].Path != fresh {
+			t.Fatalf("the busy drop did not land in the tray: %+v", a.store.Items)
+		}
+	})
+	t.Run("start fails", func(t *testing.T) {
+		a := &shelf{dataDir: dir}
+		a.store = mustStore(t)
+		a.conv = &converter{host: a}
+		f := fakeConverters(t)
+		if err := os.RemoveAll(a.store.ConvertedDir()); err != nil {
+			t.Fatal(err)
+		}
+		a.pinReceive(mkPin(a), fileDrop(t, fresh))
+		if len(f.formats) != 0 {
+			t.Fatalf("a failed start still converted: %v", f.formats)
+		}
+		if len(a.store.Items) != 1 || a.store.Items[0].Path != fresh {
+			t.Fatalf("the unstartable drop did not land in the tray: %+v", a.store.Items)
+		}
+	})
 }

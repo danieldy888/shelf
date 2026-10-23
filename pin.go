@@ -527,15 +527,18 @@ func displayIDAt(p mygo.Point, keep int64) int64 {
 }
 
 // pinReceive is the drop on a pinned card: files the card accepts run
-// its action, anything else lands in the tray like a drop on the notch —
-// a release on a pin never loses the files. dropAt keeps the accent
-// border up a moment as the confirmation the notch capsule gives
-// elsewhere.
+// its action on this drop's own list — never a.drop.files, the tools-page
+// zone's snapshot, which would act on a previous drag's paths. Anything
+// else lands in the tray like a drop on the notch, and so does an action
+// the pipeline cannot start (runDropActionFiles shelves on a false
+// startConvert): a release on a pin never loses the files. dropAt keeps
+// the accent border up a moment as the confirmation the notch capsule
+// gives elsewhere.
 func (a *shelf) pinReceive(it *pinItem, data transfer.Data) {
 	def := toolCardDefFor(it.cardID)
 	if def != nil && def.kind == cardAction {
 		if files, err := dropFilesData(data); err == nil && len(files) > 0 && def.accepts(classifyDrop(files)) {
-			a.runToolCardDrop(it.cardID, data)
+			a.runDropActionFiles(a.toolCardDropAction(it.cardID, files), files, data)
 			it.dropAt = time.Now().Add(pinHoldAfter)
 			it.invalidate()
 			return
