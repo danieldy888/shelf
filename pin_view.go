@@ -114,6 +114,9 @@ func (it *pinItem) pinMenu(e ui.Element) {
 		if it.edge != pinFree {
 			if m.Item("始终展开").Checked(it.always).Chosen() {
 				it.always = !it.always
+				// Clearing it restarts the leave-delay rather than
+				// collapsing the card under the cursor mid-hover.
+				it.leftAt = time.Time{}
 				a.savePins()
 			}
 			m.Separator()

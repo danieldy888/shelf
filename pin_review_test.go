@@ -93,6 +93,30 @@ func TestPinSuppressedDragStillWakes(t *testing.T) {
 	}
 }
 
+func TestPinMenuAlwaysToggleRestartsDelay(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	a, it, tr := pinViewShelf(t, "zip", true)
+	it.always, it.leftAt = true, time.Now().Add(-time.Hour)
+	tr.RightClickAt(40, 40)
+	if err := tr.ChooseMenuItem("始终展开"); err != nil {
+		t.Fatal(err)
+	}
+	if it.always {
+		t.Fatal("always-open was not disabled")
+	}
+	t0 := time.Now()
+	p := mygo.Point{X: 600, Y: 600}
+	a.pinTick(t0, p, false, false)
+	a.pinTick(t0.Add(pinHideDelay-time.Nanosecond), p, false, false)
+	if !it.expanded {
+		t.Fatal("collapsed before the fresh 600 ms delay")
+	}
+	a.pinTick(t0.Add(pinHideDelay), p, false, false)
+	if it.expanded {
+		t.Fatal("did not collapse at 600 ms")
+	}
+}
+
 func TestPinDragOutKeepsGridSpan(t *testing.T) {
 	withPinDisplays(t, pinTestDisplays)
 	oldOpen, oldCursor := pinOpenWindow, cursorPoint
