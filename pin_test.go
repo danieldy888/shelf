@@ -694,3 +694,94 @@ func TestPinMoveFollowsAcrossDisplays(t *testing.T) {
 		t.Fatalf("the between-ticks release did not land on display 2: display=%d edge=%v", it.display, it.edge)
 	}
 }
+
+// TestPinStaggerOverflowAndCollapse is review P5: a column that
+// overhangs the work area's bottom shifts back up, one taller than the
+// work area squeezes inside it, and a collapsing card re-spaces the
+// strips still on the edge.
+func TestPinStaggerOverflowAndCollapse(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	bottom := pinTestArea.Y + pinTestArea.Height
+	mkCol := func(n int, ys ...int) []*pinItem {
+		var col []*pinItem
+		for i := 0; i < n; i++ {
+			y := pinTestArea.Y + i*(pinStripH+pinStripGap)
+			if i < len(ys) {
+				y = ys[i]
+			}
+			col = append(col, &pinItem{display: 1, edge: pinLeft,
+				frame: mygo.Rectangle{X: 0, Y: y, Width: pinStripW, Height: pinStripH}})
+		}
+		return col
+	}
+	assertInside := func(t *testing.T, col []*pinItem) {
+		t.Helper()
+		for i, it := range col {
+			if it.frame.Y < pinTestArea.Y || it.frame.Y+pinStripH > bottom {
+				t.Fatalf("strip %d sits off the work area: %+v", i, it.frame)
+			}
+		}
+	}
+	t.Run("overflow pulls back", func(t *testing.T) {
+		col := mkCol(2, bottom-pinStripH-4, bottom-4)
+		pinStagger(col)
+		assertInside(t, col)
+		if col[1].frame.Y-col[0].frame.Y != pinStripH+pinStripGap {
+			t.Fatalf("the pair lost its spacing: %+v %+v", col[0].frame, col[1].frame)
+		}
+	})
+	t.Run("fitting column keeps spacing", func(t *testing.T) {
+		col := mkCol(0)
+		for i := 0; i < 14; i++ { // 14 strips need 888pt, fitting the 920pt work area
+			col = append(col, &pinItem{display: 1, edge: pinLeft,
+				frame: mygo.Rectangle{X: 0, Y: pinTestArea.Y + i*30, Width: pinStripW, Height: pinStripH}})
+		}
+		pinStagger(col)
+		assertInside(t, col)
+		for i := 1; i < len(col); i++ {
+			if col[i].frame.Y-col[i-1].frame.Y != pinStripH+pinStripGap {
+				t.Fatalf("a fitting column squeezed: strips %d/%d", i-1, i)
+			}
+		}
+	})
+	t.Run("head above top reflows", func(t *testing.T) {
+		col := mkCol(0)
+		for _, y := range []int{-40, -10} { // a column saved before bounds tightened
+			col = append(col, &pinItem{display: 1, edge: pinLeft,
+				frame: mygo.Rectangle{X: 0, Y: y, Width: pinStripW, Height: pinStripH}})
+		}
+		pinStagger(col)
+		assertInside(t, col)
+		if col[1].frame.Y-col[0].frame.Y != pinStripH+pinStripGap {
+			t.Fatalf("a fitting column squeezed: %+v %+v", col[0].frame, col[1].frame)
+		}
+	})
+	t.Run("overfull squeezes inside", func(t *testing.T) {
+		col := mkCol(20)
+		pinStagger(col)
+		assertInside(t, col)
+		for i := 1; i < len(col); i++ {
+			if col[i].frame.Y < col[i-1].frame.Y {
+				t.Fatalf("the squeeze reordered strips: %d at %d after %d", i, col[i].frame.Y, col[i-1].frame.Y)
+			}
+		}
+	})
+	t.Run("collapse respaces the edge", func(t *testing.T) {
+		a := &shelf{dataDir: t.TempDir()}
+		lo := a.pinRegister(&pinItem{cardID: "zip", cardW: pinCardW, display: 1, edge: pinLeft,
+			frame: mygo.Rectangle{X: 0, Y: 814, Width: pinStripW, Height: pinStripH}})
+		hi := a.pinRegister(&pinItem{cardID: "awake", cardW: pinCardW, display: 1, edge: pinLeft, expanded: true,
+			leftAt: time.Now().Add(-2 * pinHideDelay),
+			frame:  mygo.Rectangle{X: 0, Y: 800, Width: pinCardW, Height: pinCardH}})
+		a.pinTick(time.Now(), mygo.Point{X: 1200, Y: 200}, false, false)
+		if hi.expanded {
+			t.Fatal("the delayed collapse did not run")
+		}
+		// The pair ends up as the two stacked slots — which strip took
+		// which slot does not matter (they collided at the same Y).
+		slots := map[int]bool{hi.frame.Y: true, lo.frame.Y: true}
+		if len(slots) != 2 || !slots[814] || !slots[814+pinStripH+pinStripGap] {
+			t.Fatalf("the collapsing card did not re-space its edge: hi=%+v lo=%+v", hi.frame, lo.frame)
+		}
+	})
+}

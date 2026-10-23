@@ -198,7 +198,9 @@ func (a *shelf) pinReturnZone(centre mygo.Point) bool {
 }
 
 // pinStagger spaces collapsed strips on one edge of one display
-// pinStripGap apart, top to bottom. Expanded cards keep their frame: the
+// pinStripGap apart, top to bottom, holding the column inside the work
+// area — strips that would overhang pull back up; a column taller than
+// the area squeezes instead. Expanded cards keep their frame: the
 // overlap is theirs while the pointer is on them.
 func pinStagger(pins []*pinItem) {
 	type edgeKey struct {
@@ -219,17 +221,44 @@ func pinStagger(pins []*pinItem) {
 		}
 		sort.SliceStable(g, func(i, j int) bool { return g[i].frame.Y < g[j].frame.Y })
 		area := pinArea(g[0].display)
+		// Forward pass: each strip sits at or below the previous one.
 		y := g[0].frame.Y
 		for _, it := range g {
 			it.frame.Y = max(it.frame.Y, y)
 			y = it.frame.Y + pinStripH + pinStripGap
 		}
 		if y-pinStripGap > area.Y+area.Height {
-			// Overflowing the bottom: pull the column back up from the last.
-			y = g[len(g)-1].frame.Y
-			for i := len(g) - 2; i >= 0; i-- {
-				g[i].frame.Y = min(g[i].frame.Y, y-pinStripH-pinStripGap)
-				y = g[i].frame.Y
+			// The column grew past the work area's bottom: pull it back
+			// up from the bottom edge — anchoring the pull on the last
+			// strip (which the forward pass had just spaced out) is a
+			// no-op.
+			y = area.Y + area.Height - pinStripH
+			for i := len(g) - 1; i >= 0; i-- {
+				g[i].frame.Y = min(g[i].frame.Y, y)
+				y = g[i].frame.Y - pinStripH - pinStripGap
+			}
+		}
+		if g[0].frame.Y < area.Y {
+			// The head sits above the work area — an edge that only
+			// overflowed its bottom, or a column saved before the bounds
+			// tightened. A column that fits re-spaces down from the top;
+			// one taller than the work area cannot fit at all: squeeze
+			// the strips evenly top to bottom — they overlap, but every
+			// strip stays on screen.
+			if g[len(g)-1].frame.Y+pinStripH-g[0].frame.Y <= area.Height {
+				y = area.Y
+				for _, it := range g {
+					it.frame.Y = max(it.frame.Y, y)
+					y = it.frame.Y + pinStripH + pinStripGap
+				}
+			} else {
+				span := area.Height - pinStripH
+				for i, it := range g {
+					it.frame.Y = area.Y
+					if span > 0 {
+						it.frame.Y += i * span / (len(g) - 1)
+					}
+				}
 			}
 		}
 	}
@@ -458,7 +487,10 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 				it.expanded = false
 				it.leftAt = time.Time{}
 				it.frame = pinStripFrame(it.edge, area, it.frame.Y+pinCardH/2)
-				it.applyFrame()
+				pinStagger(a.pins)
+				for _, other := range a.pins {
+					other.applyFrame()
+				}
 				it.invalidate()
 			}
 		} else if over {
