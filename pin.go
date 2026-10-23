@@ -493,7 +493,7 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 				moved := it.moving
 				it.pressed, it.moving = false, false
 				if moved {
-					a.pinRelease(it, p, area)
+					a.pinRelease(it, p)
 				}
 			}
 			continue
@@ -566,19 +566,27 @@ func (it *pinItem) invalidate() {
 	}
 }
 
-// pinRelease settles a moved card: back to the tools page on the notch,
-// docked to an edge, or floating where it landed.
-func (a *shelf) pinRelease(it *pinItem, p mygo.Point, area mygo.Rectangle) {
-	centre := mygo.Point{X: it.frame.X + it.frame.Width/2, Y: it.frame.Y + it.frame.Height/2}
-	if a.pinReturnZone(centre) {
-		a.unpin(it, true)
-		return
-	}
+// pinRelease settles a moved card on its final position: back to the
+// tools page on the notch, docked to an edge, or floating where it
+// landed. The verdict and the landing come from the release point
+// itself — the frame the last poll applied can be a tick behind the
+// cursor, so a release that left the notch after the last sample must
+// not read that sample's centre, and a free release lands under the
+// release, not where the poll stopped.
+func (a *shelf) pinRelease(it *pinItem, p mygo.Point) {
 	// The release's own point picks the display — same point
 	// pinReleaseEdge reads — so a release just past a seam still lands on
 	// the display the cursor reached between two move ticks.
 	it.display = displayIDAt(p, it.display)
-	area = it.displayRect()
+	area := it.displayRect()
+	// The grab re-anchored to the top-left when the move began, so the
+	// move frame under the release is the release's own rectangle.
+	frame := it.pinMoveFrame(p, area)
+	centre := mygo.Point{X: frame.X + frame.Width/2, Y: frame.Y + frame.Height/2}
+	if a.pinReturnZone(centre) {
+		a.unpin(it, true)
+		return
+	}
 	if edge := pinReleaseEdge(p, area); edge != pinFree {
 		it.edge, it.expanded = edge, false
 		it.frame = pinStripFrame(edge, area, p.Y)
@@ -589,7 +597,7 @@ func (a *shelf) pinRelease(it *pinItem, p mygo.Point, area mygo.Rectangle) {
 		}
 	} else {
 		it.edge, it.expanded, it.cy = pinFree, true, 0
-		it.frame = pinClamp(it.frame, area)
+		it.frame = frame
 	}
 	it.applyFrame()
 	a.savePins()

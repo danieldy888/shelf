@@ -918,3 +918,47 @@ func TestPinRestoreRehomesDisplay(t *testing.T) {
 		t.Fatalf("layout.json still names the missing display: %+v", disk)
 	}
 }
+
+// The return-zone verdict reads the release point, not the frame the
+// last 30 ms poll applied: a drag whose last sampled centre sat on the
+// notch but whose release happens far from it stays a pin, landed where
+// the release was.
+func TestPinReturnZoneReadsFinalReleasePoint(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	a := &shelf{dataDir: t.TempDir(), notchX: 600, notchY: 0, notchW: 180, notchH: 32}
+	a.setTools(layout.Default())
+	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
+		edge: pinFree, expanded: true,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	it.pressAt(10, 10)
+	// The poll samples the frame with its centre on the notch...
+	a.pinTick(time.Now(), mygo.Point{X: 622, Y: 50}, true, false)
+	if !it.moving || !a.pinReturning {
+		t.Fatalf("fixture: the sampled centre was not on the notch: moving=%v returning=%v", it.moving, a.pinReturning)
+	}
+	// ...and the release happens far from it.
+	a.pinTick(time.Now(), mygo.Point{X: 1100, Y: 500}, false, false)
+	if len(a.pins) != 1 || a.pins[0] != it {
+		t.Fatal("a release far from the notch returned the pin on the previous poll's centre")
+	}
+	if it.frame.X != 1100 || it.frame.Y != 500 {
+		t.Fatalf("the release kept the sampled frame: %+v", it.frame)
+	}
+}
+
+// A free release lands where the finger let go — the release point's own
+// frame, not the last one the poll applied.
+func TestPinFreeReleaseLandsAtReleasePoint(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	a := &shelf{dataDir: t.TempDir()}
+	a.setTools(layout.Default())
+	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
+		edge: pinFree, expanded: true,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	it.pressAt(10, 10)
+	a.pinTick(time.Now(), mygo.Point{X: 650, Y: 450}, true, false) // the sampled frame
+	a.pinTick(time.Now(), mygo.Point{X: 900, Y: 650}, false, false) // the release
+	if it.frame.X != 900 || it.frame.Y != 650 {
+		t.Fatalf("the release kept the previous poll's frame: %+v", it.frame)
+	}
+}
