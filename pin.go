@@ -413,12 +413,16 @@ func (a *shelf) pinDisplaysChanged() {
 		it.display = primary
 		area := it.displayRect()
 		if it.edge != pinFree {
+			// An expanded strip re-docks collapsed on the new display
+			// (the stagger sorts it); a free card clamps inside it.
+			it.expanded = false
 			it.frame = pinStripFrame(it.edge, area, it.frame.Y+it.frame.Height/2)
 			it.cy = it.frame.Y + pinStripH/2
 		} else {
 			it.frame = pinClamp(it.frame, area)
 		}
 		it.applyFrame()
+		it.invalidate()
 		changed = true
 	}
 	if changed {
@@ -682,4 +686,8 @@ func (a *shelf) pinRestore() {
 		a.pins = append(a.pins, it)
 		pinOpenWindow(it)
 	}
+	// Pins saved on a display that is gone now (unplugged while the app
+	// was not running) land on the primary; the pass rewrites the stored
+	// ID, so layout.json stops pointing at a missing screen.
+	a.pinDisplaysChanged()
 }

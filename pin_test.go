@@ -857,3 +857,64 @@ func TestPinSaveRestoreStable(t *testing.T) {
 		}
 	}
 }
+
+// TestPinUnplugCollapsesExpanded is review P7: an expanded docked pin on
+// a display that goes away lands as a strip on the primary — so the
+// always-open one re-expands on the next tick instead of drawing a card
+// into an 8×56 window — and the stored display ID is rewritten.
+func TestPinUnplugCollapsesExpanded(t *testing.T) {
+	ext := mygo.Display{ID: 2, Bounds: mygo.Rectangle{X: 1512, Y: 0, Width: 1920, Height: 1080},
+		WorkArea: mygo.Rectangle{X: 1512, Y: 25, Width: 1920, Height: 1055}}
+	withPinDisplays(t, append([]mygo.Display{pinTestDisplays[0]}, ext))
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir}
+	a.setTools(layout.Default())
+	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 2, edge: pinRight,
+		expanded: true, always: true,
+		frame: mygo.Rectangle{X: 1512 + 1920 - pinCardW, Y: 400, Width: pinCardW, Height: pinCardH}})
+	floater := a.pinRegister(&pinItem{cardID: "tojpeg", span: 1, cardW: pinCardW, display: 2,
+		edge: pinFree, expanded: true,
+		frame: mygo.Rectangle{X: 2000, Y: 500, Width: pinCardW, Height: pinCardH}})
+	withPinDisplays(t, pinTestDisplays)
+	a.pinDisplaysChanged()
+	if it.display != 1 || it.expanded || it.frame.Width != pinStripW || it.frame.X != pinTestArea.Width-pinStripW {
+		t.Fatalf("the unplugged pin did not re-dock as a strip: display=%d %+v", it.display, it.frame)
+	}
+	if floater.display != 1 || !insideRect(mygo.Point{X: floater.frame.X, Y: floater.frame.Y}, pinTestArea) {
+		t.Fatalf("the floating pin did not land inside the primary: %+v", floater.frame)
+	}
+	if p := a.toolsLayout().Pins[0]; p.Display != "1" {
+		t.Fatalf("the stored display ID was not rewritten: %+v", p)
+	}
+	// The re-docked strip keeps working: 始终展开 re-opens it on the
+	// primary on the very next tick.
+	a.pinTick(time.Now(), mygo.Point{X: 1200, Y: 200}, false, false)
+	if !it.expanded || it.frame.Width != pinCardW || it.frame.X != pinTestArea.Width-pinCardW {
+		t.Fatalf("the always-open pin did not re-expand on the primary: %+v", it.frame)
+	}
+}
+
+// TestPinRestoreRehomesDisplay is review P7's second half: a pin stored
+// on a display no longer plugged in re-homes on restore and the stored
+// ID is rewritten, so layout.json stops pointing at a missing screen.
+func TestPinRestoreRehomesDisplay(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir}
+	a.mutateTools(func(l *layout.Layout) {
+		l.AddPin(layout.Pin{ID: "zip", Span: 1, Display: "999", Edge: layout.EdgeRight, X: 0, Y: 300})
+	})
+	old := pinOpenWindow
+	pinOpenWindow = func(*pinItem) {}
+	t.Cleanup(func() { pinOpenWindow = old })
+	a.pinRestore()
+	if len(a.pins) != 1 || a.pins[0].display != 1 {
+		t.Fatalf("the orphaned pin did not re-home: %+v", a.pins)
+	}
+	if p := a.toolsLayout().Pins[0]; p.Display != "1" {
+		t.Fatalf("the stored display ID was not rewritten: %+v", p)
+	}
+	if disk := pinDiskPins(t, dir); len(disk) != 1 || disk[0].Display != "1" {
+		t.Fatalf("layout.json still names the missing display: %+v", disk)
+	}
+}
