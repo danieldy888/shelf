@@ -962,3 +962,62 @@ func TestPinFreeReleaseLandsAtReleasePoint(t *testing.T) {
 		t.Fatalf("the release kept the previous poll's frame: %+v", it.frame)
 	}
 }
+
+// A drag faster than the 30 ms poll must still count as a drag: the
+// press session follows the real pointer events, so a press that moves
+// past pinDragStart and releases between two polls settles on the
+// release point and never runs the card's tap.
+func TestPinFastDragBetweenPollsMovesNotTaps(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	power := newFakePower()
+	a := &shelf{dataDir: t.TempDir()}
+	a.setTools(layout.Default())
+	a.awake = &awakeModule{host: a, create: power.create, release: power.release}
+	it := a.pinRegister(&pinItem{cardID: "awake", span: 1, cardW: pinCardW, display: 1,
+		edge: pinFree, expanded: true,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	tr := ui.NewTester(func(c *ui.Context) { it.view(c) }, pinCardW, pinCardH)
+	start := it.frame
+	tr.Press(20, 20)
+	if !it.pressed || it.didMove {
+		t.Fatalf("the press did not arm a fresh session: pressed=%v didMove=%v", it.pressed, it.didMove)
+	}
+	tr.Move(120, 70) // past pinDragStart; no poll samples any of it
+	tr.Release(120, 70)
+	if it.frame == start {
+		t.Fatalf("a drag the poll never sampled left the window where it was: %+v", it.frame)
+	}
+	if a.awake.active() {
+		t.Fatal("the release ran the card's tap")
+	}
+}
+
+// A fresh press before the next poll is its own gesture: the previous
+// drag's release ends its session at the pointer event, so the next
+// press starts clean instead of inheriting the drag's move.
+func TestPinPressBeforeReleasePollIsFresh(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	power := newFakePower()
+	a := &shelf{dataDir: t.TempDir()}
+	a.setTools(layout.Default())
+	a.awake = &awakeModule{host: a, create: power.create, release: power.release}
+	it := a.pinRegister(&pinItem{cardID: "awake", span: 1, cardW: pinCardW, display: 1,
+		edge: pinFree, expanded: true,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	tr := ui.NewTester(func(c *ui.Context) { it.view(c) }, pinCardW, pinCardH)
+	tr.Press(20, 20)
+	a.pinTick(time.Now(), mygo.Point{X: 680, Y: 460}, true, false)
+	tr.Release(20, 20)
+	if a.awake.active() {
+		t.Fatal("a dragged release ran the card's tap")
+	}
+	// No down=false poll ran in between: the next press is a new gesture.
+	tr.Press(20, 20)
+	if !it.pressed || it.didMove {
+		t.Fatalf("the new press inherited the previous drag: pressed=%v didMove=%v", it.pressed, it.didMove)
+	}
+	tr.Release(20, 20)
+	if !a.awake.active() {
+		t.Fatal("a fresh tap after a drag did not run")
+	}
+}

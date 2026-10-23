@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
@@ -94,25 +95,60 @@ func (it *pinItem) viewStrip(c *ui.Context) {
 	})
 }
 
-// trackPress records a press on the window so pinTick can tell a click
-// from a window move and follow the cursor with the card. The grab point
-// is where the press landed inside the window, so a re-drag starts
-// without a jump; a press that only woke the strip re-anchors in pinTick
-// once it goes far.
+// trackPress wires the pin's pointer session to the real pointer
+// events: a primary Down arms a fresh session (the previous gesture's
+// move must not poison this tap), a Move past pinDragStart locks the
+// press as a window move, and the Up ends the session — leaving the
+// card's tap to the view's Clicked check, or settling a moved release
+// from the release point itself. The 30 ms poll only follows the cursor
+// with the window; it no longer decides when a press began or ended.
+// The secondary button passes through: its press belongs to the
+// context menu (pinMenu).
 func (it *pinItem) trackPress(e ui.Element) {
-	px, py, _ := e.PointerPosition()
-	if e.Pressed() && !it.pressed {
-		it.pressAt(float64(px), float64(py))
-	}
+	e.PointerPosition()
+	e.HandleInput(func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			if ev.Button != 0 {
+				return false // the context menu takes the secondary press
+			}
+			if !it.pressed {
+				it.pressAt(float64(ev.X), float64(ev.Y))
+			}
+			return true
+		case ui.InputPointerMove:
+			if !it.pressed {
+				return false
+			}
+			it.lockMove(int(ev.X)-it.grabX, int(ev.Y)-it.grabY)
+			return true
+		case ui.InputPointerUp:
+			if !it.pressed || ev.Button != 0 {
+				return false
+			}
+			// A fast drag's release still locks as a move before it ends.
+			it.lockMove(int(ev.X)-it.grabX, int(ev.Y)-it.grabY)
+			it.pressed, it.moving = false, false
+			if it.didMove {
+				// Local to the window the last poll applied — it has not
+				// moved since — so this is the release point in screen
+				// coordinates.
+				p := mygo.Point{X: it.frame.X + int(ev.X), Y: it.frame.Y + int(ev.Y)}
+				it.owner.pinRelease(it, p)
+			}
+			return true
+		}
+		return false
+	})
 }
 
-// pressAt marks the press pinTick decides click-or-move from: the grab
-// point is where it landed, and didMove clears — the previous press's
-// move must not poison this tap, nor may this tap see its own drag.
+// pressAt arms the session a Down began: the grab point is where it
+// landed, and the previous gesture's move must not poison this tap,
+// nor may this tap see its own drag.
 func (it *pinItem) pressAt(px, py float64) {
 	it.grabX, it.grabY = int(px+0.5), int(py+0.5)
 	it.pressWas = it.expanded
-	it.didMove = false
+	it.moving, it.didMove = false, false
 	it.pressed = true
 }
 

@@ -284,6 +284,20 @@ func (it *pinItem) pinMoveFrame(p mygo.Point, area mygo.Rectangle) mygo.Rectangl
 	return pinClamp(mygo.Rectangle{X: p.X - it.grabX, Y: p.Y - it.grabY, Width: it.cardW, Height: pinCardH}, area)
 }
 
+// lockMove turns the press into a window move once it goes past
+// pinDragStart from the grab point: the card shows the size the dragged
+// frame is sized for, and the grab re-anchors to the top-left so a
+// press that only woke the strip does not jump. dx and dy are the
+// pointer's displacement from the grab point; a press already moving
+// stays as it is.
+func (it *pinItem) lockMove(dx, dy int) {
+	if it.moving || (abs(dx) < pinDragStart && abs(dy) < pinDragStart) {
+		return
+	}
+	it.moving, it.expanded, it.didMove = true, true, true
+	it.grabX, it.grabY = 0, 0
+}
+
 // pinNear reports whether p is within dist of r, on any side.
 func pinNear(p mygo.Point, r mygo.Rectangle, dist int) bool {
 	return p.X >= r.X-dist && p.X < r.X+r.Width+dist && p.Y >= r.Y-dist && p.Y < r.Y+r.Height+dist
@@ -468,16 +482,9 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 		area := it.displayRect()
 		if it.pressed {
 			if down {
-				dx, dy := p.X-(it.frame.X+it.grabX), p.Y-(it.frame.Y+it.grabY)
-				if !it.moving && (abs(dx) >= pinDragStart || abs(dy) >= pinDragStart) {
-					// The press went far: it is a window move. Re-anchor
-					// the grab to the top-left so a press that only woke
-					// the strip does not jump, and show the card the
-					// dragged frame is sized for.
-					it.moving, it.expanded = true, true
-					it.didMove = true
-					it.grabX, it.grabY = 0, 0
-				}
+				// The pointer events lock the move first (trackPress);
+				// this covers the press they never sampled.
+				it.lockMove(p.X-(it.frame.X+it.grabX), p.Y-(it.frame.Y+it.grabY))
 				if it.moving {
 					// The display is re-read from the cursor each tick so
 					// a drag across a monitor seam keeps following instead
@@ -490,6 +497,8 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 					returning = returning || a.pinReturnZone(centre)
 				}
 			} else {
+				// A session the pointer events ended leaves nothing here;
+				// this fallback settles one a poll-armed press still holds.
 				moved := it.moving
 				it.pressed, it.moving = false, false
 				if moved {
