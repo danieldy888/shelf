@@ -25,15 +25,14 @@ func pinSmokeEnv(t *testing.T) *shelf {
 	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
 		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native window smoke test")
 	}
-	if err := os.MkdirAll("/tmp/shelf-B", 0o755); err != nil {
+	if err := os.MkdirAll("/tmp/shelf-review-pin", 0o755); err != nil {
 		t.Fatal(err)
 	}
+	snapshotClipboard(t)
 	a := smokeShelf
-	// The smoke harness never calls ready(), so pinTick gets its own
-	// 30 ms ticker for these tests — the same cadence monitorDrag gives
-	// it in production — driven by the real cursor and button state. It
-	// also keeps the shelf placed on the cursor's display, as
-	// monitorDrag does, so the notch's return zone is live geometry.
+	// The smoke harness never calls ready(), so these tests drive the
+	// production monitorDrag entry point on its own 30 ms ticker,
+	// including placement, the return invitation, and pinTick.
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	go func() {
@@ -52,7 +51,7 @@ func pinSmokeEnv(t *testing.T) *shelf {
 					// animate drives the peek/pull timelines exactly as
 					// shelf.startMonitoring does before monitorDrag.
 					a.animate(now)
-					a.pinTick(now, p, dragLeftDown(), false)
+					a.monitorDrag(now)
 				})
 			}
 		}
@@ -60,14 +59,14 @@ func pinSmokeEnv(t *testing.T) *shelf {
 	return a
 }
 
-// shotWindow captures a real window by CGWindowID into /tmp/shelf-B.
+// pinShot captures a real window by CGWindowID into the review evidence directory.
 func pinShot(t *testing.T, w *mygo.Window, name string) {
 	t.Helper()
 	num := mac.WindowNumber(w.NativeHandle())
 	if num == 0 {
 		t.Fatalf("%s: window has no CGWindowID", name)
 	}
-	out := filepath.Join("/tmp/shelf-B", name+".png")
+	out := filepath.Join("/tmp/shelf-review-pin", name+".png")
 	cmd := exec.Command("screencapture", "-l", fmt.Sprint(num), "-o", out)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("screencapture %s: %v: %s", name, err, b)
@@ -83,7 +82,7 @@ func pinShotFull(t *testing.T, w *mygo.Window, name string) {
 	if num == 0 {
 		t.Fatalf("%s: window has no CGWindowID", name)
 	}
-	out := filepath.Join("/tmp/shelf-B", name+".png")
+	out := filepath.Join("/tmp/shelf-review-pin", name+".png")
 	cmd := exec.Command("screencapture", "-l", fmt.Sprint(num), out)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("screencapture %s: %v: %s", name, err, b)
@@ -95,7 +94,7 @@ func pinShotFull(t *testing.T, w *mygo.Window, name string) {
 // its own window).
 func pinShotRect(t *testing.T, r mygo.Rectangle, name string) {
 	t.Helper()
-	out := filepath.Join("/tmp/shelf-B", name+".png")
+	out := filepath.Join("/tmp/shelf-review-pin", name+".png")
 	cmd := exec.Command("screencapture", "-x", "-o",
 		"-R", fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height), out)
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -302,24 +301,35 @@ func TestPinSmokeReturnBulge(t *testing.T) {
 		postMouse(t, nx, ny, 6)
 		time.Sleep(40 * time.Millisecond)
 	}
-	time.Sleep(500 * time.Millisecond) // hold at the notch: the bulge shows
-	var returning, drawn bool
-	onMain(func() {
-		returning = a.pinReturning
-		drawn = a.pinReturning && a.fx.peekKind == peekReturn && a.peekProgress > 0.99
-	})
-	if !returning {
-		t.Error("the pin over the notch did not raise the return bulge")
+	settled := false
+	for range 60 {
+		onMain(func() {
+			w, h := a.peekSize()
+			settled = a.pinReturning && a.peeking && a.fx.peekKind == peekReturn &&
+				a.peekProgress > 0.99 && !a.fx.sizeMoving &&
+				abs(int(a.fx.w-w)) <= 1 && abs(int(a.fx.h-h)) <= 1 &&
+				float32(a.frame.Height) >= a.fx.h
+		})
+		if settled {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if !drawn {
-		t.Error("the notch did not draw the 松开放回 pill")
+	if !settled {
+		t.Fatal("the 松开放回 pill did not settle inside its native frame")
 	}
 	r := mygo.Rectangle{}
 	onMain(func() {
+		// Another running Shelf may own a same-level hover pill. Order
+		// only this test window forward, without changing its level or
+		// touching the installed app.
+		a.win.ShowInactive()
 		pr := a.peekPillRect()
 		r = mygo.Rectangle{X: pr.X - 24, Y: pr.Y - 12, Width: pr.Width + 48, Height: pr.Height + 36}
 	})
+	time.Sleep(200 * time.Millisecond)
 	pinShot(t, a.win, "pin-return")
+	time.Sleep(200 * time.Millisecond)
 	pinShotRect(t, r, "pin-return-screen")
 	postMouse(t, notchCx, float64(a.notchY+30), 2)
 	time.Sleep(500 * time.Millisecond)

@@ -26,7 +26,7 @@ import (
 //
 // The card the window shows comes from the tool catalog (tools_cards.go):
 // a.toolCard(c, layout.Card{...}, cardDesktop) draws it, a.runToolCard(id)
-// runs its tap and a.runToolCardDrop(id, data) takes its file drop. The
+// runs its tap and a.pinReceive(it, data) takes its file drop. The
 // placement lives in layout.json's pins list (internal/layout), written
 // through the tools page's mutateTools so Cards and Pins stay one file.
 const (
