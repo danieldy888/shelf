@@ -395,6 +395,16 @@ func (a *shelf) view(c *ui.Context) {
 				// size when the pointer left mid-morph.
 				peekW = zone.Jump("peek-w", a.fx.peekW)
 				peekH = zone.Jump("peek-h", a.fx.peekH)
+			case a.dragging && !a.ownDrag && !a.dropHot && (a.fx.peekW > peekW || a.fx.peekH > peekH):
+				// An incoming drag outside the drop band owns the hint
+				// shape. A fold remnant pinned mid-morph (e.g. the hover
+				// player still growing when the drag began) rides the
+				// re-rising shell past the menu bar for the whole
+				// morph — the "notch flashes" bug. The drag's shape
+				// never morphs, so snap the channels: the drawn shell
+				// may only shrink from here.
+				peekW = zone.Jump("peek-w", peekW)
+				peekH = zone.Jump("peek-h", peekH)
 			default:
 				peekW = zone.AnimateTo("peek-w", peekW, sizeAnim)
 				peekH = zone.AnimateTo("peek-h", peekH, sizeAnim)
