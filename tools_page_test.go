@@ -502,3 +502,61 @@ func idsOf(cards []layout.Card) []string {
 	}
 	return ids
 }
+
+// A drag-out whose layout write fails must not open a pin window: the
+// failed write keeps the in-memory arrangement (the card stays in the
+// grid) and the file as it was, so the recovered save cannot write the
+// same id into both Cards and Pins and drop the pin on the next load.
+func TestToolsDragOutWriteFailureKeepsGrid(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	oldOpen := pinOpenWindow
+	pinOpenWindow = func(*pinItem) {}
+	t.Cleanup(func() { pinOpenWindow = oldOpen })
+	oldCursor := cursorPoint
+	t.Cleanup(func() { cursorPoint = oldCursor })
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} }
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir}
+	a.setTools(layout.Default())
+	if err := layout.Write(dir, a.toolsLayout()); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, layout.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	a.x, a.y, a.h = 400, 0, 600
+	p := &toolsPage{host: a, editing: true}
+	p.toolCardDrop(&toolPress{id: "zip", dragging: true, grabDX: 8, grabDY: 8, px: 20, py: 2000, index: 0})
+	if len(a.pins) != 0 {
+		t.Fatalf("a failed write still opened a pin window: %d pins", len(a.pins))
+	}
+	if !slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "zip" }) {
+		t.Fatal("the failed drag-out took the card out of the in-memory grid")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, layout.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(saved) {
+		t.Fatal("the failed write changed layout.json")
+	}
+	// The write works again: the recovered save must not duplicate the card.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.savePins()
+	disk, err := layout.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gridZip := slices.ContainsFunc(disk.Cards, func(c layout.Card) bool { return c.ID == "zip" })
+	pinZip := slices.ContainsFunc(disk.Pins, func(c layout.Pin) bool { return c.ID == "zip" })
+	if gridZip && pinZip {
+		t.Fatal("the recovered save wrote zip into both the grid and the pins")
+	}
+}

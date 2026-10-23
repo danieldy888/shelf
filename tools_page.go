@@ -119,12 +119,14 @@ func (a *shelf) toolsLayout() layout.Layout {
 	return *a.toolsLay
 }
 
-// mutateTools applies fn to a copy of the layout and saves it. The
-// in-memory copy is replaced only after the write succeeds, so a failed
-// Write leaves both the file and the shown arrangement as they were; a
-// load that failed (toolsLayBroken) latches writes off entirely — the
-// page mutates for the session, the recoverable file stays put.
-func (a *shelf) mutateTools(fn func(*layout.Layout)) {
+// mutateTools applies fn to a copy of the layout and saves it, reporting
+// whether the change took. The in-memory copy is replaced only after the
+// write succeeds, so a failed Write leaves both the file and the shown
+// arrangement as they were — and the caller learns the card never moved;
+// a load that failed (toolsLayBroken) latches writes off entirely — the
+// page mutates for the session, the recoverable file stays put, which
+// still counts as taken.
+func (a *shelf) mutateTools(fn func(*layout.Layout)) bool {
 	l := a.toolsLayout()
 	l.Cards = slices.Clone(l.Cards)
 	l.Pins = slices.Clone(l.Pins)
@@ -132,13 +134,14 @@ func (a *shelf) mutateTools(fn func(*layout.Layout)) {
 	if a.dataDir != "" && !a.toolsLayBroken {
 		if err := layout.Write(a.dataDir, l); err != nil {
 			a.report(fmt.Errorf("tools layout: %w", err))
-			return // keep the pre-change layout and the file as they were
+			return false // keep the pre-change layout and the file as they were
 		}
 	}
 	a.toolsLay = &l
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+	return true
 }
 
 // resetToolsEdit ends editing and the picker; called on hide and on
@@ -569,9 +572,11 @@ func (p *toolsPage) toolCardDrop(d *toolPress) {
 			if edge != pinFree {
 				frame = pinStripFrame(edge, area, cursor.Y) // the 24 pt edge rule, same as pin drags
 			}
-			a.addPin(d.id, span, disp, edge, false, frame)
-			p.press = nil // the parked cell is gone: no settle back
-			return
+			if a.addPin(d.id, span, disp, edge, false, frame) != nil {
+				p.press = nil // the parked cell is gone: no settle back
+				return
+			}
+			// The failed write kept the grid unchanged; fly back.
 		}
 	}
 	d.settling, d.dragging = true, false

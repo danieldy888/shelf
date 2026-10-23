@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1019,5 +1020,35 @@ func TestPinPressBeforeReleasePollIsFresh(t *testing.T) {
 	tr.Release(20, 20)
 	if !a.awake.active() {
 		t.Fatal("a fresh tap after a drag did not run")
+	}
+}
+
+func TestPinFailedRemovalKeepsPlacement(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	for _, putBack := range []bool{false, true} {
+		t.Run(fmt.Sprint(putBack), func(t *testing.T) {
+			dir := t.TempDir()
+			a := &shelf{dataDir: dir}
+			l := layout.Default()
+			l.AddPin(layout.Pin{ID: "zip", Span: 1, Display: "1", X: 600, Y: 375})
+			a.setTools(l)
+			if err := layout.Write(dir, l); err != nil {
+				t.Fatal(err)
+			}
+			it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1,
+				frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+			if err := os.Chmod(dir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			a.unpin(it, putBack)
+			if len(a.pins) != 1 || a.pins[0] != it {
+				t.Fatal("failed removal discarded the live pin")
+			}
+			if len(a.toolsLayout().Pins) != 1 ||
+				slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "zip" }) {
+				t.Fatal("failed removal changed the layout")
+			}
+		})
 	}
 }

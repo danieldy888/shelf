@@ -330,12 +330,14 @@ func (a *shelf) pinWakeDrag(p mygo.Point) {
 func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, always bool, frame mygo.Rectangle) *pinItem {
 	homeIndex := slices.IndexFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == cardID })
 	area := pinArea(display)
-	a.mutateTools(func(l *layout.Layout) {
+	if !a.mutateTools(func(l *layout.Layout) {
 		l.AddPin(layout.Pin{
 			ID: cardID, Span: span, Display: pinDisplayID(display), Edge: edge.layout(),
 			X: frame.X - area.X, Y: frame.Y - area.Y, AlwaysOpen: always,
 		})
-	})
+	}) {
+		return nil
+	}
 	w := pinCardW
 	if span == 2 {
 		w = pinCardW2
@@ -405,13 +407,7 @@ func (it *pinItem) onClose(_ *mygo.CloseEvent) {
 // desktop without rejoining the page and can be re-added from the "+"
 // catalog later (从桌面移除, design §4).
 func (a *shelf) unpin(it *pinItem, putBack bool) {
-	for i, p := range a.pins {
-		if p == it {
-			a.pins = append(a.pins[:i], a.pins[i+1:]...)
-			break
-		}
-	}
-	a.mutateTools(func(l *layout.Layout) {
+	if !a.mutateTools(func(l *layout.Layout) {
 		// A pin restored from layout.json has no remembered slot (-1):
 		// 放回刘海 appends it to the page's end rather than the front.
 		before := it.homeIndex
@@ -419,7 +415,16 @@ func (a *shelf) unpin(it *pinItem, putBack bool) {
 			before = len(l.Cards)
 		}
 		l.RemovePin(it.cardID, putBack, before)
-	})
+	}) {
+		it.wantKill = false // do not retry a failed menu action every tick
+		return
+	}
+	for i, p := range a.pins {
+		if p == it {
+			a.pins = append(a.pins[:i], a.pins[i+1:]...)
+			break
+		}
+	}
 	w := it.win
 	it.win = nil
 	if w != nil {
