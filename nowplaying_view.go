@@ -248,7 +248,7 @@ func (m *nowPlayingModule) controlButton(c *ui.Context, key string, icon *ui.SVG
 		// the innermost handler and swallow the press, so Clicked
 		// would never fire. Keys stay free for ButtonBase's own
 		// Enter/Space activation.
-		return ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
+		return ev.Button == 0 && ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
 	})
 	b.Children(func() {
 		ui.Icon(c, icon).Size(glyph, glyph).TextColor(ink)

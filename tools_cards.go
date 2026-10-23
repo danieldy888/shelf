@@ -564,7 +564,7 @@ func (a *shelf) awakeChip(c *ui.Context, key, label string, d time.Duration) {
 		// The chip answers the press, not the card: the card's
 		// HandleInput is the innermost otherwise and swallows it,
 		// so a tap on 30 分钟 would toggle one hour instead.
-		return ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
+		return ev.Button == 0 && ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
 	})
 	if chip.Clicked() && m != nil {
 		if on {
@@ -611,7 +611,7 @@ func (a *shelf) recentThumb(c *ui.Context, item store.Item) {
 			// The drag starts on the thumbnail itself: let the card's
 			// press handler take the down and dragMove never sees this
 			// DragDataFrom.
-			return ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
+			return ev.Button == 0 && ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
 		})
 		thumb.DragDataFrom(func() transfer.Data {
 			a.ownDrag = true

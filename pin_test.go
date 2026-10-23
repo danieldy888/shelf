@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/layout"
+	"shelf/internal/mac"
 	"shelf/internal/store"
 )
 
@@ -1048,6 +1049,49 @@ func TestPinFailedRemovalKeepsPlacement(t *testing.T) {
 			if len(a.toolsLayout().Pins) != 1 ||
 				slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "zip" }) {
 				t.Fatal("failed removal changed the layout")
+			}
+		})
+	}
+}
+
+func TestPinChildControlsKeepContextMenu(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	for _, tc := range []struct{ id, label string }{
+		{"awake", "30 分钟"}, {"playing", "暂停"}, {"recent", "menu-thumb.png"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			a := &shelf{store: mustStore(t), dataDir: t.TempDir()}
+			power := newFakePower()
+			a.awake = &awakeModule{host: a, create: power.create, release: power.release}
+			a.np = &nowPlayingModule{host: a, np: &mac.NowPlayingHost{}, have: true,
+				last: mac.NowPlayingState{Title: "Menu Track", Playing: true, Rate: 1}}
+			path := writeFile(t, t.TempDir(), "menu-thumb.png", testPNGBytes(t))
+			a.store.Items = append(a.store.Items, store.Item{ID: "menu-thumb", Kind: store.KindFile, Path: path})
+			it := a.pinRegister(&pinItem{cardID: tc.id, span: 2, cardW: pinCardW2, display: 1,
+				edge: pinFree, expanded: true,
+				frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW2, Height: pinCardH}})
+			tr := ui.NewTester(it.view, pinCardW2, pinCardH)
+			r, ok := tr.Find(tc.label)
+			if !ok {
+				t.Fatalf("missing child control %q: %v", tc.label, tr.Texts())
+			}
+			tr.RightClickAt(r.X+r.W/2, r.Y+r.H/2)
+			if !slices.Contains(tr.Menu(), "放回刘海") || !slices.Contains(tr.Menu(), "从桌面移除") {
+				t.Fatalf("right click on %s lost the pin menu: %v", tc.id, tr.Menu())
+			}
+			tr.CloseMenu()
+			if it.pressed || a.awake.active() || !a.np.last.Playing || a.ownDrag {
+				t.Fatal("right click started a primary-button action")
+			}
+			if tc.id != "recent" {
+				tr.Press(r.X+r.W/2, r.Y+r.H/2)
+				tr.Release(r.X+r.W/2, r.Y+r.H/2)
+				if tc.id == "awake" && (!a.awake.active() || a.awake.duration != 30*time.Minute) {
+					t.Fatal("primary click no longer selects the awake duration")
+				}
+				if tc.id == "playing" && a.np.last.Playing {
+					t.Fatal("primary click no longer pauses playback")
+				}
 			}
 		})
 	}
