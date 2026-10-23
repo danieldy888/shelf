@@ -97,6 +97,29 @@ func TestLoadUnknownVersionDefaults(t *testing.T) {
 	}
 }
 
+// A file written before version stamps existed has no version (0): it is
+// the current schema plus housekeeping, so Load normalizes it instead of
+// falling back to defaults — and, worse, letting the next Write bury it.
+func TestLoadUnversionedFileNormalizes(t *testing.T) {
+	dir := t.TempDir()
+	data, _ := json.Marshal(map[string]any{
+		"cards": []Card{{ID: "zip", Span: 7}, {ID: "clip"}},
+	})
+	if err := os.WriteFile(filepath.Join(dir, FileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unversioned file rejected: %v", err)
+	}
+	if !slices.Equal(cardIDs(l), []string{"zip", "clip"}) || l.Cards[0].Span != 1 {
+		t.Fatalf("unversioned file not normalized: %+v", l.Cards)
+	}
+	if l.Version != Version {
+		t.Fatalf("version = %d, want %d", l.Version, Version)
+	}
+}
+
 func TestNormalizeDedupesCardsAndPins(t *testing.T) {
 	l := Layout{
 		Version: Version,

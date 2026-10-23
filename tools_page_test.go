@@ -3,7 +3,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -186,5 +190,164 @@ func TestToolsEscapeReset(t *testing.T) {
 	}
 	if !a.visible {
 		t.Fatal("esc hid while editing was still on")
+	}
+}
+
+// A layout.json the loader cannot read (bad JSON here) draws the default
+// grid for the session but is never written back — mutating in memory must
+// leave the recoverable file byte-identical, as settingsBroken does.
+func TestToolsBrokenLayoutNeverWritten(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	bad := []byte("{nope")
+	if err := os.WriteFile(filepath.Join(dir, "layout.json"), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &shelf{store: s, dataDir: dir}
+	_ = a.toolsLayout() // the broken load latches
+	a.mutateTools(func(l *layout.Layout) { l.MoveCard("zip", 0) })
+	got, err := os.ReadFile(filepath.Join(dir, "layout.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(bad) {
+		t.Fatalf("a broken layout was overwritten: %q", got)
+	}
+}
+
+// A write that fails leaves both the file and the in-memory layout as
+// they were — the card still shows after the failed removal.
+func TestToolsWriteFailureKeepsLayout(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s, dataDir: dir}
+	before := a.toolsLayout() // load + default write while the dir is writable
+	saved, err := os.ReadFile(filepath.Join(dir, "layout.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	a.mutateTools(func(l *layout.Layout) { l.RemoveCard("zip") })
+	got := a.toolsLayout()
+	if !slices.EqualFunc(got.Cards, before.Cards, func(x, y layout.Card) bool { return x == y }) {
+		t.Fatalf("a failed write changed the in-memory layout: %v", got.Cards)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "layout.json"))
+	if err != nil || string(data) != string(saved) {
+		t.Fatalf("the file changed under a failed write: %v", err)
+	}
+}
+
+// The card-level press handler must not eat the child controls' downs:
+// a tap on a 保持唤醒 duration pill picks that duration, not the card's
+// one-hour toggle — the press belongs to the chip, so p.press stays empty.
+func TestToolsAwakeChipGetsItsOwnPress(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	power := newFakePower()
+	l := layout.Default()
+	a := &shelf{store: s, tab: pageTools, visible: true}
+	a.awake = &awakeModule{host: a, create: power.create, release: power.release}
+	a.toolsLay = &l
+	a.mutateTools(func(l *layout.Layout) { l.SetSpan("awake", 2) }) // dataDir empty: memory only
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	r, ok := view.Find("30 分钟")
+	if !ok {
+		t.Fatal("awake chip missing")
+	}
+	p := a.toolsPage()
+	view.Press(r.X+r.W/2, r.Y+r.H/2)
+	view.Advance(50 * time.Millisecond)
+	if p.press != nil {
+		t.Fatalf("a chip press became a card press: %+v", p.press)
+	}
+	view.Release(r.X+r.W/2, r.Y+r.H/2)
+	view.Advance(50 * time.Millisecond)
+	if a.awake.duration != 30*time.Minute {
+		t.Fatalf("chip tap set %v, want 30m", a.awake.duration)
+	}
+}
+
+// A tap on an action card while the one-job converter is taken starts
+// nothing: the card shakes and posts the busy line instead of being
+// silently counted as run.
+func TestToolsCardTapDuringConvertIsBusy(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	f := writeFile(t, t.TempDir(), "a.png", testPNGBytes(t))
+	s.Items = append(s.Items, store.Item{ID: "i1", Kind: store.KindFile, Path: f})
+	a := &shelf{store: s}
+	a.selection.only("i1")
+	a.conv = &converter{job: &convertJob{}} // a job in flight
+	p := a.toolsPage()
+	p.toolCardTapped("zip")
+	if p.jiggleID != "zip" {
+		t.Fatalf("busy tap did not jiggle: %q", p.jiggleID)
+	}
+	if a.status != "一次只跑一个任务，请稍候" {
+		t.Fatalf("busy tap posted %q, want the busy line", a.status)
+	}
+}
+
+// A press held still past the long-press deadline enters editing on the
+// frame clock: the checker itself requests frames while the press waits,
+// so a quiet panel still reaches it.
+func TestToolsStillLongPressEntersEdit(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s, tab: pageTools, visible: true}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	r, ok := view.Find("框选文字")
+	if !ok {
+		t.Fatal("ocr card missing")
+	}
+	view.Press(r.X+r.W/2, r.Y+r.H/2)
+	view.Advance(toolLongPress + 100*time.Millisecond)
+	p := a.toolsPage()
+	if p == nil || !p.editing {
+		t.Fatalf("still long press did not enter editing: %v", p)
+	}
+	view.Release(r.X+r.W/2, r.Y+r.H/2)
+	if !p.editing {
+		t.Fatal("releasing the long press left editing")
+	}
+}
+
+// Esc inside the 「+」 catalogue only backs out to the edit grid (same as
+// 完成); editing ends on a second Esc.
+func TestToolsEscapeInPickerClosesPickerOnly(t *testing.T) {
+	a := &shelf{tab: pageTools, visible: true}
+	p := a.toolsPage()
+	p.editing, p.picking = true, true
+	a.escape()
+	if !p.editing || p.picking {
+		t.Fatalf("Esc in the picker ended editing instead of the picker: editing=%v picking=%v", p.editing, p.picking)
+	}
+	a.escape()
+	if p.editing {
+		t.Fatal("second Esc did not leave editing")
+	}
+	if !a.visible {
+		t.Fatal("Esc hid the panel")
 	}
 }
