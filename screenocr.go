@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -53,9 +54,10 @@ func captureRegion(path string) error {
 }
 
 // startScreenOCR is 「框选文字」's one entry for every trigger: the ⌃⌥O
-// shortcut, the tray menu and (once 工具页 lands) its card. The whole start
-// runs on the UI thread so the permission sheet and the capture flag stay
-// single-owner; the interactive capture and recognition run off it.
+// shortcut, the tray menu and the tools page's card (runToolCard). The
+// whole start runs on the UI thread so the permission sheet and the
+// capture flag stay single-owner; the interactive capture and
+// recognition run off it.
 func (a *shelf) startScreenOCR() {
 	ocrDispatch(func() {
 		switch {
@@ -126,6 +128,42 @@ func (a *shelf) finishScreenOCR(timer *time.Timer, text string, produced bool, e
 		a.toastStatus(fmt.Sprintf("已复制识别出的文字 · %d 字", utf8.RuneCountInString(text)),
 			time.Now().Add(3*time.Second), statusOK)
 	}
+}
+
+// copyDroppedText is 识别文字并复制 for files dropped on the 框选文字
+// card: the paths never become tray items — each is recognized off the
+// main thread under the same Vision lock, and the verdict reuses
+// finishScreenOCR's wording. A file that fails is skipped; a batch with
+// nothing recognized reports the last error.
+func (a *shelf) copyDroppedText(paths []string) {
+	a.ocrScan = true
+	a.ocrBusyAt = time.Now()
+	a.ocrRunID++
+	timer := ocrAfterFunc(ocrProgressDelay, func() {
+		if a.win != nil {
+			a.win.Invalidate() // wakes the live progress capsule
+		}
+	})
+	ocrWork(func() {
+		var parts []string
+		var lastErr error
+		for _, p := range paths {
+			lines, err := ocrRecognize(p)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if text := joinOCRLines(lines); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		err := lastErr
+		if len(parts) > 0 {
+			err = nil
+		}
+		text := strings.Join(parts, "\n")
+		ocrDispatch(func() { a.finishScreenOCR(timer, text, true, err) })
+	})
 }
 
 // ocrLiveStatus is the capsule's running-job line while a screen OCR is

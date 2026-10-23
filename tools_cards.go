@@ -18,10 +18,7 @@ package main
 //	// A file drop landing on it calls a.runToolCardDrop(id, drop.Data)
 //	// — already wired inside toolCard when the card accepts the class.
 //
-// Card ids are stable: layout.json stores them. The 框选文字 card has no
-// entry yet — it appears once task C's startScreenOCR entry exists
-// (PLAN.md 任务 A 第 3 条); its intended def is in a comment at
-// toolCatalog.
+// Card ids are stable: layout.json stores them.
 
 import (
 	"fmt"
@@ -70,9 +67,7 @@ var (
 	cupSymbol      = symbol(`<path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16M8 3v3M11 3v3M14 3v3"/>`)
 	plusSymbol     = symbol(`<path d="M12 5v14M5 12h14"/>`)
 	pencilSymbol   = symbol(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>`)
-	// ocrSymbol is the 框选文字 glyph from the design file, kept here so
-	// the deferred card def only loses the comment when it lands.
-	ocrSymbol = symbol(`<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 10h8M8 14h5"/>`)
+	// ocrSymbol 由 screenocr.go（任务 C）提供，这里直接用。
 	// minusSymbol / spanSymbol are the edit-mode chrome: the ⊖ badge and
 	// the variable-span handle.
 	minusSymbol = symbol(`<path d="M5 12h14"/>`)
@@ -81,14 +76,11 @@ var (
 )
 
 // toolCatalog is every card in picker order: actions first, then
-// widgets (design §3's rows in order). The 框选文字 card is deliberately
-// absent — its entry is task C's startScreenOCR; when C merges, it goes
-// to the front of the actions and the default layout with it:
-//
-//	{id: "ocr", kind: cardAction, title: "框选文字", icon: ocrSymbol,
-//		span: 1, accepts: imagesOnly, available: always},
+// widgets (design §3's rows in order). 框选文字 leads the actions and
+// the default layout's first cell (design §1's first grid).
 func toolCatalog() []toolCardDef {
 	return []toolCardDef{
+		{id: "ocr", kind: cardAction, title: "框选文字", icon: ocrSymbol, span: 1, accepts: imagesOnly, available: always},
 		{id: "fit1m", kind: cardAction, title: "压缩到 1 MB", icon: shrinkSymbol, span: 1, accepts: imagesOnly, available: always},
 		{id: "topdf", kind: cardAction, title: "转成 PDF", icon: pdfSymbol, span: 1, accepts: imagesOnly, available: always},
 		{id: "tojpeg", kind: cardAction, title: "转 JPEG", icon: imgSymbol, span: 1, accepts: imagesOnly, available: always},
@@ -274,6 +266,9 @@ func (a *shelf) toolCardDropAction(id string, paths []string) dropAction {
 		return zipAction(len(paths))
 	}
 	switch id {
+	case "ocr":
+		// 识别文字并复制：不走转换管线，走 isOCRCopy 通道
+		return dropAction{id: id, icon: def.icon, label: "识别文字并复制", sub: dropCountTextFor(len(paths), classImages), isOCRCopy: true}
 	case "fit1m":
 		return dropAction{id: id, icon: def.icon, label: def.title, sub: "以内", target: toFit1M}
 	case "tojpeg":
@@ -338,6 +333,9 @@ func (a *shelf) runToolCard(id string) bool {
 		return false
 	}
 	switch def.id {
+	case "ocr":
+		a.startScreenOCR() // 开始框选（设计 §5）；面板会先收起
+		return true
 	case "playing", "recent":
 		return true // the card acts only through its own controls/thumbs
 	case "awake":
@@ -422,7 +420,7 @@ func (a *shelf) toolCardTargets(id string) []store.Item {
 	var out []store.Item
 	for _, it := range a.selection.chosen(a.itemsFor(pageTray)) {
 		switch id {
-		case "fit1m", "tojpeg", "resize", "topdf":
+		case "ocr", "fit1m", "tojpeg", "resize", "topdf":
 			if convertible(it) {
 				out = append(out, it)
 			}

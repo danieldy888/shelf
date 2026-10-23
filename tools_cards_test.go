@@ -3,6 +3,8 @@
 package main
 
 import (
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"shelf/internal/layout"
@@ -37,7 +39,7 @@ func TestToolCatalogShapes(t *testing.T) {
 // nothing.
 func TestToolCardAccepts(t *testing.T) {
 	want := map[string][4]bool{
-		//                    images pdfs archives mixed
+		"ocr":     {true, false, false, false},
 		"fit1m":   {true, false, false, false},
 		"topdf":   {true, false, false, false},
 		"tojpeg":  {true, false, false, false},
@@ -77,23 +79,28 @@ func TestToolCardDropAction(t *testing.T) {
 		paths  []string
 		target convertTarget
 		air    bool
+		ocr    bool
 	}{
-		{"fit1m", one, toFit1M, false},
-		{"tojpeg", one, toJPEG, false},
-		{"resize", one, toMedium, false},
-		{"topdf", one, toPDF, false},
-		{"topdf", two, toMergedPDF, false}, // images merge past the first
-		{"toword", one, toWord, false},
-		{"extract", one, toExtract, false},
-		{"zip", two, toZip, false},
-		{"airdrop", one, 0, true},
+		{"ocr", one, 0, false, true},
+		{"fit1m", one, toFit1M, false, false},
+		{"tojpeg", one, toJPEG, false, false},
+		{"resize", one, toMedium, false, false},
+		{"topdf", one, toPDF, false, false},
+		{"topdf", two, toMergedPDF, false, false}, // images merge past the first
+		{"toword", one, toWord, false, false},
+		{"extract", one, toExtract, false, false},
+		{"zip", two, toZip, false, false},
+		{"airdrop", one, 0, true, false},
 	}
 	for _, tc := range cases {
 		act := a.toolCardDropAction(tc.id, tc.paths)
 		if act.isAirDrop != tc.air {
 			t.Fatalf("%s: airdrop flag wrong", tc.id)
 		}
-		if !tc.air && act.target != tc.target {
+		if act.isOCRCopy != tc.ocr {
+			t.Fatalf("%s: isOCRCopy = %v, want %v", tc.id, act.isOCRCopy, tc.ocr)
+		}
+		if !tc.air && !tc.ocr && act.target != tc.target {
 			t.Fatalf("%s: target %v, want %v", tc.id, act.target, tc.target)
 		}
 	}
@@ -165,5 +172,47 @@ func TestLayoutDefaultCards(t *testing.T) {
 		if card.Span != def.span {
 			t.Fatalf("default %s span %d, catalog %d", card.ID, card.Span, def.span)
 		}
+	}
+}
+
+// TestOCRCardTapStartsScreenOCR wires the card's tap to task C's entry:
+// runToolCard("ocr") must call startScreenOCR — the capture seam runs
+// and the recognized text lands on the clipboard through the shared
+// finish path.
+func TestOCRCardTapStartsScreenOCR(t *testing.T) {
+	ocrSeams(t)
+	ocrPreflight = func() bool { return true }
+	ocrCapture = func(path string) error { writePixelPNG(t, path); return nil }
+	ocrRecognize = func(string) ([]string, error) { return []string{"识别出的文字"}, nil }
+	var copied atomic.Value
+	a := &shelf{visible: false, write: recordClipFunc(func(text string) error { copied.Store(text); return nil })}
+	if !a.runToolCard("ocr") {
+		t.Fatal("tapping 框选文字 must answer true — it ran, there is nothing to jiggle")
+	}
+	got, _ := copied.Load().(string)
+	if got != "识别出的文字" {
+		t.Fatalf("the card tap never reached capture+copy: %q", got)
+	}
+}
+
+// TestOCRCardDropCopiesText wires the card's file drop to 识别文字并复
+// 制: the images' text goes to the clipboard, nothing is shelved and the
+// panel stays on the tools page (design §3's 拖文件到卡片上 column).
+func TestOCRCardDropCopiesText(t *testing.T) {
+	ocrSeams(t)
+	ocrRecognize = func(p string) ([]string, error) {
+		return []string{"from " + filepath.Base(p)}, nil
+	}
+	var copied atomic.Value
+	a := &shelf{tab: pageTools, visible: true,
+		write: recordClipFunc(func(text string) error { copied.Store(text); return nil })}
+	a.drop.files = []string{"/tmp/one.png", "/tmp/two.png"}
+	a.runDropAction(a.toolCardDropAction("ocr", a.drop.files), fileDrop(t, a.drop.files...))
+	got, _ := copied.Load().(string)
+	if got != "from one.png\nfrom two.png" {
+		t.Fatalf("dropped images must be recognized in order: %q", got)
+	}
+	if a.tab != pageTools {
+		t.Fatalf("an OCR copy must not jump to the tray page: %v", a.tab)
 	}
 }

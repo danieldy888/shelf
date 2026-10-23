@@ -129,7 +129,8 @@ func dropDebugFiles() []string {
 // dropAction is one action cell: glyph, label, subtitle, and what a drop
 // on it runs. target is the convertTarget fed to the conversion pipeline;
 // airDrop is the odd one out — it opens the system sheet and stores
-// nothing.
+// nothing; isOCRCopy (the 框选文字 card) recognizes the images' text and
+// puts it on the clipboard instead of shelving anything.
 type dropAction struct {
 	id        string
 	icon      *ui.SVG
@@ -137,6 +138,7 @@ type dropAction struct {
 	sub       string
 	target    convertTarget
 	isAirDrop bool
+	isOCRCopy bool
 }
 
 // dropClass is what the dragged paths are, as a group.
@@ -562,23 +564,31 @@ func (a *shelf) dropActionCell(c *ui.Context, act dropAction, busy bool) {
 // acts on is the set the cells drew — a.drop.files — frozen at release so
 // a board rewrite under the pointer can't swap the job; the drop data is
 // the fallback for sources that never exposed paths mid-drag. AirDrop
-// only opens the system sheet. Everything else drives the existing
-// conversion pipeline on items built from the paths: they are not
-// shelved; only the outputs land in the tray, front and selected, so the
-// panel settles on the tray page.
+// only opens the system sheet, isOCRCopy only fills the clipboard.
+// Everything else drives the existing conversion pipeline on items built
+// from the paths: they are not shelved; only the outputs land in the
+// tray, front and selected, so the panel settles on the tray page.
 func (a *shelf) runDropAction(act dropAction, data transfer.Data) {
 	a.received = true
 	a.drop.done = true
-	if a.tab != pageTray {
-		a.setTab(pageTray)
-	}
 	files := a.drop.files
 	if len(files) == 0 {
 		var err error
 		if files, err = dropFilesData(data); err != nil || len(files) == 0 {
+			if a.tab != pageTray {
+				a.setTab(pageTray)
+			}
 			a.receive(data)
 			return
 		}
+	}
+	if act.isOCRCopy {
+		// 识别文字并复制：产出是剪贴板，不进托盘，页面留在原地。
+		a.copyDroppedText(files)
+		return
+	}
+	if a.tab != pageTray {
+		a.setTab(pageTray)
 	}
 	if act.isAirDrop {
 		if err := airDrop(files, nil); err != nil {

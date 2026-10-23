@@ -66,13 +66,13 @@ type Layout struct {
 }
 
 // Default returns the arrangement a missing or broken file starts from:
-// the design's default grid. The 框选文字 card joins the front of row one
-// when its entry lands (PLAN.md 任务 A 第 3 条: the card stays out of the
-// catalog until task C merges).
+// the design's default grid — 框选文字 leads row one (design §1's first
+// grid), the actions and widgets the rest of the row shows.
 func Default() Layout {
 	return Layout{
 		Version: Version,
 		Cards: []Card{
+			{ID: "ocr", Span: 1},
 			{ID: "fit1m", Span: 1},
 			{ID: "topdf", Span: 1},
 			{ID: "zip", Span: 1},
