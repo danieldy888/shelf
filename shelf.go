@@ -116,8 +116,10 @@ type shelf struct {
 	leaving    map[string]time.Time
 
 	// toolsLay 缓存工具页的 layout.json（internal/layout）；懒加载，
-	// mutateTools 写盘后保持最新。
-	toolsLay *layout.Layout
+	// mutateTools 写盘后保持最新。toolsLayBroken 与 settingsBroken 同规：
+	// 文件读不通时界面用默认布局，但禁止任何写回以免覆盖可恢复原件。
+	toolsLay       *layout.Layout
+	toolsLayBroken bool
 }
 
 func (a *shelf) toggle() {

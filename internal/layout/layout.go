@@ -103,10 +103,13 @@ func Load(dir string) (Layout, error) {
 	if err := json.Unmarshal(data, &l); err != nil {
 		return Default(), fmt.Errorf("layout: %s is not valid JSON, using defaults: %w", FileName, err)
 	}
+	l.normalize()
 	if l.Version != Version {
+		// normalize() admits a file written before version stamps
+		// existed (0 becomes Version); anything else is a future schema
+		// the defaults must not overwrite.
 		return Default(), fmt.Errorf("layout: %s version %d unknown, using defaults", FileName, l.Version)
 	}
-	l.normalize()
 	return l, nil
 }
 

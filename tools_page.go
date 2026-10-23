@@ -107,6 +107,9 @@ func (a *shelf) toolsLayout() layout.Layout {
 		if a.dataDir != "" {
 			got, err := layout.Load(a.dataDir)
 			if err != nil {
+				// Like settingsBroken: the page still draws, but the file
+				// the user could repair stays untouched until restart.
+				a.toolsLayBroken = true
 				a.report(err)
 			}
 			l = got
