@@ -46,6 +46,23 @@ func dropSmokeShelf(t *testing.T) *shelf {
 	if a.win == nil {
 		t.Fatal("no notch window")
 	}
+	onMain(func() {
+		// Each smoke test gets an empty slate: the drop-zone snapshot
+		// holds the file set of the last drag that drew cells (shotDropZone
+		// feeds it through SHELF_DEBUG_DROP_FILES), and runDropAction
+		// prefers it over the data actually dropped — a leftover set would
+		// convert the previous test's deleted tempdir instead of this
+		// test's files. Converted outputs likewise stay in the shared tray
+		// and would confuse findConverted.
+		a.drop = dropZoneState{}
+		for _, it := range a.store.Items {
+			if it.Pinned {
+				_ = a.store.SetPinned(it.ID, false)
+			}
+		}
+		_ = a.store.Clear()
+		a.selection.clear()
+	})
 	return a
 }
 
