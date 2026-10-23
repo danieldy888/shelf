@@ -274,6 +274,16 @@ func dropCountTextFor(n int, class dropClass) string {
 	return fmt.Sprintf("%d 项", n)
 }
 
+// dropZoneShow answers whether the dragged files become the drop zone
+// (needH then): the tools page keeps its grid and routes drops to the
+// cards instead.
+func (a *shelf) dropZoneShow() (on bool, need int) {
+	if a.tab == pageTools {
+		return false, 0
+	}
+	return true, dropZoneNeedH()
+}
+
 // dropZoneSnap answers which files the zone should show, updating the
 // shelf's dropZoneState. Order matters: the pointer check runs before any
 // pasteboard read, so a drag merely passing over the notch strip never
@@ -283,8 +293,8 @@ func dropCountTextFor(n int, class dropClass) string {
 // dropHoldGrace — or until the drop is consumed — so the release frame
 // still builds the cells it needs. Shelf's own drag-out, a drag carrying
 // no files, and a release outside the panel all answer nil. The debug pin
-// bypasses the pointer check so the screenshot harness can hold the zone
-// open.
+// SHELF_DEBUG_DROP_FILES skips the monitor: it makes the shelf build the
+// drop zone for a fixed file list, for screenshots and smoke tests.
 func (a *shelf) dropZoneSnap(over bool) []string {
 	d := &a.drop
 	d.on, d.need = false, 0
@@ -297,7 +307,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 			d.class = classifyDrop(d.files)
 		}
 		if len(d.files) > 0 {
-			d.on, d.need = true, dropZoneNeedH()
+			d.on, d.need = a.dropZoneShow()
 			return d.files
 		}
 	} else if !a.dragging && !d.loaded && !d.frozen {
@@ -322,7 +332,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 				return nil // released outside the panel: nothing to deliver
 			}
 		}
-		d.on, d.need = true, dropZoneNeedH()
+		d.on, d.need = a.dropZoneShow()
 		return d.files
 	}
 	if a.dragging {
@@ -348,13 +358,13 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		} else if len(d.files) > 0 && count != d.count {
 			d.frozen = true
 			d.until = time.Now().Add(dropHoldGrace)
-			d.on, d.need = true, dropZoneNeedH()
+			d.on, d.need = a.dropZoneShow()
 			return d.files
 		}
 		if len(d.files) == 0 {
 			return nil
 		}
-		d.on, d.need = true, dropZoneNeedH()
+		d.on, d.need = a.dropZoneShow()
 		return d.files
 	}
 	// The drag flag fell: keep serving this session's files briefly so a
@@ -376,7 +386,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		}
 	}
 	d.frozen = true // the drag ended: this set is final until delivered
-	d.on, d.need = true, dropZoneNeedH()
+	d.on, d.need = a.dropZoneShow()
 	return d.files
 }
 

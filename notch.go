@@ -544,6 +544,15 @@ func (a *shelf) escape() {
 		}
 		return
 	}
+	if a.tab == pageTools {
+		if p := a.toolsPage(); p != nil && (p.editing || p.picking) {
+			p.editing, p.picking, p.press = false, false, nil
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+			return
+		}
+	}
 	a.hide(hideExplicit)
 }
 
@@ -573,6 +582,7 @@ func (a *shelf) hide(exit hideExit) {
 	// 要么授权已完成（预检通过直接框选），都不该回到一张旧卡。
 	a.ocrSheet = false
 	a.prevAppPID = 0
+	a.resetToolsEdit() // 工具页的编辑与目录不跨收起保留
 	a.releaseKeys()
 	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。

@@ -1134,6 +1134,9 @@ func (a *shelf) itemsFor(id pageID) []store.Item {
 		return p.items()
 	case *clipboardPage:
 		return p.items()
+	case *toolsPage:
+		// 工具页的动作卡作用于托盘选中项：它报托盘的列表，选择不随翻页丢。
+		return a.itemsFor(pageTray)
 	default:
 		return nil
 	}
@@ -1174,6 +1177,9 @@ func (a *shelf) setTab(id pageID) {
 	a.tabFrom, a.tab = cur, id
 	if cur == pageUsage && a.usage != nil { // 离开用量页即取消其后台工作
 		a.usage.stopWork()
+	}
+	if cur == pageTools { // 离开工具页即退出编辑与目录
+		a.resetToolsEdit()
 	}
 	if a.visible {
 		a.tabAt = time.Now()

@@ -759,8 +759,8 @@ func TestNonSharingPageDrivesPanelHeight(t *testing.T) {
 
 	fake := &fakePage{on: true, height: 260}
 	a.registerPage(fake)
-	if got := a.pageIndex("fake"); got != 2 {
-		t.Fatalf("the fake page must register after the two built-ins, got index %d", got)
+	if got := a.pageIndex("fake"); got != 3 {
+		t.Fatalf("the fake page must register after the three built-ins, got index %d", got)
 	}
 
 	shared := a.desiredFrame().Height // tray: the group's taller stage (clipboard)

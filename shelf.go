@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
+	"shelf/internal/layout"
 	"shelf/internal/mac"
 	"shelf/internal/settings"
 	"shelf/internal/store"
@@ -110,6 +111,10 @@ type shelf struct {
 	// 以及已拖出、等待最终移除的托盘项目及其放下时刻。
 	dragOutIDs []string
 	leaving    map[string]time.Time
+
+	// toolsLay 缓存工具页的 layout.json（internal/layout）；懒加载，
+	// mutateTools 写盘后保持最新。
+	toolsLay *layout.Layout
 }
 
 func (a *shelf) toggle() {
@@ -505,6 +510,9 @@ func (a *shelf) openClipboardSearch() {
 func (a *shelf) switchTab(id pageID) {
 	if a.tab == pageUsage && id != pageUsage && a.usage != nil {
 		a.usage.stopWork()
+	}
+	if a.tab == pageTools && id != pageTools {
+		a.resetToolsEdit()
 	}
 	a.tab = id
 }

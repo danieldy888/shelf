@@ -73,7 +73,11 @@ var (
 	// ocrSymbol is the 框选文字 glyph from the design file, kept here so
 	// the deferred card def only loses the comment when it lands.
 	ocrSymbol = symbol(`<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 10h8M8 14h5"/>`)
-	awakeWarn = ui.Hex("#FF9F0A") // 保持唤醒的橙点（设计稿 var(--warn)）
+	// minusSymbol / spanSymbol are the edit-mode chrome: the ⊖ badge and
+	// the variable-span handle.
+	minusSymbol = symbol(`<path d="M5 12h14"/>`)
+	spanSymbol  = symbol(`<path d="M4 9h7M4 15h10M17 5v14M20 8l-3-3-3 3M20 16l-3 3-3-3"/>`)
+	awakeWarn   = ui.Hex("#FF9F0A") // 保持唤醒的橙点（设计稿 var(--warn)）
 )
 
 // toolCatalog is every card in picker order: actions first, then
@@ -144,16 +148,18 @@ const (
 // toolCard draws one card: the fill1 14-radius shell with the card's
 // content for its surface, the hot treatment while dragged files it
 // accepts hover it, and its own drop target so a release on it runs the
-// action instead of shelving the files. The caller sets the card's size
-// and adds its surface's pointer wiring (long-press / drag-to-reorder in
-// the editing grid, window drag on the desktop).
-func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface) ui.Element {
+// action instead of shelving the files. keySfx distinguishes a second
+// copy of the same card among siblings (the lifted copy over the parked
+// one mid-reorder): siblings sharing a key panic a Tester. The caller
+// sets the card's size and adds its surface's pointer wiring.
+func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface, keySfx ...string) ui.Element {
 	def := toolCardDefFor(spec.ID)
 	title := spec.ID
-	if def != nil {
-		title = def.title
+	key := "tc-" + spec.ID
+	if len(keySfx) > 0 {
+		key = "tc-" + keySfx[0] + "-" + spec.ID
 	}
-	card := ui.Column(c.Key("tc-" + spec.ID)).Radius(14).MinWidth(0).MinHeight(0).Label(title)
+	card := ui.Column(c.Key(key)).Radius(14).MinWidth(0).MinHeight(0).Label(title)
 	if def == nil {
 		// Unknown id in layout.json: keep an empty cell so the grid
 		// still shows where the card would be.
@@ -182,9 +188,9 @@ func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface) 
 			target = 1.03
 		}
 		scale := card.AnimateTo("hot", target, ui.Animation{Spring: ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.15}})
-		card.Scale(scale, scale)
+		card.Scale(scale, scale).TransformOrigin(0.5, 0.5)
 	} else if hot {
-		card.Scale(1.03, 1.03)
+		card.Scale(1.03, 1.03).TransformOrigin(0.5, 0.5)
 	}
 	if dragging && !accepts {
 		card.Disabled(true).Opacity(0.38)

@@ -56,7 +56,7 @@ func (a *shelf) ensurePages() {
 	}
 	a.pagesReady = true
 	extra := a.pages
-	a.pages = []panelPage{&trayPage{host: a}, &clipboardPage{host: a}}
+	a.pages = []panelPage{&trayPage{host: a}, &clipboardPage{host: a}, &toolsPage{host: a}}
 	for _, p := range extra {
 		a.registerPage(p)
 	}
