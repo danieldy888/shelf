@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/layout"
@@ -396,4 +397,108 @@ func TestToolsSettleEndsWhenFlightNeverMoves(t *testing.T) {
 		t.Fatalf("the next card could not start its own drag: %+v", p.press)
 	}
 	view.Release(next.X+40, next.Y+20)
+}
+
+// toolsOverflowLayout is a 4-row grid (13 cards): the fourth row is
+// beyond the three the stage shows, so the grid scrolls.
+func toolsOverflowLayout() layout.Layout {
+	return layout.Layout{Version: layout.Version, Cards: []layout.Card{
+		{ID: "ocr"}, {ID: "fit1m"}, {ID: "topdf"}, {ID: "zip"},
+		{ID: "tojpeg"}, {ID: "toword"}, {ID: "extract"}, {ID: "resize"},
+		{ID: "airdrop"}, {ID: "awake"}, {ID: "playing", Span: 2},
+		{ID: "recent", Span: 2}, {ID: "clip", Span: 2},
+	}}
+}
+
+// The grid past three rows must scroll: the cards are absolute, and an
+// absolute child of the scroll itself counts toward neither the
+// scrollable content nor the offset, so the fourth row stayed clipped
+// out of reach. A content box in flow carries the height; the cards
+// scroll inside it and take their presses.
+func TestToolsGridScrollsPastThreeRows(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s, tab: pageTools, visible: true}
+	l := toolsOverflowLayout()
+	a.toolsLay = &l
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	p := a.toolsPage()
+	first, ok := view.Find("打成 zip")
+	if !ok {
+		t.Fatal("zip card missing")
+	}
+	view.Frame()
+	if p.scroll.MaxY <= 0 {
+		t.Fatalf("an overflowing grid did not scroll: %+v", p.scroll)
+	}
+	view.Scroll(first.X+first.W/2, first.Y+first.H/2, 0, 200)
+	view.Advance(300 * time.Millisecond)
+	after, _ := view.Find("打成 zip")
+	if after.Y == first.Y {
+		t.Fatalf("scrolling moved no cards: before=%+v after=%+v scroll=%+v", first, after, p.scroll)
+	}
+	// The fourth row is on screen now: its cards take a press.
+	clip, ok := view.Find("剪贴板最新")
+	if !ok {
+		t.Fatal("clip card missing after the scroll")
+	}
+	view.Press(clip.X+10, clip.Y+10)
+	if p.press == nil || p.press.id != "clip" {
+		t.Fatalf("a card of the fourth row could not be pressed: %+v", p.press)
+	}
+	view.Release(clip.X+10, clip.Y+10)
+}
+
+// A release inside the visible grid commits the reorder: the drop
+// predicate measures the viewport (the stage height), not the
+// contentH−MaxY scrollEdges answers once the content really scrolls —
+// that shrinks with the content and misreads releases near the
+// viewport's bottom as outside the stage.
+func TestToolsDropInVisibleGridCommits(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := &shelf{store: s, tab: pageTools, visible: true}
+	l := toolsOverflowLayout()
+	a.toolsLay = &l
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	p := a.toolsPage()
+	p.editing = true
+	view.Frame()
+	stage := float32(p.stageH())
+	if p.scroll.MaxY <= 28 {
+		t.Fatalf("fixture did not overflow the stage enough: %+v", p.scroll)
+	}
+	// Slightly past the shrunken bound, still inside the viewport.
+	py := p.scroll.Y + stage - p.scroll.MaxY + 24
+	if py >= p.scroll.Y+stage-4 {
+		t.Fatalf("no gap between the probe and the content bottom: py=%.1f", py)
+	}
+	last := l.Cards[len(l.Cards)-1].ID
+	oldCursor := cursorPoint
+	t.Cleanup(func() { cursorPoint = oldCursor })
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 680, Y: 200} } // inside the panel
+	d := &toolPress{id: last, dragging: true, px: 20, py: py, index: 0,
+		origCell: toolCell{id: last, x: 0, y: 400}}
+	p.toolCardDrop(d)
+	after := a.toolsLayout().Cards
+	if len(a.pins) != 0 {
+		t.Fatalf("a drop inside the visible grid pinned the card: %d pins", len(a.pins))
+	}
+	if len(after) == 0 || after[0].ID != last {
+		t.Errorf("a drop inside the visible grid did not commit the reorder: %v", idsOf(after))
+	}
+}
+
+func idsOf(cards []layout.Card) []string {
+	var ids []string
+	for _, c := range cards {
+		ids = append(ids, c.ID)
+	}
+	return ids
 }

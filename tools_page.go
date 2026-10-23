@@ -290,12 +290,19 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 			d.px, d.py = vpx, vpy+p.scroll.Y
 		}
 		scroll.Children(func() {
-			for _, cell := range cells {
-				p.toolCell(c, cell, editing, live)
-			}
-			if d != nil && d.dragging {
-				p.toolLiftedCard(c, *d)
-			}
+			// A box in normal flow carries the grid's real height: an
+			// absolute child of the scroll itself counts toward neither
+			// the scrollable content nor the offset, so a grid past the
+			// third row could neither scroll nor be reached. The cards
+			// absolute-position inside the box, which scrolls with them.
+			ui.Box(c.Key("cards-stack")).Width(toolStageW).Height(contentH).Children(func() {
+				for _, cell := range cells {
+					p.toolCell(c, cell, editing, live)
+				}
+				if d != nil && d.dragging {
+					p.toolLiftedCard(c, *d)
+				}
+			})
 		})
 		top, bottom, _ := scrollEdges(&p.scroll, contentH)
 		a.scrollMelt(c, "tools", top, bottom, 0)
@@ -511,7 +518,11 @@ func hypot(dx, dy float32) float64 {
 // 把卡片拖出面板边缘 = 固定到桌面), elsewhere it flies back.
 func (p *toolsPage) toolCardDrop(d *toolPress) {
 	a := p.host
-	_, _, viewH := scrollEdges(&p.scroll, float32(a.currentStageH()))
+	// The drop lands inside the stage when the release is within the
+	// viewport the scroll shows — the stage's own height. scrollEdges
+	// would answer contentH−MaxY, which shrinks as the content grows and
+	// misreads releases near the viewport's bottom.
+	viewH := float32(a.currentStageH())
 	inside := d.px >= 0 && d.px <= toolStageW &&
 		d.py >= p.scroll.Y && d.py <= p.scroll.Y+viewH
 	target := d.origCell
