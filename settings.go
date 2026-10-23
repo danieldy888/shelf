@@ -239,10 +239,13 @@ func (a *shelf) settingsView(c *ui.Context) {
 	ui.Column(c.Key("win")).Fill().Children(func() {
 		// The drawn title bar: traffic lights sit over it (TrafficLight-
 		// Position, or wherever c.TitleBar reports them), the title centers
-		// like the mock's, and the bar drags the window.
+		// like the mock's, and the bar drags the window. The side padding is
+		// symmetric: padding only the controls' side would centre the title
+		// in the remaining space and shift it away from the window centre.
 		bar := c.TitleBar()
+		edge := max(bar.Left, bar.Right)
 		ui.Row(c.Key("titlebar")).Height(float32(max(bar.Height, 38))).FillWidth().
-			AlignItems(ui.Center).Justify(ui.Center).Padding(0, bar.Right, 0, bar.Left).
+			AlignItems(ui.Center).Justify(ui.Center).Padding(0, edge, 0, edge).
 			DragWindow().Children(func() {
 			ui.Text(c, appName+" 设置").SingleLine().FontSize(13).FontWeight(600).TextColor(setInk2)
 		})
