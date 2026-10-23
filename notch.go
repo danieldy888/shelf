@@ -210,6 +210,12 @@ func (a *shelf) windowGeometryChanged() {
 // the hardware notch: nothing drawn inside it is visible.
 func (a *shelf) peekSize() (w, h float32) {
 	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
+	if a.pinReturning {
+		// A pinned card held over the notch wins over the capsule and
+		// the player: the release reads this same zone, so the affordance
+		// must always be the drop-pill it acts on (design §4 松开放回).
+		return baseW + dropPillExtraW, baseH + dropPillBody
+	}
 	if a.capsuleUp(time.Now()) {
 		// The completion capsule takes the peek shape while the panel is
 		// closed: it is what the shell grows into, whether or not a track
@@ -218,11 +224,6 @@ func (a *shelf) peekSize() (w, h float32) {
 	}
 	if a.np != nil && a.np.showsPlayer() {
 		return a.playerSize()
-	}
-	if a.pinReturning {
-		// A pinned card held over the notch: the drop-pill shape,
-		// inviting the release that puts it back (design §4 松开放回).
-		return baseW + dropPillExtraW, baseH + dropPillBody
 	}
 	if a.dragging && !a.ownDrag {
 		if a.dropHot {

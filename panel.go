@@ -936,6 +936,12 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	kind := a.fx.peekKind
 	if !folding {
 		switch {
+		case a.pinReturning:
+			// A pinned card held over the notch wins over the capsule
+			// and the player: the release reads this same zone, so the
+			// affordance must always be the pill it acts on
+			// (design §4 松开放回).
+			kind = peekReturn
 		case a.capsuleUp(now):
 			// The completion capsule outranks the player: a status that is
 			// up is what the shell grew for (peekSize and desiredFrame
@@ -944,10 +950,6 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			kind = peekCapsule
 		case !over && a.np != nil && a.np.showsPlayer():
 			kind = peekPlayer
-		case a.pinReturning:
-			// A pinned card held over the notch: the same pill shape as
-			// the drop invite, reading 松开放回 (design §4).
-			kind = peekReturn
 		case a.dragging && !a.ownDrag:
 			// Inside the notch band the drop pill invites the release;
 			// outside it only the widened hint shows — never a glyph.

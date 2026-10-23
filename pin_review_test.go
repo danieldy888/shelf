@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/mac"
 )
 
 func pinReviewDrag(t *testing.T, a *shelf, p *mygo.Point, active bool) {
@@ -39,5 +42,33 @@ func TestPinReturnZoneHoldsPeek(t *testing.T) {
 	a.monitorDrag(time.Now())
 	if a.pinReturning || a.peeking {
 		t.Fatal("return invitation survived leaving the release zone")
+	}
+}
+
+func TestPinReturnPillBeatsOtherContent(t *testing.T) {
+	for _, state := range []string{"player", "capsule", "retracting"} {
+		t.Run(state, func(t *testing.T) {
+			a := motionWindow()
+			a.settings.IslandNowPlaying = true
+			a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Playing: true, Title: "Review Track"}}
+			if state != "player" {
+				a.toastStatus("已复制", time.Now().Add(time.Hour), statusOK)
+				a.fb.retracting = state == "retracting"
+			}
+			if state == "capsule" && !a.capsuleUp(time.Now()) {
+				t.Fatal("completion capsule fixture is not visible")
+			}
+			a.pinReturning, a.peekProgress = true, 1
+			a.peeking = state != "capsule"
+			w, h := a.peekSize()
+			if w != float32(max(180, a.notchW))+dropPillExtraW || h != float32(max(32, a.notchH))+dropPillBody {
+				t.Fatalf("wrong return shape: %.1fx%.1f", w, h)
+			}
+			view := ui.NewTester(a.view, panelWidth, panelHeight)
+			view.Frame()
+			if !view.HasText("松开放回") || view.HasText("Review Track") || view.HasText("已复制") || a.fx.peekKind != peekReturn {
+				t.Fatalf("return invitation obscured: kind=%v texts=%v", a.fx.peekKind, view.Texts())
+			}
+		})
 	}
 }
