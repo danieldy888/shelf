@@ -28,8 +28,7 @@ const (
 	toolCellGap      = 6                             // 卡片间距
 	toolMaxRows      = 3                             // 最多 3 行可见，再多在舞台内滚动
 	toolStageW       = panelWidth - 16 - 2*panelPadX // 舞台内容宽（panel.go 的 560-16-2·16）
-	toolPickRows     = 3                             // 目录页行数
-	toolPickTileH    = 72                            // 目录一格高
+	toolPickRowH     = 30                            // 目录行高（design §3 .pi 30px）
 	toolLongPress    = 500 * time.Millisecond        // 长按进入编辑
 	toolDragSlop     = 6                             // 普通态拖动超过此距离作废点击
 	toolJiggleSpan   = 300 * time.Millisecond        // 无可执行项时的轻摇
@@ -70,16 +69,16 @@ type toolPress struct {
 
 // toolsPage is the card grid page.
 type toolsPage struct {
-	host       *shelf
-	scroll     ui.ScrollState
-	pickScroll ui.ScrollState
-	editing    bool
-	picking    bool
-	editAt     time.Time // wobble phase origin
-	press      *toolPress
-	skipClick  bool   // the last release was a suppressed press, not a tap
-	jiggleID   string // card shaking for 无可执行项
-	jiggleAt   time.Time
+	host   *shelf
+	scroll ui.ScrollState
+
+	editing   bool
+	picking   bool
+	editAt    time.Time // wobble phase origin
+	press     *toolPress
+	skipClick bool   // the last release was a suppressed press, not a tap
+	jiggleID  string // card shaking for 无可执行项
+	jiggleAt  time.Time
 }
 
 func (p *toolsPage) id() pageID    { return pageTools }
@@ -190,7 +189,7 @@ func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element 
 func (p *toolsPage) stageH() int {
 	a := p.host
 	if p.picking {
-		return toolPickRows*toolPickTileH + (toolPickRows-1)*toolCellGap
+		return p.pickerH()
 	}
 	l := a.toolsLayout()
 	editing := p.editing
@@ -209,6 +208,42 @@ func (p *toolsPage) stageH() int {
 	}
 	rows = min(rows, toolMaxRows)
 	return rows*toolCellH + (rows-1)*toolCellGap
+}
+
+// pickerH is the catalogue's stage height: padding, one h4 per group
+// that has entries, and 30pt rows two per line.
+func (p *toolsPage) pickerH() int {
+	groups := p.pickerGroups()
+	h := 10 + 12 // picker padding top+bottom (design .picker 10px/12px)
+	for _, g := range groups {
+		h += 8 + 18 // h4 margin+text
+		rows := (len(g) + 1) / 2
+		h += rows*toolPickRowH + max(0, rows-1)*4 + 8 // rows, 4px gaps, group gap
+	}
+	return h - 8 // last group has no trailing gap
+}
+
+// pickerGroups is the catalogue split into 动作 and 小组件 rows in
+// picker order.
+func (p *toolsPage) pickerGroups() (groups [][]toolCardDef) {
+	var actions, widgets []toolCardDef
+	for _, def := range toolCatalog() {
+		if !def.available(p.host) {
+			continue
+		}
+		if def.kind == cardAction {
+			actions = append(actions, def)
+		} else {
+			widgets = append(widgets, def)
+		}
+	}
+	if len(actions) > 0 {
+		groups = append(groups, actions)
+	}
+	if len(widgets) > 0 {
+		groups = append(groups, widgets)
+	}
+	return
 }
 
 // body is the stage: the picker's tile list while picking, else the card
@@ -498,8 +533,11 @@ func (p *toolsPage) toolSettle(card ui.Element, d *toolPress) {
 func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell, live bool) {
 	a := p.host
 	card.Children(func() {
-		badge := ui.Row(c.Key("minus")).Absolute().Top(-4).Left(-4).Size(20, 20).Radius(10).
-			Background(ui.Hex("#E8E8ED")).Center().Label("移除")
+		// ⊖: 18pt #3A3A3C circle ringed 1.5pt black with a white dash
+		// (design §2 .minus), sticking out 6pt at the top-left.
+		badge := ui.Row(c.Key("minus")).Absolute().Top(-6).Left(-6).Size(18, 18).Radius(9).
+			Background(ui.Hex("#3A3A3C")).Border(1.5, ui.Hex("#000000")).
+			Center().Label("移除")
 		if live {
 			badge.HandleInput(func(ev ui.InputEvent) bool {
 				if ev.Kind == ui.InputPointerUp {
@@ -511,7 +549,7 @@ func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell
 			badge.PointerPosition()
 		}
 		badge.Children(func() {
-			ui.Icon(c, minusSymbol).Size(11, 11).TextColor(ui.Hex("#1C1C1E"))
+			ui.Box(c).Size(8, 1.6).Radius(1).Background(ink)
 		})
 		if def := toolCardDefFor(cell.id); def != nil && def.variableSpan {
 			cur := 1
@@ -522,8 +560,12 @@ func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell
 			if cur == 2 {
 				next = 1
 			}
-			handle := ui.Row(c.Key("span")).Absolute().Bottom(-4).Right(-4).Size(20, 20).Radius(10).
-				Background(accent).Center().Label(fmt.Sprintf("改为 %d 列", next))
+			// The span handle is the corner bracket of design §2 .rs:
+			// 1.6pt ink2 lines along the card's bottom-right corner. It
+			// tucks inside the card (5pt in), tapping it toggles the span.
+			handle := ui.Box(c.Key("span")).Absolute().Bottom(5).Right(5).Size(12, 12).
+				BorderWidth(0, 1.6, 1.6, 0).BorderColor(ink2).
+				Label(fmt.Sprintf("改为 %d 列", next))
 			if live {
 				handle.HandleInput(func(ev ui.InputEvent) bool {
 					if ev.Kind == ui.InputPointerUp {
@@ -534,9 +576,6 @@ func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell
 				})
 				handle.PointerPosition()
 			}
-			handle.Children(func() {
-				ui.Icon(c, spanSymbol).Size(11, 11).TextColor(ink)
-			})
 		}
 	})
 }
@@ -571,8 +610,10 @@ func (p *toolsPage) toolCardWobble(c *ui.Context, card ui.Element, cell toolCell
 	c.AnimationFrame()
 }
 
-// pickerBody is the catalogue: one tile per card def, added entries
-// greyed (design §3), a tap adding it to the grid.
+// pickerBody is the catalogue (design §3): a #1C1C1E card holding two
+// groups — 动作 and 小组件 — each a 2-column list of 30pt rows (icon,
+// name, size label). A tap adds the card and returns to the edit grid;
+// placed entries are greyed and marked · 已添加.
 func (p *toolsPage) pickerBody(c *ui.Context, live bool) ui.Element {
 	a := p.host
 	l := a.toolsLayout()
@@ -583,54 +624,70 @@ func (p *toolsPage) pickerBody(c *ui.Context, live bool) ui.Element {
 	for _, pin := range l.Pins {
 		placed[pin.ID] = true
 	}
-	catalog := toolCatalog()
-	rows := (len(catalog) + 2) / 3
-	contentH := float32(rows*toolPickTileH + (rows-1)*toolCellGap)
 	return ui.Column(c.Key("tools-pick")).Grow(1).MinHeight(0).Children(func() {
-		scroll := ui.Scroll(c.Key("pick")).Grow(1).MinHeight(0).TrackScroll(&p.pickScroll)
-		top, bottom, _ := scrollEdges(&p.pickScroll, contentH)
-		scroll.Children(func() {
-			ui.Row(c.Key("pick-head")).FillWidth().Children(func() {
-				ui.Text(c, "点按添加到工具页").SingleLine().FontSize(11).TextColor(ink3)
-			})
-			ui.Grid(c.Key("pick-grid")).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1)).Gap(toolCellGap).FillWidth().Children(func() {
-				for _, def := range catalog {
-					p.pickTile(c, def, placed[def.id], live)
+		sheet := ui.Column(c.Key("picker")).FillWidth().Radius(14).
+			Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
+		sheet.Children(func() {
+			for gi, group := range p.pickerGroups() {
+				title := "动作"
+				if gi == 1 {
+					title = "小组件"
 				}
-			})
+				ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).
+					TextColor(ink3).Margin(2, 0, 6, 0)
+				ui.Grid(c.Key("plist-"+title)).ColumnTracks(ui.Fr(1), ui.Fr(1)).
+					GapY(4).GapX(10).FillWidth().Children(func() {
+					for _, def := range group {
+						p.pickRow(c, def, placed[def.id], live)
+					}
+				})
+				if gi == 0 {
+					ui.Box(c).Height(8)
+				}
+			}
 		})
-		a.scrollMelt(c, "pick", top, bottom, 0)
 	})
 }
 
-// pickTile is one catalogue entry: icon + name + 动作/小组件 tag.
-func (p *toolsPage) pickTile(c *ui.Context, def toolCardDef, added, live bool) ui.Element {
+// pickRow is one catalogue row: 15pt icon, name, right-aligned size
+// (1 列 / 2 列 / 1 / 2 列). Placed cards dim to ink3 with · 已添加 and
+// cannot be tapped twice; a usable row taps in and returns to editing.
+func (p *toolsPage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui.Element {
 	a := p.host
-	tile := ui.Column(c.Key("pick-" + def.id)).Height(toolPickTileH).Radius(12).
-		Background(fill1).Center().Gap(4).Label(def.title)
-	if added {
-		tile.Opacity(0.38)
-	} else if live {
-		tile.HandleInput(func(ev ui.InputEvent) bool {
+	row := ui.Row(c.Key("pi-"+def.id)).Height(toolPickRowH).Radius(8).
+		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.title)
+	if !added && live {
+		if row.Hovered() {
+			row.Background(fill2)
+		}
+		row.HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind == ui.InputPointerUp {
 				a.mutateTools(func(l *layout.Layout) { l.AddCard(def.id, def.span) })
+				p.picking = false // 加完回到编辑网格（设计稿 §3 说明）
 				return true
 			}
 			return false
 		})
-		tile.PointerPosition()
+		row.PointerPosition()
 	}
-	tile.Children(func() {
-		ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-		ui.Text(c, def.title).SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
-		kind := "动作"
-		if def.kind == cardWidget {
-			kind = "小组件"
+	row.Children(func() {
+		iconCol, textCol := ink, ink
+		if added {
+			iconCol, textCol = ink3, ink3
+		}
+		ui.Icon(c, def.icon).Size(15, 15).TextColor(iconCol)
+		ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(500).TextColor(textCol)
+		ui.Box(c).Grow(1)
+		size := "1 列"
+		if def.variableSpan {
+			size = "1 / 2 列"
+		} else if def.span == 2 {
+			size = "2 列"
 		}
 		if added {
-			kind = "已添加"
+			size += " · 已添加"
 		}
-		ui.Text(c, kind).SingleLine().FontSize(9).TextColor(ink3)
+		ui.Text(c, size).SingleLine().FontSize(10).TextColor(ink3)
 	})
-	return tile
+	return row
 }

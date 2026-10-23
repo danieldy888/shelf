@@ -1110,10 +1110,13 @@ func (a *shelf) currentStageH() int {
 	}
 }
 
-// panelTargetH is panelContentH clamped to the panel's size bound; the
-// caller clamps it to the work area.
+// panelTargetH is panelContentH plus the 8pt the window keeps below the
+// shell (shellSize's expH is panelH-8), clamped to the panel's size
+// bound; the caller clamps it to the work area. Without the +8 the
+// content column is 8pt short and the last stage row is clipped — an
+// exact-fit page (the tools grid) shows it as a hard cut.
 func (a *shelf) panelTargetH() int {
-	return min(panelMaxH, a.panelContentH())
+	return min(panelMaxH, a.panelContentH()+8)
 }
 
 // visibleItems is the item list the expanded panel shows and acts on: the

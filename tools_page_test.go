@@ -32,19 +32,54 @@ func TestToolsPageRenders(t *testing.T) {
 	}
 }
 
-// TestToolsPageDropZoneSuppressed proves the file-drop zone stays off on
-// the tools tab while the drop state still loads, so the cards route the
-// same drop.
+// TestToolsPageDropZoneSuppressed proves the file-drop zone is a
+// drag-start decision (design §1): only a drag that began while the
+// panel was already open on the tools page keeps the grid for the card
+// targets; any other drag gets the zone even on the tools tab.
 func TestToolsPageDropZoneSuppressed(t *testing.T) {
 	a := &shelf{tab: pageTools, visible: true}
-	on, need := a.dropZoneShow()
-	if on || need != 0 {
-		t.Fatalf("tools tab must keep the drop zone off, got on=%v need=%d", on, need)
+
+	// A drag already in flight when the tools page happens to be showing:
+	// dragOpenTools is the flag drag.go latches on the new serial.
+	a.dragOpenTools = true
+	if on, need := a.dropZoneShow(); on || need != 0 {
+		t.Fatalf("tools-open drag must keep the drop zone off, got on=%v need=%d", on, need)
+	}
+
+	// The same tab but a drag that started elsewhere: the zone wins.
+	a.dragOpenTools = false
+	if on, need := a.dropZoneShow(); !on || need != dropZoneNeedH() {
+		t.Fatalf("an outside drag must get the zone on any tab, got on=%v need=%d", on, need)
 	}
 	a.tab = pageTray
-	on, need = a.dropZoneShow()
-	if !on || need != dropZoneNeedH() {
+	if on, need := a.dropZoneShow(); !on || need != dropZoneNeedH() {
 		t.Fatalf("tray tab must keep the drop zone, got on=%v need=%d", on, need)
+	}
+
+	// The latch itself: a new serial on an open tools page sets it, an
+	// open tray page clears it, a hidden panel clears it too. dragState
+	// is stubbed like drag_band_test does; active=false keeps
+	// pointerDragged on the latch path only.
+	oldState := dragState
+	defer func() { dragState = oldState }()
+	dragState = func() (bool, int64) { return false, 7 }
+	a.tab, a.visible = pageTools, true
+	a.dragSerial = -99 // far from the stub's serial so the latch re-fires
+	a.pointerDragged()
+	if !a.dragOpenTools {
+		t.Fatal("a drag starting on an open tools page must latch dragOpenTools")
+	}
+	a.tab = pageTray
+	a.dragSerial = -99
+	a.pointerDragged()
+	if a.dragOpenTools {
+		t.Fatal("a drag starting on the tray page must not latch")
+	}
+	a.visible = false
+	a.dragSerial = -99
+	a.pointerDragged()
+	if a.dragOpenTools {
+		t.Fatal("a drag starting with the panel hidden must not latch")
 	}
 }
 

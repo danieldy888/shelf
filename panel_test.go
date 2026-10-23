@@ -769,13 +769,13 @@ func TestNonSharingPageDrivesPanelHeight(t *testing.T) {
 		t.Fatalf("tray→clipboard must keep the group height: %d -> %d", shared, got)
 	}
 	a.setTab("fake")
-	fixed := spacerH() + min(max(fake.stageH(), stageMinH), stageMaxH)
+	fixed := spacerH() + 8 + min(max(fake.stageH(), stageMinH), stageMaxH)
 	if got := a.desiredFrame().Height; got != fixed {
 		t.Fatalf("a non-sharing page must own the stage height: want %d, got %d", fixed, got)
 	}
 	fake.height = 190
-	if got := a.desiredFrame().Height; got != spacerH()+190 {
-		t.Fatalf("the panel must follow the page's own stageH: want %d, got %d", spacerH()+190, got)
+	if got := a.desiredFrame().Height; got != spacerH()+8+190 {
+		t.Fatalf("the panel must follow the page's own stageH: want %d, got %d", spacerH()+8+190, got)
 	}
 	a.setTab(pageTray)
 	if got := a.desiredFrame().Height; got != shared {

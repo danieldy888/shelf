@@ -162,7 +162,11 @@ func (a *shelf) pointerDragged() {
 	}
 	active, serial := dragState()
 	if serial != a.dragSerial {
+		// A new drag: remember whether the panel was already open (and on
+		// which page) before show() flips visible — the drop zone is
+		// suppressed only for drags that started over an open tools page.
 		a.dragSerial = serial
+		a.dragOpenTools = a.visible && a.tab == pageTools
 		a.suppressed, a.inBand = false, false // a new drag re-enters
 	}
 	if !active {
@@ -191,6 +195,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	active, serial := dragState()
 	if serial != a.dragSerial {
 		a.dragSerial = serial
+		a.dragOpenTools = a.visible && a.tab == pageTools // 同 pointerDragged
 		a.suppressed, a.inBand = false, false // a new drag re-enters
 	}
 	a.dragging = active

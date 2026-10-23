@@ -85,7 +85,7 @@ func TestToolsPageScreenshots(t *testing.T) {
 	// the drop zone stays off (design §1).
 	t.Setenv("SHELF_DEBUG_DROP_FILES", strings.Join([]string{img}, string(filepath.ListSeparator)))
 	defer t.Setenv("SHELF_DEBUG_DROP_FILES", "")
-	shotToolsPage(t, a, "tools-files-hover", func() { p.editing = false })
+	shotToolsPage(t, a, "tools-files-hover", func() { p.editing = false; a.dragOpenTools = true })
 	// A pin card in layout.json shows as a removed slot after reload —
 	// reset for a clean exit.
 	onMain(func() {

@@ -63,6 +63,7 @@ type shelf struct {
 	appIcons                                                    map[string]*ui.Bitmap // bundle id → icon, cached for clipboard rows
 	write                                                       clipWriter            // where copies go; nil = the system clipboard
 	dragSerial                                                  int64
+	dragOpenTools                                               bool          // 本次外部拖拽开始时面板开在工具页（design §1: 只有这时才用卡片接文件）
 	dragging, suppressed, pointerDrag, ownDrag, dropHot, inBand bool
 	drop                                                        dropZoneState  // incoming-drag zone memory; zero while no drag hovers
 	dataDir                                                     string         // where state.json and settings.json live

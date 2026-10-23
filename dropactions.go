@@ -275,10 +275,12 @@ func dropCountTextFor(n int, class dropClass) string {
 }
 
 // dropZoneShow answers whether the dragged files become the drop zone
-// (needH then): the tools page keeps its grid and routes drops to the
-// cards instead.
+// (needH then). Design §1: only a drag that began while the panel was
+// already open on the tools page keeps the grid and routes drops to the
+// cards; a drag that opens the panel always gets the zone, whatever tab
+// the panel shows.
 func (a *shelf) dropZoneShow() (on bool, need int) {
-	if a.tab == pageTools {
+	if a.dragOpenTools {
 		return false, 0
 	}
 	return true, dropZoneNeedH()
