@@ -459,11 +459,13 @@ func (p *toolsPage) toolCardInput(c *ui.Context, card ui.Element, cell toolCell,
 		}
 		return false
 	})
-	// The long-press deadline is checked at build time; AnimationFrame
-	// keeps them coming while a press sits under the slop.
-	if d := p.press; d != nil && d.id == cell.id && !d.dragging && !d.settling && !p.editing {
-		if time.Since(d.downAt) >= toolLongPress {
-			p.editing, p.editAt = true, time.Now()
+	// The long-press deadline is checked at build time: a still press asks
+	// for every frame until it crosses the slop or editing starts, so the
+	// deadline fires on the frame clock even when nothing else animates.
+	if d := p.press; d != nil && d.id == cell.id && !d.dragging && !d.settling && !d.suppress && !p.editing {
+		c.AnimationFrame()
+		if c.Now().Sub(d.downAt) >= toolLongPress {
+			p.editing, p.editAt = true, c.Now()
 			d.suppress = true // this press only entered edit; no click, no drag yet
 		}
 	}
