@@ -304,3 +304,28 @@ func TestIncomingDragAcceptsOnlyInsideTheBand(t *testing.T) {
 		t.Fatalf("point %+v below the band is inside the drag frame %+v", below, f)
 	}
 }
+
+func TestEdgeLeaveWaitsForToolsPress(t *testing.T) {
+	a := dragShelf()
+	a.visible, a.edgeOpened, a.progress, a.tab = true, true, 1, pageTools
+	p := a.toolsPage()
+	p.editing = true
+	p.press = &toolPress{id: "zip", dragging: true}
+	now := time.Now()
+	far := mygo.Point{X: 100, Y: 800}
+	driveMonitorAt(t, a, now, far, false, 3, nil)
+	driveMonitorAt(t, a, now.Add(2*edgeLeaveDelay), far, false, 3, nil)
+	if !a.visible || p.press == nil {
+		t.Fatal("edge leave hid the panel and aborted an active tools press")
+	}
+	// Once the gesture ends, start a fresh leave countdown.
+	p.press = nil
+	driveMonitorAt(t, a, now.Add(3*edgeLeaveDelay), far, false, 3, nil)
+	if !a.visible {
+		t.Fatal("the held gesture consumed the leave delay")
+	}
+	driveMonitorAt(t, a, now.Add(4*edgeLeaveDelay), far, false, 3, nil)
+	if a.visible {
+		t.Fatal("the panel did not resume passive hiding after the press ended")
+	}
+}

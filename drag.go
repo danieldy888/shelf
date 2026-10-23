@@ -262,7 +262,11 @@ func (a *shelf) monitorDrag(now time.Time) {
 	// 动画途中不判离开。
 	if a.visible && a.edgeOpened && !a.received {
 		inside := p.X >= a.x-24 && p.X < a.x+panelWidth+24 && p.Y >= a.y && p.Y < a.y+a.panelH()+24
-		if !inside && !a.inBand && a.animationStart.IsZero() {
+		// Keep the panel alive for the whole card gesture, including
+		// drag-out and settling; restart the leave delay afterward.
+		tp := a.toolsPage()
+		holdingCard := tp != nil && tp.press != nil
+		if !inside && !a.inBand && !holdingCard && a.animationStart.IsZero() {
 			if a.leftSince.IsZero() {
 				a.leftSince = now
 			}
