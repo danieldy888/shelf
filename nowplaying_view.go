@@ -242,9 +242,14 @@ func (m *nowPlayingModule) progressRow(c *ui.Context, st mac.NowPlayingState, no
 // while hovered; size 32 for prev/next, 38 for play/pause.
 func (m *nowPlayingModule) controlButton(c *ui.Context, key string, icon *ui.SVG, label string, command mac.NowPlayingCommand, size, glyph float32) {
 	b := ui.ButtonBase(c.Key(key)).Size(size, size).Center().Radius(size / 2).Label(label)
-	if b.Hovered() {
-		b.Background(fill2)
-	}
+	b.HandleInput(func(ev ui.InputEvent) bool {
+		// Claim the button's own pointer events: a card-level
+		// HandleInput (tools page's press/reorder) would otherwise be
+		// the innermost handler and swallow the press, so Clicked
+		// would never fire. Keys stay free for ButtonBase's own
+		// Enter/Space activation.
+		return ev.Kind >= ui.InputPointerDown && ev.Kind <= ui.InputPointerMove
+	})
 	b.Children(func() {
 		ui.Icon(c, icon).Size(glyph, glyph).TextColor(ink)
 	})
