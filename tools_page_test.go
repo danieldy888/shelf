@@ -560,3 +560,13 @@ func TestToolsDragOutWriteFailureKeepsGrid(t *testing.T) {
 		t.Fatal("the recovered save wrote zip into both the grid and the pins")
 	}
 }
+
+func TestToolsExactFitGridDoesNotScroll(t *testing.T) {
+	a := &shelf{tab: pageTools, visible: true, store: mustStore(t)}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	p := a.toolsPage()
+	view.Frame()
+	if p.scroll.MaxY != 0 {
+		t.Fatalf("an exact-fit grid has false overflow and edge fading: MaxY=%.1f", p.scroll.MaxY)
+	}
+}

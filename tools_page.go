@@ -282,7 +282,7 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 	cells := packToolCards(cards, editing)
 	contentH := float32(0)
 	for _, cell := range cells {
-		contentH = max(contentH, cell.y+toolCellH+toolCellGap)
+		contentH = max(contentH, cell.y+toolCellH)
 	}
 	return ui.Column(c.Key("tools-stage")).Grow(1).MinHeight(0).Children(func() {
 		scroll := ui.Scroll(c.Key("cards")).Grow(1).MinHeight(0).TrackScroll(&p.scroll)
