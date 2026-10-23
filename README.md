@@ -153,7 +153,7 @@ The full manual is in [docs/MANUAL.zh-CN.md](docs/MANUAL.zh-CN.md) (Chinese).
 
 Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network requests are the update check — shortly after launch and then once a day, Shelf asks this repository's latest GitHub release whether a newer version exists — and, only if you enable the optional AI usage page, its quota lookups to the tools' own endpoints (nothing else is sent, and logins are never refreshed). The update request sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
 
-Clipboard text is stored in plain text in `~/Library/Application Support/Shelf/`. If you are about to copy something you don't want kept, pause recording from the menu-bar icon → 剪贴板记录 (Clipboard History), or exclude the app it comes from.
+Clipboard text is stored in plain text in `~/Library/Application Support/Shelf/`. Recording is always on. To keep an app's copies out, right-click one of its clipboard entries and exclude the app; to copy something you don't want kept, quit Shelf first.
 
 ## Build from source
 
@@ -297,7 +297,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 
 一切都留在你的 Mac 上：不用注册账号，没有遥测，没有云同步。联网请求只有两类：检查更新（启动后不久一次、之后每天一次，向本仓库 GitHub 上的最新 Release 询问有没有新版本，请求里只带一个标准的 User-Agent 头）；以及可选的 AI 用量页的额度查询——只有打开它才会发生，查询用本机已保存的登录信息，只发给工具自己的官方地址，不会发给任何其他地方，也不会刷新登录。「自动检查更新」可以在 设置… → 通用 里关闭；关闭后仍可在菜单里手动检查。
 
-剪贴板文字以明文保存在 `~/Library/Application Support/Shelf/`。要复制不希望被保存的内容时，可以先在菜单栏图标 →「剪贴板记录」里暂停记录，或者把来源应用加入排除列表。
+剪贴板文字以明文保存在 `~/Library/Application Support/Shelf/`。剪贴板记录始终开启。不想记录某个应用复制的内容，右键它的剪贴板条目把应用排除；要复制不希望被保存的内容时，先退出 Shelf 再复制。
 
 ## 从源码构建
 
