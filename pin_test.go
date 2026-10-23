@@ -1113,3 +1113,26 @@ func TestPinChildControlsKeepContextMenu(t *testing.T) {
 		})
 	}
 }
+
+func TestPinCloseWriteFailureKeepsWindow(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir}
+	l := layout.Default()
+	l.AddPin(layout.Pin{ID: "zip", Span: 1, Display: "1"})
+	a.setTools(l)
+	if err := layout.Write(dir, l); err != nil {
+		t.Fatal(err)
+	}
+	w := &mygo.Window{}
+	it := a.pinRegister(&pinItem{cardID: "zip", win: w})
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	ev := &mygo.CloseEvent{Window: w}
+	it.onClose(ev)
+	if !ev.DefaultPrevented() || it.win != w || len(a.pins) != 1 {
+		t.Fatal("a failed put-back allowed the native close or lost its window")
+	}
+}

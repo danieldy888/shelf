@@ -393,12 +393,18 @@ func (it *pinItem) show() {
 // quit — OnBeforeQuit has already set quitting — the window goes away
 // but the pin and its layout entry stay, so the next launch restores it.
 // The window is already going away; unpin must not Destroy it again.
-func (it *pinItem) onClose(_ *mygo.CloseEvent) {
-	it.win = nil
+func (it *pinItem) onClose(ev *mygo.CloseEvent) {
+	w := it.win
+	it.win = nil // the native close owns destruction on success
 	if it.owner.quitting {
 		return
 	}
-	it.owner.unpin(it, true)
+	if !it.owner.unpin(it, true) {
+		it.win = w
+		if ev != nil {
+			ev.PreventDefault()
+		}
+	}
 }
 
 // unpin removes it from the desktop and its pin from the layout.
@@ -406,7 +412,7 @@ func (it *pinItem) onClose(_ *mygo.CloseEvent) {
 // the end when that is gone (放回刘海); otherwise the card leaves the
 // desktop without rejoining the page and can be re-added from the "+"
 // catalog later (从桌面移除, design §4).
-func (a *shelf) unpin(it *pinItem, putBack bool) {
+func (a *shelf) unpin(it *pinItem, putBack bool) bool {
 	if !a.mutateTools(func(l *layout.Layout) {
 		// A pin restored from layout.json has no remembered slot (-1):
 		// 放回刘海 appends it to the page's end rather than the front.
@@ -417,7 +423,7 @@ func (a *shelf) unpin(it *pinItem, putBack bool) {
 		l.RemovePin(it.cardID, putBack, before)
 	}) {
 		it.wantKill = false // do not retry a failed menu action every tick
-		return
+		return false
 	}
 	for i, p := range a.pins {
 		if p == it {
@@ -431,6 +437,7 @@ func (a *shelf) unpin(it *pinItem, putBack bool) {
 		w.Destroy()
 	}
 	a.savePins()
+	return true
 }
 
 // pinDisplaysChanged re-anchors pins whose display went away: docked pins
