@@ -479,3 +479,49 @@ func TestToolsDragOutPins(t *testing.T) {
 		t.Fatal("a release inside the panel should settle back")
 	}
 }
+
+// pinDiskPins reads the pins that layout.json actually holds for dir —
+// the next launch's truth, not the in-memory copy.
+func pinDiskPins(t *testing.T, dir string) []layout.Pin {
+	t.Helper()
+	l, err := layout.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l.Pins
+}
+
+// TestPinQuitCloseKeepsPin is review P1: a window close while quitting is
+// the app closing, not a put-back — the live pin and its layout.json
+// entry survive, so the next launch restores it.
+func TestPinQuitCloseKeepsPin(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	dir := t.TempDir()
+	a := &shelf{dataDir: dir}
+	a.mutateTools(func(l *layout.Layout) {
+		l.AddPin(layout.Pin{ID: "zip", Span: 1, Display: "1", X: 600, Y: 375})
+	})
+	a.quitting = true
+	it := a.pinRegister(&pinItem{cardID: "zip", span: 1, cardW: pinCardW, display: 1, edge: pinFree,
+		frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+	it.onClose(nil)
+	if len(a.pins) != 1 {
+		t.Fatal("the quit-time close removed the live pin")
+	}
+	disk := pinDiskPins(t, dir)
+	if len(disk) != 1 || disk[0].ID != "zip" {
+		t.Fatalf("the quit-time close rewrote layout.json: %+v", disk)
+	}
+	if slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "zip" }) {
+		t.Fatal("the quit-time close put the card back on the tools page")
+	}
+	// A close while not quitting still returns the card, as before.
+	a.quitting = false
+	it.onClose(nil)
+	if len(a.pins) != 0 {
+		t.Fatal("a real close did not unpin")
+	}
+	if !slices.ContainsFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == "zip" }) {
+		t.Fatal("a real close did not return the card to the grid")
+	}
+}

@@ -310,14 +310,21 @@ func (it *pinItem) show() {
 	w.SetVisibleOnAllWorkspaces(true)
 	mac.ConfigurePinWindow(w.NativeHandle())
 	mac.SetWindowFrame(w.NativeHandle(), f.X, f.Y, f.Width, f.Height)
-	w.OnClose(func(e *mygo.CloseEvent) {
-		// A system close (Space switch, Exposé tidy-up) removes the pin:
-		// the card returns to the tools page, same as 放回刘海. The window
-		// is already going away; unpin must not Destroy it again.
-		it.win = nil
-		it.owner.unpin(it, true)
-	})
+	w.OnClose(it.onClose)
 	w.ShowInactive()
+}
+
+// onClose handles a system-initiated close (Space switch, Exposé
+// tidy-up): the card returns to the tools page, same as 放回刘海. On a
+// quit — OnBeforeQuit has already set quitting — the window goes away
+// but the pin and its layout entry stay, so the next launch restores it.
+// The window is already going away; unpin must not Destroy it again.
+func (it *pinItem) onClose(_ *mygo.CloseEvent) {
+	it.win = nil
+	if it.owner.quitting {
+		return
+	}
+	it.owner.unpin(it, true)
 }
 
 // unpin removes it from the desktop and its pin from the layout.
