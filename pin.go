@@ -288,6 +288,25 @@ func pinNear(p mygo.Point, r mygo.Rectangle, dist int) bool {
 	return p.X >= r.X-dist && p.X < r.X+r.Width+dist && p.Y >= r.Y-dist && p.Y < r.Y+r.Height+dist
 }
 
+// pinWakeDrag expands the collapsed strips a file drag crosses, from the
+// mouse-dragged event rather than the 30 ms pinTick: a release inside the
+// wake distance in the same beat otherwise lands on a strip that had no
+// chance to open and receive it.
+func (a *shelf) pinWakeDrag(p mygo.Point) {
+	for _, it := range a.pins {
+		if !it.expanded && it.edge != pinFree && pinNear(p, it.frame, pinWakeDist) {
+			it.expanded = true
+			it.leftAt = time.Time{}
+			if it.cy == 0 {
+				it.cy = it.frame.Y + pinStripH/2
+			}
+			it.frame = pinExpandFrame(it.edge, it.displayRect(), it.cardW, it.cy)
+			it.applyFrame()
+			it.invalidate()
+		}
+	}
+}
+
 // addPin pins a card to the desktop: the card leaves the tools page grid
 // (layout.AddPin enforces the one-card-one-place rule), its window opens
 // at frame, and the placement lands in layout.json. cardID is a tool

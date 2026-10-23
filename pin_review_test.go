@@ -117,6 +117,21 @@ func TestPinMenuAlwaysToggleRestartsDelay(t *testing.T) {
 	}
 }
 
+func TestPinWakeDragBeforeNextPoll(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	a := motionShelf()
+	a.dispBounds = pinTestDisplays[0].Bounds
+	a.suppressed = true
+	it := a.pinRegister(&pinItem{cardID: "zip", cardW: pinCardW, display: 1, edge: pinRight,
+		frame: pinStripFrame(pinRight, pinTestArea, 400)})
+	p := mygo.Point{X: 1470, Y: 400}
+	pinReviewDrag(t, a, &p, true)
+	a.pointerDragged() // no 30 ms poll before the release
+	if !it.expanded || it.frame.Width != pinCardW || !insideRect(p, it.frame) {
+		t.Fatalf("release point has no open drop target: %+v", it.frame)
+	}
+}
+
 func TestPinDragOutKeepsGridSpan(t *testing.T) {
 	withPinDisplays(t, pinTestDisplays)
 	oldOpen, oldCursor := pinOpenWindow, cursorPoint

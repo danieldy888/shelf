@@ -181,6 +181,12 @@ func (a *shelf) pointerDragged() {
 	if !a.suppressed {
 		a.setPeek(true)
 	}
+	// Collapsed pin strips wake on the drag event itself, not the 30 ms
+	// poll: a release inside the wake distance this same beat lands on an
+	// already-open card.
+	if !a.ownDrag && dragSummonsBasket(dragTypes()) {
+		a.pinWakeDrag(p)
+	}
 	a.syncDragGuard()
 	a.syncMousePassThrough()
 	if a.dropHot && !a.visible {
