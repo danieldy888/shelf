@@ -600,3 +600,54 @@ func TestPinDropUnstartableShelves(t *testing.T) {
 		}
 	})
 }
+
+// TestPinDragReleaseIsNotATap is review P3: a release that ends a window
+// move must not fire the card's tap, whether the release frame reaches
+// the view before the poll (the usual order) or after the poll already
+// settled the move. The 保持唤醒 card's power assertion is the real tap
+// effect the test watches — no execution seam.
+func TestPinDragReleaseIsNotATap(t *testing.T) {
+	for _, tickFirst := range []bool{false, true} {
+		name := "release frame beats the poll"
+		if tickFirst {
+			name = "the poll settles before the release frame"
+		}
+		t.Run(name, func(t *testing.T) {
+			withPinDisplays(t, pinTestDisplays)
+			p := newFakePower()
+			a := &shelf{dataDir: t.TempDir()}
+			a.setTools(layout.Default())
+			a.awake = &awakeModule{host: a, create: p.create, release: p.release}
+			it := a.pinRegister(&pinItem{cardID: "awake", span: 1, cardW: pinCardW, display: 1,
+				edge: pinFree, expanded: true,
+				frame: mygo.Rectangle{X: 600, Y: 400, Width: pinCardW, Height: pinCardH}})
+			tr := ui.NewTester(func(c *ui.Context) { it.view(c) }, pinCardW, pinCardH)
+			tr.Press(20, 20)
+			if !it.pressed || it.didMove {
+				t.Fatal("the press did not arm a tap")
+			}
+			a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, true, false) // the press went far: a move
+			if !it.moving || !it.didMove {
+				t.Fatal("the move did not mark didMove")
+			}
+			if tickFirst {
+				// monitorDrag's tick settles the release before the view
+				// ever sees the pointer-up frame.
+				a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, false, false)
+				tr.Release(20, 20)
+			} else {
+				tr.Release(20, 20)
+				a.pinTick(time.Now(), mygo.Point{X: 640, Y: 440}, false, false)
+			}
+			if a.awake.active() {
+				t.Fatal("a moved release ran the card's tap")
+			}
+			// A press that never moves still taps afterwards.
+			tr.Press(20, 20)
+			tr.Release(20, 20)
+			if !a.awake.active() {
+				t.Fatal("a clean tap after the drag did not run the card")
+			}
+		})
+	}
+}

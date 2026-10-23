@@ -91,6 +91,7 @@ type pinItem struct {
 	pressed   bool      // a press on the card is being held
 	pressWas  bool      // it was already expanded when that press began
 	moving    bool      // the press went far: it is a window move, not a click
+	didMove   bool      // that press did move — its release is a drop, never a tap
 	grabX     int
 	grabY     int
 	wantKill  bool // a menu asked to remove it; pinTick does the destroy
@@ -412,6 +413,7 @@ func (a *shelf) pinTick(now time.Time, p mygo.Point, down, fileDrag bool) {
 					// the strip does not jump, and show the card the
 					// dragged frame is sized for.
 					it.moving, it.expanded = true, true
+					it.didMove = true
 					it.grabX, it.grabY = 0, 0
 				}
 				if it.moving {

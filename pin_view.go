@@ -57,9 +57,9 @@ func (it *pinItem) view(c *ui.Context) {
 		zone.Border(1.5, c.Theme().Accent)
 	}
 	it.trackPress(zone)
-	if it.pressWas && zone.Clicked() {
-		// A press that never went far is a tap on the card; a tap that
-		// only woke the strip is pressWas=false and runs nothing.
+	if it.pressWas && !it.didMove && zone.Clicked() {
+		// A press that never went far is a tap on the card; a press that
+		// moved the window or only woke the strip is not.
 		a.runToolCard(it.cardID)
 	}
 	it.pinMenu(zone)
@@ -91,10 +91,18 @@ func (it *pinItem) viewStrip(c *ui.Context) {
 func (it *pinItem) trackPress(e ui.Element) {
 	px, py, _ := e.PointerPosition()
 	if e.Pressed() && !it.pressed {
-		it.grabX, it.grabY = int(px+0.5), int(py+0.5)
-		it.pressWas = it.expanded
-		it.pressed = true
+		it.pressAt(float64(px), float64(py))
 	}
+}
+
+// pressAt marks the press pinTick decides click-or-move from: the grab
+// point is where it landed, and didMove clears — the previous press's
+// move must not poison this tap, nor may this tap see its own drag.
+func (it *pinItem) pressAt(px, py float64) {
+	it.grabX, it.grabY = int(px+0.5), int(py+0.5)
+	it.pressWas = it.expanded
+	it.didMove = false
+	it.pressed = true
 }
 
 // pinMenu is the right-click menu (design §4): 始终展开 toggles the
