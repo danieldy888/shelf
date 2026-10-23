@@ -577,6 +577,10 @@ func (a *shelf) settingsShortcutsSection(c *ui.Context) {
 		settingsRow(c, "sc-clip", "剪贴板搜索", func() {
 			ui.Text(c, clipboardHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})
+		settingsSep(c, "sc-ocr")
+		settingsRow(c, "sc-ocr", "框选文字", func() {
+			ui.Text(c, ocrHint).SingleLine().FontSize(13).TextColor(setInk2)
+		})
 	})
 }
 

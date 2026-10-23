@@ -145,6 +145,9 @@ func (a *shelf) ready(show bool) {
 	if err := mygo.GlobalShortcut.Register(clipboardShortcut, a.openClipboardSearch); err != nil {
 		a.notice(fmt.Sprintf("剪贴板搜索快捷键被占用；可点击菜单栏图标。%v", err))
 	}
+	if err := mygo.GlobalShortcut.Register(ocrShortcut, a.startScreenOCR); err != nil {
+		a.notice(fmt.Sprintf("框选文字快捷键被占用；可用菜单栏图标的「框选文字」。%v", err))
+	}
 	a.applyClipboardHistory()
 	a.modules = append(a.modules, &retentionModule{host: a})
 	a.np = &nowPlayingModule{host: a}
@@ -243,6 +246,7 @@ func (a *shelf) trayMenu() *mygo.Menu {
 				a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = !s.IslandNowPlaying })
 			}},
 		{Label: "保持唤醒", Type: mygo.MenuItemSubmenu, Submenu: a.awakeMenu()},
+		{Label: "框选文字", Click: func(*mygo.MenuItem, *mygo.Window) { a.startScreenOCR() }},
 		mygo.Separator(),
 		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		a.updateMenu(),

@@ -98,6 +98,14 @@ type shelf struct {
 	thumbDiscard                                                map[string]bool
 	thumbActive                                                 int
 
+	// 框选文字：同一时间只有一轮（ocrScan，capture+识别全程）；ocrBusyAt
+	// 记这轮开始时刻给进行中胶囊的 250ms 延迟计时；ocrSheet 为真时展开
+	// 面板的舞台换成「屏幕录制」权限说明卡。三者只在 UI 线程读写。
+	ocrScan   bool
+	ocrBusyAt time.Time
+	ocrRunID  int
+	ocrSheet  bool
+
 	// 拖出后从托盘移除：当前拖出会话从托盘带走的项目（剪贴板页为 nil），
 	// 以及已拖出、等待最终移除的托盘项目及其放下时刻。
 	dragOutIDs []string
@@ -278,7 +286,7 @@ func (a *shelf) dismissReadFeedback(now time.Time) bool {
 	}
 	line, _, _ := strings.Cut(a.status, "\n")
 	if f := &a.fb; f.text == line {
-		f.text, f.job, f.pausedAt = "", nil, time.Time{}
+		f.text, f.liveToken, f.pausedAt = "", nil, time.Time{}
 	}
 	return true
 }

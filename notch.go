@@ -569,6 +569,9 @@ func (a *shelf) hide(exit hideExit) {
 	// 收起后回到默认视图：下次打开（悬停、拖入、托盘）从托盘标签开始，
 	// 搜索框清空；键盘模式在用户明确的收起动作下交还焦点。
 	a.focusMode, a.tab, a.tabFrom, a.search, a.reveal = false, pageTray, pageTray, "", ""
+	// 收起即放弃权限说明卡：面板再开时它要么还在等授权（重新触发再出），
+	// 要么授权已完成（预检通过直接框选），都不该回到一张旧卡。
+	a.ocrSheet = false
 	a.prevAppPID = 0
 	a.releaseKeys()
 	a.selection.clear()

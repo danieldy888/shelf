@@ -107,11 +107,11 @@ type feedback struct {
 	hold       time.Duration // visible span retained until the first drawn frame
 	played     string        // text that already ran its full span: never grows the capsule again
 	pillW      float32
-	drawn      bool        // drawn in the last frame (the window's command-line tests read it)
-	retracting bool        // the shell is folding back from the capsule
-	armed      bool        // its clock (hold, shake) has started on the first drawn frame
-	pausedAt   time.Time   // set while hover or a drag holds the peek shape: the hold rests
-	job        *convertJob // the job whose progress the capsule shows
+	drawn      bool      // drawn in the last frame (the window's command-line tests read it)
+	retracting bool      // the shell is folding back from the capsule
+	armed      bool      // its clock (hold, shake) has started on the first drawn frame
+	pausedAt   time.Time // set while hover or a drag holds the peek shape: the hold rests
+	liveToken  any       // the running job the live line belongs to: *convertJob or a screen-OCR round id
 }
 
 // up reports whether the capsule has something to say now.
@@ -201,19 +201,17 @@ func (f *feedback) arm(now time.Time) {
 	f.armed = true
 }
 
-// follow points the capsule at the running conversion job, so a panel that
-// is closed while a job runs keeps reporting it. A toast posted meanwhile
-// keeps the capsule for its whole span — a new job never stomps a verdict
-// the user has not seen; the progress returns after it.
+// follow points the capsule at the running job, so a panel that is
+// closed while a job runs keeps reporting it — the conversion job, or the
+// capture+recognition round of 框选文字 once it runs past its quiet
+// window. A toast posted meanwhile keeps the capsule for its whole span —
+// a job never stomps a verdict the user has not seen; the progress
+// returns after it.
 func (f *feedback) follow(a *shelf, now time.Time) {
-	var job *convertJob
-	if a.conv != nil {
-		job = a.conv.job
-	}
-	live := job != nil && a.conv.live()
+	text, token, live := a.liveStatus(now)
 	if !live {
-		if f.job != nil {
-			f.job = nil
+		if f.liveToken != nil {
+			f.liveToken = nil
 			if f.live {
 				f.live, f.text = false, ""
 			}
@@ -223,25 +221,33 @@ func (f *feedback) follow(a *shelf, now time.Time) {
 	if !f.live && f.up(now) {
 		return // a posted toast holds the capsule for its whole span
 	}
-	text, ok := convertProgress(job)
-	if !ok {
-		return
-	}
-	if f.live && f.job == job && f.text == text {
+	if f.live && f.liveToken == token && f.text == text {
 		return // the step is unchanged: keep the measured width, redraw nothing
 	}
 	// Re-entering after a transient toast has expired keeps the same
 	// job but must drop the toast's stale deadline — live has none.
 	f.until = time.Time{}
-	if f.job != job {
+	if f.liveToken != token {
 		f.shownAt = now
 	}
-	f.job = job
+	f.liveToken = token
 	if f.text != text {
 		f.pillW = 0
 	}
 	f.text, f.kind, f.live = text, statusOK, true
 	f.pausedAt = time.Time{}
+}
+
+// liveStatus is the running job the capsule should show now: a conversion
+// job while one is live, else a screen-OCR round that outlived its quiet
+// window. Pure apart from the job reads; unit-tested.
+func (a *shelf) liveStatus(now time.Time) (text string, token any, live bool) {
+	if a.conv != nil && a.conv.job != nil && a.conv.live() {
+		if text, ok := convertProgress(a.conv.job); ok {
+			return text, a.conv.job, true
+		}
+	}
+	return a.ocrLiveStatus(now)
 }
 
 // capsule is the shape the notch grows into: as wide as the text needs, but
@@ -362,7 +368,7 @@ func (f *feedback) clearExpired(now time.Time, folded bool) {
 		if f.text != "" {
 			f.played = f.text
 		}
-		f.text, f.job = "", nil
+		f.text, f.liveToken = "", nil
 	}
 }
 

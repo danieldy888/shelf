@@ -11,6 +11,8 @@ const (
 	trayShortcut = "Ctrl+Alt+Space"
 	// 打开剪贴板搜索：显示托盘、切到剪贴板标签并把焦点放进搜索框。
 	clipboardShortcut = "Ctrl+Alt+V"
+	// 框选文字：框一块屏幕区域，识别出的文字直接进剪贴板。
+	ocrShortcut = "Ctrl+Alt+O"
 	// searchLabel 是搜索框的无障碍名称（也是测试定位用的标签）。
 	searchLabel = "搜索剪贴板"
 	// dropBandPadX 是刘海投放带的左右余量：拖拽时 Shelf 只在「刘海宽
@@ -49,6 +51,9 @@ var shortcutHint = shortcutLabel(trayShortcut)
 // clipboardHint is the panel footer's label for clipboardShortcut, derived
 // from the constant the same way.
 var clipboardHint = shortcutLabel(clipboardShortcut)
+
+// ocrHint is the settings row's label for ocrShortcut, derived the same way.
+var ocrHint = shortcutLabel(ocrShortcut)
 
 // clipboardLimitChoices are the clipboard text limits offered in the
 // menu-bar menu; the setting takes any number, the menu the usual ones.

@@ -382,19 +382,27 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 
 // dropBody is the view() entry that owns the stage: while a file drag
 // hovers the expanded panel the module bar and stage become the drop
-// zone; anything else defers to the current page unchanged.
+// zone — the live gesture wins over the screen-OCR permission card, which
+// is armed again as soon as the drag leaves; without a hover the armed
+// card takes the stage under the current page's own module bar, and
+// anything else defers to the current page unchanged.
 func (a *shelf) dropBody(c *ui.Context, over bool) {
 	paths := a.drop.files
 	if !a.drop.on {
 		paths = nil
 	}
-	if len(paths) == 0 {
+	switch {
+	case len(paths) > 0:
+		a.dropModuleBar(c, a.drop.class, len(paths))
+		stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
+		stage.Children(func() { a.dropStage(c, paths, a.drop.class) })
+	case a.ocrSheet:
+		a.moduleBar(c, a.currentPage(), true)
+		stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
+		stage.Children(func() { a.ocrSheetStage(c) })
+	default:
 		a.tabBody(c, over)
-		return
 	}
-	a.dropModuleBar(c, a.drop.class, len(paths))
-	stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
-	stage.Children(func() { a.dropStage(c, paths, a.drop.class) })
 }
 
 // dropModuleBar is the module bar while the zone is up: 投放 and the
