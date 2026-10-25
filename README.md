@@ -143,7 +143,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Copy text back | Click a text item, then paste with `⌘V` |
 | Copy image data | Select one picture and press `⌘C`, or right-click it → 复制图片 (Copy Image) — the clipboard gets PNG data, not the path |
 | Search what you copied | Press `⌃⌥V` — the 剪贴板 (Clipboard) page opens with the search field ready; type, pick with ↑/↓, press ⏎ |
-| Switch pages | Click another page's icon in the page's own top row; the panel keeps its size |
+| Switch pages | Click a page icon in the page's own top row — the current page is there too, with its capsule sliding to the new one; the panel keeps its size |
 | Control music | Use the player on the island's left, or the music widget on 主页 (Home) to skip and set the volume |
 | Pin, remove, Quick Look, AirDrop | Right-click an item (Space also opens Quick Look) |
 | Copy text from the screen | Press `⌃⌥O` and drag over the text |
@@ -294,7 +294,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 把文字复制回来 | 单击文字项，再在任意地方 `⌘V` 粘贴 |
 | 复制图片数据 | 选中一张图片后按 `⌘C`，或右键图片 →「复制图片」，再在目标应用 `⌘V` 粘贴（复制的是图片，不是路径） |
 | 搜索复制过的内容 | 按 `⌃⌥V`，「剪贴板」页直接打开、搜索框已就位；输入关键词，`↑`/`↓` 选择，回车 |
-| 切换页面 | 点页面顶部那一行里其他页面的图标；面板尺寸不变 |
+| 切换页面 | 点返回行里的页面图标（当前页的图标也在，底下的胶囊会滑过去）；面板尺寸不变 |
 | 控制音乐 | 用小岛左边的播放器；打开「主页」的音乐小组件可以拖动进度和调整音量 |
 | 置顶、移除、快速查看、隔空投送 | 右键项目（快速查看也可以直接按空格） |
 | 框选屏幕文字 | 按 `⌃⌥O`，框住要复制的文字 |
