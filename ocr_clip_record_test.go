@@ -10,7 +10,9 @@ package main
 // through its own seam; no screen capture runs.
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -171,4 +173,89 @@ func TestRecognizedTextDedupsLikeAClipboardCapture(t *testing.T) {
 	if got := a.store.Items[0].SourceApp; got != clipSourceOCR {
 		t.Fatalf("deduped row source app = %q, want %q", got, clipSourceOCR)
 	}
+}
+
+// breakStoreSave makes the store's Save fail for the rest of the test: the
+// data directory goes read-only, so a new row cannot be persisted. The
+// directory is writable again before the test's own cleanups run.
+func breakStoreSave(t *testing.T, a *shelf) {
+	t.Helper()
+	if err := os.Chmod(a.dataDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(a.dataDir, 0o755); err != nil {
+			t.Errorf("restore %s: %v", a.dataDir, err)
+		}
+	})
+}
+
+// assertOCRRecordFailure asserts the user is told the copy worked and the
+// clipboard-page record did not — with the error dot — instead of the
+// success line, and that no half-written row was kept.
+func assertOCRRecordFailure(t *testing.T, a *shelf) {
+	t.Helper()
+	const want = "已复制，但没能记进剪贴板页："
+	if !strings.Contains(a.status, want) {
+		t.Fatalf("status = %q, want the record-failure line %q", a.status, want)
+	}
+	if a.statusKind != statusErr {
+		t.Fatalf("status kind = %d, want the error kind (%d)", a.statusKind, statusErr)
+	}
+	for _, it := range a.store.Items {
+		if it.SourceApp == clipSourceOCR {
+			t.Fatalf("a row whose record failed was kept: %+v", it)
+		}
+	}
+}
+
+// A record that cannot be saved must not be reported as success: the
+// success line 「已复制识别出的文字 · N 字」 covered the failure, so the
+// user believed the text was in the clipboard page when it was not.
+func TestScreenOCRRecordFailureIsReported(t *testing.T) {
+	ocrSeams(t)
+	ocrPreflight = func() bool { return true }
+	ocrCapture = func(path string) error { writePixelPNG(t, path); return nil }
+	ocrRecognize = func(string) ([]string, error) { return []string{"会议纪要"}, nil }
+	a, _, rec := clipShelf(t)
+	breakStoreSave(t, a)
+	a.startScreenOCR()
+	if rec.text != "会议纪要" {
+		t.Fatalf("the clipboard write was skipped: got %q", rec.text)
+	}
+	assertOCRRecordFailure(t, a)
+}
+
+// Same for a batch dropped on the 框选文字 card.
+func TestDroppedImageRecordFailureIsReported(t *testing.T) {
+	ocrSeams(t)
+	ocrRecognize = func(string) ([]string, error) { return []string{"截图里的字"}, nil }
+	a, _, rec := clipShelf(t)
+	img := filepath.Join(t.TempDir(), "shot.png")
+	writePixelPNG(t, img)
+	breakStoreSave(t, a)
+	a.copyDroppedText([]string{img})
+	if rec.text != "截图里的字" {
+		t.Fatalf("the clipboard write was skipped: got %q", rec.text)
+	}
+	assertOCRRecordFailure(t, a)
+}
+
+// And for 右键「识别文字并复制」 on an image row. The item's result is
+// already stored (the common repeat case), so the failure here can only
+// be the clipboard-page record — a first-time recognition would fail on
+// its own result write before the copy is reached.
+func TestRecognizeAndCopyRecordFailureIsReported(t *testing.T) {
+	a, _, rec := testOCRShelf(t)
+	item := addClipImage(t, a, 30)
+	if err := a.store.SetOCR(item.ID, "发票号码"); err != nil {
+		t.Fatal(err)
+	}
+	item = a.store.Items[0]
+	breakStoreSave(t, a)
+	a.copyRecognizedText(item)
+	if rec.text != "发票号码" {
+		t.Fatalf("the clipboard write was skipped: got %q", rec.text)
+	}
+	assertOCRRecordFailure(t, a)
 }

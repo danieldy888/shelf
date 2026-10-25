@@ -39,11 +39,25 @@ const (
 	// bytes.
 	selectorDefaultOutput = 'd'<<24 | 'O'<<16 | 'u'<<8 | 't' // 'dOut'
 	selectorVolume        = 'v'<<24 | 'o'<<16 | 'l'<<8 | 'm' // 'volm'
-	scopeGlobal           = 'g'<<24 | 'l'<<16 | 'o'<<8 | 'b' // 'glob'
-	scopeOutput           = 'o'<<24 | 'u'<<16 | 't'<<8 | 'p' // 'outp'
+	// selectorStreamConfiguration ('slay') describes a device's output
+	// streams: how many, and how many channels each carries.
+	selectorStreamConfiguration = 's'<<24 | 'l'<<16 | 'a'<<8 | 'y'
+	scopeGlobal                 = 'g'<<24 | 'l'<<16 | 'o'<<8 | 'b' // 'glob'
+	scopeOutput                 = 'o'<<24 | 'u'<<16 | 't'<<8 | 'p' // 'outp'
 
 	// elementMain is the device-wide element; channels start at 1.
 	elementMain uint32 = 0
+
+	// An AudioBuffer is two UInt32 followed by a pointer (16 bytes on a
+	// 64-bit build), and an AudioBufferList's first buffer starts at
+	// offset 8: the buffer count, then the pointer's alignment.
+	audioBufferSize     = 16
+	audioBufferListHead = 8
+
+	// maxVolumeChannels caps the per-channel scan. No real output device
+	// carries more, and a device that reports nonsense must not turn the
+	// volume row into a long loop.
+	maxVolumeChannels = 32
 )
 
 var (
@@ -54,6 +68,30 @@ var (
 	// reason as the IOKit calls in power_darwin.go).
 	audioGetAddr, audioSetAddr, audioHasAddr uintptr
 )
+
+// volumeBackend is every CoreAudio call the volume path makes, so a test
+// can replace them as one unit: no test reads or changes the system
+// volume. channels answers the device's output channel count, 0 when it
+// does not describe its streams.
+type volumeBackend struct {
+	load     func() error
+	device   func() (uint32, bool)
+	get      func(obj, selector, scope, element uint32) (float32, bool)
+	set      func(obj, selector, scope, element uint32, v float32) error
+	has      func(obj, selector, scope, element uint32) bool
+	channels func(obj uint32) int
+}
+
+// audioVolume is the live backend. OutputVolume, SetOutputVolume and
+// VolumeSupported go through it.
+var audioVolume = volumeBackend{
+	load:     loadCoreAudio,
+	device:   defaultOutputDevice,
+	get:      audioObjectGetFloat32,
+	set:      audioObjectSetFloat32,
+	has:      audioObjectHasProperty,
+	channels: outputChannelCount,
+}
 
 // loadCoreAudio opens CoreAudio once and resolves the property calls.
 func loadCoreAudio() error {
@@ -140,6 +178,69 @@ func audioObjectSetFloat32(obj, selector, scope, element uint32, v float32) erro
 	return nil
 }
 
+// outputChannelCount reports how many output channels dev has, 0 when the
+// device does not describe its streams. The count is the sum of
+// mNumberChannels over the stream configuration's buffers, which is what
+// decides how many volume elements the device carries: a 5.1 device has
+// six, not the two a stereo assumption would touch.
+func outputChannelCount(dev uint32) int {
+	if audioGetAddr == 0 {
+		return 0 // CoreAudio not loaded; nothing to ask
+	}
+	addr := AudioObjectPropertyAddress{
+		Selector: selectorStreamConfiguration,
+		Scope:    scopeOutput,
+		Element:  elementMain,
+	}
+	// The list is variable length and CoreAudio rejects a size-only query
+	// for it (it needs a buffer), so the buffer is sized for the channel
+	// cap and the reported length is trusted only up to what it holds.
+	buf := make([]byte, audioBufferListHead+audioBufferSize*maxVolumeChannels)
+	size := uint32(len(buf))
+	ret, _, _ := purego.SyscallN(audioGetAddr,
+		uintptr(dev), uintptr(unsafe.Pointer(&addr)), 0, 0,
+		uintptr(unsafe.Pointer(&size)), uintptr(unsafe.Pointer(&buf[0])))
+	runtime.KeepAlive(&addr)
+	runtime.KeepAlive(buf)
+	if int32(ret) != 0 || size < audioBufferListHead+audioBufferSize || int(size) > len(buf) {
+		return 0
+	}
+	buf = buf[:size]
+	buffers := *(*uint32)(unsafe.Pointer(&buf[0]))
+	if int(buffers) > maxVolumeChannels ||
+		uint64(len(buf)) < uint64(audioBufferListHead)+uint64(buffers)*audioBufferSize {
+		return 0
+	}
+	total := 0
+	for i := uint32(0); i < buffers; i++ {
+		off := audioBufferListHead + int(i)*audioBufferSize
+		total += int(*(*uint32)(unsafe.Pointer(&buf[off])))
+	}
+	return total
+}
+
+// outputChannelElements returns the per-channel volume elements of dev, in
+// element order. The device's own stream configuration decides the count;
+// a device that does not describe its streams is probed one element at a
+// time until HasProperty says no. An empty result means the device has no
+// per-channel volume at all.
+func outputChannelElements(dev uint32) []uint32 {
+	n := audioVolume.channels(dev)
+	if n <= 0 {
+		for n < maxVolumeChannels && audioVolume.has(dev, selectorVolume, scopeOutput, uint32(n+1)) {
+			n++
+		}
+	}
+	if n > maxVolumeChannels {
+		n = maxVolumeChannels
+	}
+	elems := make([]uint32, n)
+	for i := range elems {
+		elems[i] = uint32(i + 1)
+	}
+	return elems
+}
+
 // audioObjectHasProperty reports whether obj exposes the property. It
 // answers without touching the property value.
 func audioObjectHasProperty(obj, selector, scope, element uint32) bool {
@@ -154,23 +255,23 @@ func audioObjectHasProperty(obj, selector, scope, element uint32) bool {
 // (the UI shows it as a percentage). ok is false when the system has no
 // output device or the device has no readable software volume.
 func OutputVolume() (float32, bool) {
-	if err := loadCoreAudio(); err != nil {
+	if err := audioVolume.load(); err != nil {
 		return 0, false
 	}
-	dev, ok := defaultOutputDevice()
+	dev, ok := audioVolume.device()
 	if !ok {
 		return 0, false
 	}
 	// Element 0 is the device-wide volume; most devices answer it.
-	if v, ok := audioObjectGetFloat32(dev, selectorVolume, scopeOutput, elementMain); ok {
+	if v, ok := audioVolume.get(dev, selectorVolume, scopeOutput, elementMain); ok {
 		return clampVolume(v), true
 	}
-	// Otherwise read per channel and report the mean, so a stereo device
-	// shows one number for left and right.
+	// Otherwise read every channel and report the mean, so a device
+	// without a device-wide value still shows one number for all of them.
 	var sum float32
 	var n int
-	for _, element := range []uint32{1, 2} {
-		if v, ok := audioObjectGetFloat32(dev, selectorVolume, scopeOutput, element); ok {
+	for _, element := range outputChannelElements(dev) {
+		if v, ok := audioVolume.get(dev, selectorVolume, scopeOutput, element); ok {
 			sum += v
 			n++
 		}
@@ -183,32 +284,33 @@ func OutputVolume() (float32, bool) {
 
 // SetOutputVolume sets the default output device's volume. v is clamped
 // to 0..1 first. The device-wide element is preferred; a device without
-// it gets every channel element that answers. The error is descriptive so
-// the UI can grey the row: some devices (HDMI, many aggregate and virtual
-// devices) have no writable software volume.
+// it gets every channel of its stream configuration, so a surround device
+// changes all of its channels rather than the first two. The error is
+// descriptive so the UI can grey the row: some devices (HDMI, many
+// aggregate and virtual devices) have no writable software volume.
 func SetOutputVolume(v float32) error {
 	v = clampVolume(v)
-	if err := loadCoreAudio(); err != nil {
+	if err := audioVolume.load(); err != nil {
 		return err
 	}
-	dev, ok := defaultOutputDevice()
+	dev, ok := audioVolume.device()
 	if !ok {
 		return errors.New("mac: no default output device")
 	}
 	var mainErr error
-	if audioObjectHasProperty(dev, selectorVolume, scopeOutput, elementMain) {
-		mainErr = audioObjectSetFloat32(dev, selectorVolume, scopeOutput, elementMain, v)
+	if audioVolume.has(dev, selectorVolume, scopeOutput, elementMain) {
+		mainErr = audioVolume.set(dev, selectorVolume, scopeOutput, elementMain, v)
 		if mainErr == nil {
 			return nil
 		}
 	}
 	var lastErr error
 	set := false
-	for _, element := range []uint32{1, 2} {
-		if !audioObjectHasProperty(dev, selectorVolume, scopeOutput, element) {
+	for _, element := range outputChannelElements(dev) {
+		if !audioVolume.has(dev, selectorVolume, scopeOutput, element) {
 			continue
 		}
-		if err := audioObjectSetFloat32(dev, selectorVolume, scopeOutput, element, v); err != nil {
+		if err := audioVolume.set(dev, selectorVolume, scopeOutput, element, v); err != nil {
 			lastErr = err
 			continue
 		}

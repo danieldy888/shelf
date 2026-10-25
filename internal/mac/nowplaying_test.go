@@ -252,12 +252,32 @@ func TestNowPlayingHostSeek(t *testing.T) {
 		want string
 	}{
 		{"fractional", 73.25, "seek 73.25\n"},
-		{"negative clamps to zero", -1, "seek 0\n"},
-		{"nan clamps to zero", math.NaN(), "seek 0\n"},
+		{"zero", 0, "seek 0\n"},
+		{"one day", 86400, "seek 86400\n"},
 	} {
 		h.Seek(tc.sec)
 		if got := next(); got != tc.want {
 			t.Errorf("%s: wrote %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// A position the UI cannot mean is dropped, not clamped or sent: the
+	// helper would answer it with an error line the app does not show, and
+	// a nonsensical position must never reach the player.
+	for _, tc := range []struct {
+		name string
+		sec  float64
+	}{
+		{"negative", -1},
+		{"nan", math.NaN()},
+		{"positive infinity", math.Inf(1)},
+		{"negative infinity", math.Inf(-1)},
+		{"beyond one day", 86400.5},
+	} {
+		h.Seek(tc.sec)
+		select {
+		case line := <-lines:
+			t.Errorf("%s: wrote %q, want the command dropped", tc.name, line)
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	// A host that never started must ignore Seek instead of panicking.
@@ -300,6 +320,61 @@ func TestNowPlayingHostStartFailureIsReported(t *testing.T) {
 		t.Fatal("a host that never started must read as dead")
 	}
 	h.Stop() // must be safe on a host that never started
+}
+
+// TestHelperReadsWholeCommandLines drives the real helper.c line reader:
+// the harness includes the C source and feeds it a pipe, so the test sees
+// exactly the lines the bundle would hand to handleCommand. An overlong
+// line must be dropped whole — the first 255 bytes of an overlong seek
+// are a valid decimal and would otherwise seek to a position the user
+// never asked for, with the tail arriving as a second bogus command. It
+// is skipped only when there is no C compiler, which the helper build
+// needs anyway.
+func TestHelperReadsWholeCommandLines(t *testing.T) {
+	clang, err := exec.LookPath("clang")
+	if err != nil {
+		t.Skipf("clang not available: %v", err)
+	}
+	dir := t.TempDir()
+	harness := filepath.Join(dir, "harness.c")
+	// printf comes from helper.c's own <stdio.h>; the harness only adds
+	// the driver loop around readCommandLine.
+	const src = `
+#include "helper.c"
+
+int main(void) {
+  char line[256];
+  int status;
+  while ((status = readCommandLine(stdin, line, sizeof line)) != 0) {
+    if (status == 2) printf("overlong\n");
+    else printf("line:%s\n", line);
+  }
+  return 0;
+}
+`
+	if err := os.WriteFile(harness, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "harness")
+	build := exec.Command(clang, "-fblocks", "-I", "nowplaying", "-o", exe, harness,
+		"-framework", "CoreFoundation", "-framework", "Foundation")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("compile helper harness: %v\n%s", err, out)
+	}
+	// 255 bytes of "seek 0…" with no newline: every byte is a valid
+	// decimal digit, so the old reader accepted the truncated prefix as
+	// a position and then read the tail as a command of its own.
+	overlong := "seek " + strings.Repeat("0", 260)
+	run := exec.Command(exe)
+	run.Stdin = strings.NewReader(overlong + "\nplay\nseek 1.5\nbogus\n")
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("harness: %v\n%s", err, out)
+	}
+	want := "overlong\nline:play\nline:seek 1.5\nline:bogus\n"
+	if got := string(out); got != want {
+		t.Fatalf("line reader output = %q, want %q", got, want)
+	}
 }
 
 func TestCommandName(t *testing.T) {

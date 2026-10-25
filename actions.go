@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -192,20 +193,52 @@ func (a *shelf) copyText(text string) bool {
 	return true
 }
 
+// ocrCopy is what copying recognized text achieved. The pasteboard write
+// and the clipboard-page record fail independently: a record failure
+// leaves the user with the text but without the row, so the two outcomes
+// must not collapse into one bool that the success line then covers.
+type ocrCopy struct {
+	copied    bool  // the text reached the system clipboard
+	recordErr error // why the clipboard page has no row; nil when recorded
+}
+
 // copyOCRText is copyText for text Shelf just recognized: after the write it
 // also records the text as a clipboard item, so the recognized words appear
 // at the front of the clipboard page with 「框选文字」 as their source. The
 // watcher is skipped first (copyText), so the capture is this one record,
 // not a second copy of Shelf's own pasteboard write. Re-copying an existing
-// row still goes through copyText and records nothing.
-func (a *shelf) copyOCRText(text string) bool {
+// row still goes through copyText and records nothing. A failed record is
+// returned, not reported: the caller knows the copy itself succeeded and
+// says so (toastOCRCopy).
+func (a *shelf) copyOCRText(text string) ocrCopy {
 	if !a.copyText(text) {
-		return false
+		return ocrCopy{}
 	}
-	if a.store != nil {
-		a.changed(a.store.AddClipText(text, clipSourceOCR))
+	if a.store == nil {
+		return ocrCopy{copied: true}
 	}
-	return true
+	if err := a.store.AddClipText(text, clipSourceOCR); err != nil {
+		return ocrCopy{copied: true, recordErr: err}
+	}
+	a.changed(nil)
+	return ocrCopy{copied: true}
+}
+
+// toastOCRCopy reports how copying recognized text ended. A copy that
+// never reached the pasteboard was already reported by copyText, and the
+// success line — rune count, green dot — only appears when both the copy
+// and its record went through. A lost record keeps the 已复制 part and
+// names the failure, with the error dot, so the user knows the words are
+// on the pasteboard but not in the clipboard page.
+func (a *shelf) toastOCRCopy(text string, r ocrCopy) {
+	switch {
+	case !r.copied:
+	case r.recordErr != nil:
+		a.toastStatus("已复制，但没能记进剪贴板页："+r.recordErr.Error(), time.Time{}, statusErr)
+	default:
+		a.toastStatus(fmt.Sprintf("已复制识别出的文字 · %d 字", utf8.RuneCountInString(text)),
+			time.Now().Add(3*time.Second), statusOK)
+	}
 }
 
 // copyItem puts one item on the clipboard as ⌘C on it would: text as text,

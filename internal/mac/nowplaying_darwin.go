@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -417,17 +416,25 @@ func (h *NowPlayingHost) Send(command NowPlayingCommand) {
 	_, _ = io.WriteString(h.cmd, name+"\n")
 }
 
+// maxSeekSeconds bounds a seek position. Twenty-four hours is far beyond
+// any track, so a larger value is a caller's arithmetic slip rather than
+// a position worth sending to the playing app.
+const maxSeekSeconds = 24 * 60 * 60
+
 // Seek asks the playing app to jump to seconds into the current track.
-// Negative and NaN values clamp to 0; the helper rejects a bad position,
-// so the clamp keeps a UI arithmetic slip from turning into an error
-// line. Like Send, it is a no-op when the helper is not running and its
-// errors are ignored: not every app or source can seek.
+// A position the UI cannot mean — NaN, ±Inf, negative, or beyond
+// maxSeekSeconds — is dropped instead of sent: the helper answers such a
+// line with an error the app never shows, and the one line it could
+// misread (a truncated decimal) must not reach the player at all. Like
+// Send, it is a no-op when the helper is not running and its errors are
+// ignored: not every app or source can seek.
 func (h *NowPlayingHost) Seek(seconds float64) {
 	if h.cmd == nil {
 		return
 	}
-	if math.IsNaN(seconds) || seconds < 0 {
-		seconds = 0
+	// NaN fails both comparisons, so this one test rejects it too.
+	if !(seconds >= 0 && seconds <= maxSeekSeconds) {
+		return
 	}
 	_, _ = io.WriteString(h.cmd, "seek "+strconv.FormatFloat(seconds, 'f', -1, 64)+"\n")
 }

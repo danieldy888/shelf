@@ -8,6 +8,12 @@ package mac
 // 与辅助功能同一处理：ad-hoc 签名把授权钉在具体 build 上，升级后设置里
 // 那条仍然勾选、却不再对新的 build 生效，并且会让系统不再弹框；所以
 // 申请前先清掉本 app 的旧记录，让系统重新问一次。
+//
+// 但预检只回答「本进程还能不能截屏」，答案在整个进程生命周期内被缓存：
+// 用户在本进程第一次预检之后才打开开关时，预检仍是 false。此时若照旧清
+// 记录，删掉的正是刚给的授权。所以只在没有反面证据时才清 ——
+// WindowServer 是否会交出别的 app 的窗口标题不缓存，它是「授权已经生效」
+// 的直接证据；有它就不清，由界面提示「重新打开 Shelf 后生效」。
 import (
 	"os/exec"
 	"sync"
@@ -36,6 +42,10 @@ var (
 	tccutilReset     = func(id string) { _ = exec.Command("/usr/bin/tccutil", "reset", "ScreenCapture", id).Run() }
 	openURL          = func(url string) { _ = exec.Command("/usr/bin/open", url).Start() }
 	requestBundleID  = bundleIdentifier
+	// windowTitlesProveGrant is the non-cached evidence that the grant is
+	// live (see ScreenCaptureGrantedByWindowTitles). A seam so the tests
+	// never read the real WindowServer.
+	windowTitlesProveGrant = ScreenCaptureGrantedByWindowTitles
 )
 
 // ScreenCapturePreflight reports whether this process may capture the
@@ -55,20 +65,34 @@ func ScreenCapturePreflight() bool {
 }
 
 // ScreenCaptureAllowed is the permission check used by the user-initiated
-// request path. The first false answer clears any stale record of this app
-// — one that grants nothing to the current build and suppresses the system
-// prompt — once per process, before any grant could exist to lose.
+// request path. A false answer clears this app's stale record — one that
+// grants nothing to the current build and suppresses the system prompt —
+// at most once per process, and only while nothing proves the grant is
+// already live. WindowServer returning other apps' window titles is that
+// proof: the reset would delete the grant the user just made, so it never
+// runs then; the panel tells the user to reopen Shelf instead.
 func ScreenCaptureAllowed() bool {
 	if ScreenCapturePreflight() {
 		return true
 	}
-	if tccutilResetDone.CompareAndSwap(false, true) {
-		if id := requestBundleID(); id != "" {
-			// Fails harmlessly when there is no record yet (first grant).
-			tccutilReset(id)
-		}
+	if windowTitlesProveGrant() {
+		return false
 	}
+	resetStaleScreenCaptureRecord()
 	return false
+}
+
+// resetStaleScreenCaptureRecord clears this app's TCC record once per
+// process. A later call does nothing, so a grant cannot be cleared twice;
+// only the first failed preflight of a process can reach it.
+func resetStaleScreenCaptureRecord() {
+	if !tccutilResetDone.CompareAndSwap(false, true) {
+		return
+	}
+	if id := requestBundleID(); id != "" {
+		// Fails harmlessly when there is no record yet (first grant).
+		tccutilReset(id)
+	}
 }
 
 // RequestScreenCapture is the user-initiated path to grant the
@@ -78,10 +102,21 @@ func ScreenCaptureAllowed() bool {
 // wipes a grant the user just made. It reports whether the permission
 // was already active; an already-trusted call leaves the settings page
 // alone.
+//
+// A grant proven by window titles is already active even though this
+// process's cached preflight still says no: nothing is asked and nothing
+// is cleared — re-registering adds nothing and the reset would delete the
+// grant. The pane still opens so the user sees the switch is already on;
+// the remedy that works is a relaunch, which the caller's UI names.
 func RequestScreenCapture() bool {
-	if ScreenCaptureAllowed() {
+	if ScreenCapturePreflight() {
 		return true
 	}
+	if windowTitlesProveGrant() {
+		openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+		return false
+	}
+	resetStaleScreenCaptureRecord()
 	if cgRequestScreenCaptureAccess == nil {
 		return false // Init failed; preflight could not have passed either
 	}

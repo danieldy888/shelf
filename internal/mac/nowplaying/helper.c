@@ -26,8 +26,11 @@
 // seek moves the playing app's position; it answers {"error":"seek
 // unsupported"} when this macOS build has no setter, and {"error":"bad
 // seek"} for a negative, non-numeric or trailing-junk argument.
-// An unknown command gets {"error":"bad command"} back. EOF on stdin is
-// the shutdown request: the process exits after the current read.
+// An unknown command gets {"error":"bad command"} back, and so does a
+// command line that does not fit the reader's buffer: the whole line is
+// dropped, tail included, because a truncated line has no valid meaning.
+// EOF on stdin is the shutdown request: the process exits after the
+// current read.
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
@@ -631,6 +634,29 @@ static void ignoreSigpipe(void) { signal(SIGPIPE, SIG_IGN); }
 
 static volatile sig_atomic_t wantQuit;
 
+// readCommandLine reads one command line into buf and strips its line
+// ending. It returns 1 for a line the caller must handle, 0 at end of
+// input, and 2 for a line that did not fit: the rest of that line is
+// discarded and the caller answers {"error":"bad command"}.
+//
+// A line without its newline is never a command. fgets stops at size-1
+// bytes, and the first 255 bytes of an overlong "seek <digits>" line are
+// themselves a valid decimal — handing that prefix on would seek to a
+// position the user never asked for, and the tail would then arrive as a
+// second, bogus command.
+static int readCommandLine(FILE *in, char *buf, size_t size) {
+  if (!fgets(buf, (int)size, in)) return 0;
+  size_t n = strlen(buf);
+  if (!n || (buf[n - 1] != '\n' && buf[n - 1] != '\r')) {
+    int c;
+    while ((c = fgetc(in)) != EOF && c != '\n') {
+    }
+    return 2;
+  }
+  while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
+  return 1;
+}
+
 // stdinReader owns the command pipe. Commands arrive on this thread so
 // the main thread stays free to run its run loop — MediaRemote
 // registers this client for notifications through a main-queue
@@ -643,10 +669,13 @@ static void *stdinReader(void *unused) {
   (void)unused;
   char line[256];
   int quit = 0;
-  while (!wantQuit && fgets(line, sizeof line, stdin)) {
-    size_t n = strlen(line);
-    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
-    if (!n) continue;
+  int status;
+  while (!wantQuit && (status = readCommandLine(stdin, line, sizeof line))) {
+    if (status == 2) {
+      emitError("bad command");
+      continue;
+    }
+    if (!line[0]) continue;
     handleCommand(line, &quit);
     if (quit) break;
   }
