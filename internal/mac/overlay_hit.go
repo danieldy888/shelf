@@ -318,7 +318,11 @@ func SetOverlayAcceptsMouse(window uintptr, accept bool) {
 var pointerMonitor struct{ global, local id }
 
 func ObserveMouseMoved(moved func()) {
-	const mask = 1<<5 | 1<<6 // NSEventTypeMouseMoved | NSEventTypeLeftMouseDragged
+	// NSEventTypeMouseMoved, LeftMouseDragged, RightMouseDragged and
+	// OtherMouseDragged: a right- or middle-button drag moves the pointer
+	// too, and a gate that only hears left drags would keep the flag from
+	// the last left move until the button is released.
+	const mask = 1<<5 | 1<<6 | 1<<7 | 1<<27
 	if pointerMonitor.global != 0 || pointerMonitor.local != 0 {
 		return
 	}

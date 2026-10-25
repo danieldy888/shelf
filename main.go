@@ -224,6 +224,10 @@ func (a *shelf) newNotchWindow() {
 	a.win.SetVisibleOnAllWorkspaces(true)
 	a.winH = a.win.NativeHandle()
 	mac.ConfigureNotchWindow(a.winH)
+	// The gate belongs to the window, not to a placement: an app that
+	// starts with the panel open never places, and a test shelf must watch
+	// the pointer as production does.
+	a.watchPointer()
 	a.win.OnMove(a.windowGeometryChanged)
 	a.win.OnResize(a.windowGeometryChanged)
 	log.Printf("window collectionBehavior=0x%x", mac.CollectionBehavior(a.win.NativeHandle()))

@@ -585,14 +585,15 @@ func (a *shelf) view(c *ui.Context) {
 	a.fx.openK, a.fx.peekK = openK, peekK
 	a.fx.openMoving = a.win != nil && (!zone.Settled("open") || !zone.Settled("level"))
 	a.fx.peek = !expanded && peeked && !closing
-	a.syncMousePassThrough()
 	// A failed job shakes the capsule, and only the capsule; the drawn
-	// offset goes into fx so the hit box and frame follow the shape.
+	// offset goes into fx before the frame and the mouse gate read it, so
+	// both follow the shape in the same frame it is drawn.
 	var shake float32
 	if capsule {
 		shake = a.fb.shake(now, c.Preferences().ReduceMotion)
 	}
 	a.fx.shakeX = shake
+	a.syncMousePassThrough()
 	// 窗口贴在屏幕 Y=0（展开=面板全幅，其余=刘海顶边窄条，见
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
 	// 刘海里长出来，而不是浮在菜单栏下方。窗口宽度含两侧耳角（earR），
@@ -1364,6 +1365,11 @@ func (a *shelf) setLevel(level int) {
 	a.reveal = ""
 	a.selection.keepExisting(a.visibleItems())
 	a.syncWindowFrame()
+	// The level's box is the shell's target shape, and the frame jumps to
+	// it now. A still pointer inside the sheet (but outside the island it
+	// grew from) must take presses from this moment, not from the frame
+	// that draws the sheet.
+	a.syncPointerGate()
 	if a.win != nil {
 		a.win.Invalidate()
 	}

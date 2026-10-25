@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -21,7 +22,6 @@ func (a *shelf) place(p mygo.Point) {
 	if a.win != nil {
 		a.syncWindowFrame()
 		a.win.SetOpacity(1)
-		a.watchPointer()
 	}
 	a.syncDragGuard()
 }
@@ -194,6 +194,10 @@ func (a *shelf) syncWindowFrame() {
 	defer func() { a.settingFrame = false }()
 	mac.SetWindowFrame(a.winH, r.X, r.Y, r.Width, r.Height)
 	a.frame = r
+	// The shell moved with the window, so the pointer may now be on it (a
+	// display change recentres the overlay under a still pointer) or off
+	// it. Re-ask before the frame that will draw the new position.
+	a.syncPointerGate()
 	a.win.Invalidate()
 }
 
@@ -375,6 +379,7 @@ func (a *shelf) windowLevel() int {
 // shape the window lets clicks through again.
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
+	setGatePolling(anyOverlayWanted())
 	accept := a.overlayAcceptsMouse()
 	a.ignoringMouse = !accept
 	if a.win == nil {
@@ -402,30 +407,141 @@ func (a *shelf) overlayAcceptsMouse() bool {
 	if !wanted || a.winH == 0 || a.dragging || a.pointerDrag {
 		return wanted
 	}
-	return a.overShell(cursorPoint())
+	p := cursorPoint()
+	if a.overShell(p) {
+		return true
+	}
+	// The drawn shell is not the only shape a press can belong to. An
+	// opening island, the sheet springing out of the island and a capsule
+	// growing out of the notch reach their box a frame or two later, and
+	// the frame already covers it (desiredFrame follows the level), while a
+	// still pointer produces no move event to re-ask with. So the shape the
+	// state settles at counts too: a press that lands where the shell is
+	// about to be must reach Shelf, not the window underneath.
+	tw, th, tl := a.settledShell()
+	return a.overShellShape(p, tw, th, tl, a.fx.shakeX)
 }
 
-// pointerWatched guards the one pointer watch: Shelf has one overlay
-// window, and installs the event source from the first placement.
-var pointerWatched bool
+// settledShell is the shell the current state is heading for: the level's
+// box while the panel is open, the peek shape (wings, drop pill, completion
+// capsule, chevron) while it is closed. levelK is the drawn corner's level
+// progress at rest, so the hit shape rounds exactly like the settled frame.
+func (a *shelf) settledShell() (w, h, levelK float32) {
+	var openK, peekK float32
+	if a.visible {
+		openK = 1
+	}
+	if a.level >= 2 {
+		levelK = 1
+	}
+	if a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting {
+		peekK = 1
+	}
+	pw, ph := a.peekSize()
+	w, h = a.shellSize(openK, levelK, peekK, pw, ph)
+	return w, h, levelK
+}
 
-// watchPointer installs the pointer gate's one event source. A settled
-// panel draws no frames, so nothing else would notice the pointer
+// The pointer gate's sources are installed once per process and fan out to
+// every overlay that follows the pointer: Shelf owns one, and the smoke
+// harness builds one per test. A watch bound to the first shelf left every
+// other window's flag stale — its gate could only change on the next frame,
+// never on a move.
+var (
+	pointerWatched bool
+	pointerShelves []*shelf
+)
+
+// gatePollInterval is how often the gate re-reads the pointer while a shell
+// is on screen. Move events alone are not enough: macOS coalesces
+// mouse-moved events and an inactive overlay's event may be delivered tens
+// of milliseconds late, so a press can arrive after the pointer reached the
+// shell but before the monitor ran — WindowServer would hand that press to
+// the window underneath. Polling bounds that window to one interval.
+const gatePollInterval = 10 * time.Millisecond
+
+// gatePolling mirrors "some overlay is on screen", set on the main thread so
+// the poller never reads a shelf off it (the fields are main-thread only).
+var gatePolling atomic.Bool
+
+// gateWake carries "polling started" to the poller, which sleeps otherwise.
+var gateWake = make(chan struct{}, 1)
+
+// watchPointer registers the shelf with the pointer gate's sources. A
+// settled panel draws no frames, so nothing else would notice the pointer
 // leaving the drawn shell — and WindowServer decides which window a press
-// reaches from ignoresMouseEvents, which only a pointer move can keep
-// current. Mouse-only monitors require no Accessibility permission. The
-// watch lives as long as the process.
+// reaches from ignoresMouseEvents, which only the pointer position keeps
+// current. Both sources are mouse-only, so neither needs Accessibility.
+// They live as long as the process.
 func (a *shelf) watchPointer() {
+	if a.watchingPointer {
+		return
+	}
+	a.watchingPointer = true
+	pointerShelves = append(pointerShelves, a)
 	if pointerWatched {
 		return
 	}
 	pointerWatched = true
-	mac.ObserveMouseMoved(a.syncPointerGate)
+	mac.ObserveMouseMoved(func() {
+		for _, s := range pointerShelves {
+			s.syncPointerGate()
+		}
+	})
+	go pollPointerGate()
 }
 
-// syncPointerGate re-applies the shell-shaped hit test after a pointer
-// move, touching the native flag only when the answer changed.
+// pollPointerGate samples the pointer while a shell is on screen, so the
+// flag is current without waiting for an event. The sample itself runs on
+// the main thread: every field the gate reads belongs to it.
+func pollPointerGate() {
+	for range gateWake {
+		for gatePolling.Load() {
+			time.Sleep(gatePollInterval)
+			mygo.RunOnMain(func() {
+				for _, s := range pointerShelves {
+					s.syncPointerGate()
+				}
+			})
+		}
+	}
+}
+
+// anyOverlayWanted reports whether any registered overlay is on screen, so
+// one idle shelf cannot stop the poller another shelf relies on. Main
+// thread only.
+func anyOverlayWanted() bool {
+	for _, s := range pointerShelves {
+		if s.overlayWanted() {
+			return true
+		}
+	}
+	return false
+}
+
+// setGatePolling tells the poller that a shell is (or is no longer) on
+// screen. On the main thread only.
+func setGatePolling(on bool) {
+	if gatePolling.Swap(on) == on {
+		return
+	}
+	if on {
+		select {
+		case gateWake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// syncPointerGate re-asks the shell-shaped hit test at the current pointer
+// and applies the answer, touching the native flag only when it changed. It
+// is both the pointer watch's entry and the refresh every change of the
+// shell's shape or position goes through (window frame, show, level, page,
+// fold, capsule, drag end), so no press waits for a move event.
 func (a *shelf) syncPointerGate() {
+	if a.win != nil && a.win.IsDestroyed() {
+		return
+	}
 	accept := a.overlayAcceptsMouse()
 	if accept == !a.ignoringMouse {
 		return
@@ -443,17 +559,22 @@ func (a *shelf) syncPointerGate() {
 // top-left origin. The shell is centred on stripCenter and hangs from
 // a.y + sheetTop() in the window, exactly as view() draws it.
 func (a *shelf) overShell(p mygo.Point) bool {
-	w, h := float64(a.fx.w), float64(a.fx.h)
+	return a.overShellShape(p, a.fx.w, a.fx.h, a.fx.levelK, a.fx.shakeX)
+}
+
+// overShellShape is overShell for an explicit shell: w×h, its bottom
+// corner rounded by the island/sheet radius at levelK, shifted by shakeX.
+func (a *shelf) overShellShape(p mygo.Point, w, h, levelK, shakeX float32) bool {
 	if w <= 0 || h <= 0 {
 		return false
 	}
 	top := float64(a.y + a.sheetTop())
 	y := float64(p.Y) - top
-	if y < 0 || y >= h {
+	if y < 0 || y >= float64(h) {
 		return false
 	}
-	cx := float64(a.stripCenter()) + float64(a.fx.shakeX)
-	x0, x1 := cx-w/2, cx+w/2
+	cx := float64(a.stripCenter()) + float64(shakeX)
+	x0, x1 := cx-float64(w)/2, cx+float64(w)/2
 	left, right := x0, x1
 	// inset is how far the path's corner cuts in d points from the edge it
 	// starts on, for radius r: 0 at the flank, r at the outer edge. Both
@@ -470,9 +591,9 @@ func (a *shelf) overShell(p mygo.Point) bool {
 		// meets the flank at earR below.
 		left, right = x0-inset(y, ear), x1+inset(y, ear)
 	}
-	corner := float64(islandRadius) + float64(sheetRadius-islandRadius)*float64(a.fx.levelK)
-	if botR := math.Min(h/2, corner); y > h-botR {
-		cut := inset(h-y, botR)
+	corner := float64(islandRadius) + float64(sheetRadius-islandRadius)*float64(levelK)
+	if botR := math.Min(float64(h)/2, corner); y > float64(h)-botR {
+		cut := inset(float64(h)-y, botR)
 		left, right = x0+cut, x1-cut
 	}
 	x := float64(p.X)

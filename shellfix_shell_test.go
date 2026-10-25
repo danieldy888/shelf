@@ -141,6 +141,78 @@ func TestPointerGateHandsTheMouseBackOnMove(t *testing.T) {
 	}
 }
 
+// TestOpenUnderStillPointerTakesTheMouse: the user clicks the notch to open
+// the island and clicks an icon on it without moving. No move event
+// arrives to re-ask the gate with, and the drawn shell is still the closed
+// strip, so the shape the state settles at must count: the press belongs to
+// the island, not to whatever sits under the window.
+func TestOpenUnderStillPointerTakesTheMouse(t *testing.T) {
+	a := motionShelf()
+	a.level = 1 // the plain toggle opens the island
+	a.winH = 1  // pretend a live native surface
+	a.fx = shellMotion{}
+	old := cursorPoint
+	t.Cleanup(func() { cursorPoint = old })
+	cursorPoint = func() mygo.Point {
+		// The island's body, below the notch band and above its bottom
+		// corner: where its page icons sit.
+		return mygo.Point{X: a.stripCenter(), Y: a.y + islandH - 8}
+	}
+	a.syncMousePassThrough()
+	if !a.ignoringMouse {
+		t.Fatal("the closed shelf takes the mouse before it is opened")
+	}
+	a.show(false)
+	if a.ignoringMouse {
+		t.Fatal("the opening island ignores a press under a still pointer")
+	}
+	// And the transparent margin beside the island still belongs to the
+	// window underneath, before and after the opening.
+	cursorPoint = func() mygo.Point {
+		return mygo.Point{X: a.stripCenter() + islandW/2 + 8, Y: a.y + 20}
+	}
+	a.syncPointerGate()
+	if !a.ignoringMouse {
+		t.Fatal("the island's transparent margin takes the mouse")
+	}
+}
+
+// TestLevelSwitchUnderStillPointerKeepsTheMouse: the panel is on the island
+// and the pointer rests in the column the sheet will grow into. The switch
+// to the sheet changes the shell's shape under a still pointer, so the gate
+// must be re-asked from the state, not from a move event: the press is the
+// sheet's.
+func TestLevelSwitchUnderStillPointerKeepsTheMouse(t *testing.T) {
+	a := motionShelf()
+	a.level, a.visible = 1, true
+	a.fx = shellMotion{w: islandW, h: islandH}
+	a.winH = 1
+	old := cursorPoint
+	t.Cleanup(func() { cursorPoint = old })
+	sheetLeft := a.stripCenter() - sheetW/2
+	cursorPoint = func() mygo.Point { return mygo.Point{X: sheetLeft + 8, Y: a.y + 20} }
+	a.syncMousePassThrough()
+	if !a.ignoringMouse {
+		t.Fatal("the island's transparent margin takes the mouse before the switch")
+	}
+	a.setLevel(2)
+	if a.ignoringMouse {
+		t.Fatal("the sheet ignores a press under a still pointer it now covers")
+	}
+	// Outside both shells the window stays click-through.
+	cursorPoint = func() mygo.Point { return mygo.Point{X: sheetLeft - 8, Y: a.y + 20} }
+	a.syncPointerGate()
+	if !a.ignoringMouse {
+		t.Fatal("the transparent margin beside the sheet takes the mouse")
+	}
+	// Below the sheet's bottom edge it stays click-through too.
+	cursorPoint = func() mygo.Point { return mygo.Point{X: a.stripCenter(), Y: a.y + sheetH + 2} }
+	a.syncPointerGate()
+	if !a.ignoringMouse {
+		t.Fatal("a press below the sheet is swallowed by the overlay")
+	}
+}
+
 // TestIslandOpeningFramesStayOnTheIslandBox: opening the island used to
 // hold the sheet's 451pt frame for the whole spring. Every frame of the
 // flight must stay within the island's box and the spring's room.

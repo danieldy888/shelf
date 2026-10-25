@@ -311,7 +311,9 @@ func TestFixNativeFoldTrace(t *testing.T) {
 }
 
 // WindowServer, not a placeholder Window or desiredFrame arithmetic, must
-// send presses below the settled panel to the receiver underneath it.
+// send presses below the settled panel to the receiver underneath it. The
+// shell accepts the mouse only under the pointer, so the probe parks the
+// pointer on the shell's bottom row before asking.
 func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
 	for _, tall := range []bool{false, true} {
 		name := "tray"
@@ -362,6 +364,20 @@ func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
 			}
 			t.Cleanup(func() { onMain(receiver.Close) })
 			time.Sleep(150 * time.Millisecond)
+			// Acceptance is pointer-gated per frame (overlayAcceptsMouse):
+			// the shell takes a press only where the pointer is, so a probe
+			// of the shell's own bottom row must park the pointer there —
+			// the convention the capsule's click-through tests use. The
+			// pointer never moves afterwards, which is the case this test
+			// is about: the shell must take the press without one.
+			oldCursor := cursorPoint
+			t.Cleanup(func() { onMain(func() { cursorPoint = oldCursor }) })
+			onMain(func() {
+				p := mygo.Point{X: point.X, Y: a.y + targetH - 4}
+				cursorPoint = func() mygo.Point { return p }
+				a.syncMousePassThrough()
+			})
+			time.Sleep(150 * time.Millisecond) // let WindowServer apply the flag
 			onMain(func() {
 				screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
 				insideHit = mac.WindowAtPoint(float64(point.X), float64(a.y+targetH-4), screenH)

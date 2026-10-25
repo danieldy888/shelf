@@ -185,7 +185,15 @@ func TestToolsNativeDragOutStaysVisible(t *testing.T) {
 		return
 	}
 	start := mygo.Point{X: frame.X + int(card.X+card.W/2), Y: frame.Y + int(card.Y+card.H/2)}
-	postMouse(t, float64(start.X), float64(start.Y), 5, 1)
+	// Park the pointer on the card, settle, then press: the overlay takes
+	// the mouse only where the pointer is (overlayAcceptsMouse), and a
+	// posted move reaches the cursor a few milliseconds after it is sent.
+	// A hand moves and then presses; a machine posting both 30 ms apart
+	// presses inside the window where the pointer has not been observed
+	// yet, which is not a case a user can produce.
+	postMouse(t, float64(start.X), float64(start.Y), 5)
+	time.Sleep(150 * time.Millisecond)
+	postMouse(t, float64(start.X), float64(start.Y), 1)
 	// Always release over our arena even if an assertion aborts the test.
 	held := true
 	t.Cleanup(func() {
