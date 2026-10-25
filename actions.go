@@ -125,8 +125,9 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 	if m.Item(pinLabel).Chosen() {
 		a.setPinned(items, !pinned)
 	}
-	// 剪贴板来源：一键把这个应用加入不再记录列表。
-	if item.Source == store.SourceClipboard && item.SourceApp != "" {
+	// 剪贴板来源：一键把这个应用加入不再记录列表。Shelf 自己识别出的
+	// 文字没有可排除的应用（clipSourceOCR 不是 bundle id）。
+	if item.Source == store.SourceClipboard && item.SourceApp != "" && item.SourceApp != clipSourceOCR {
 		if m.Item("不再记录来自「" + a.appName(item.SourceApp) + "」的内容").Disabled(a.settingsBroken).Chosen() {
 			a.excludeClipboardApp(item.SourceApp)
 		}
@@ -167,6 +168,17 @@ func (a *shelf) writer() clipWriter {
 	return systemClipboard{}
 }
 
+// clipSourceOCR is the SourceApp marker of clipboard rows Shelf produced
+// itself by recognizing text (screen OCR): recognized text is new content,
+// so it belongs in the clipboard page, unlike text re-copied from a row.
+// It is not a bundle id; appName and the row icon special-case it instead
+// of resolving an app for it.
+const clipSourceOCR = "shelf:ocr"
+
+// ocrClipLabel is what an OCR row's source reads, in the row meta line and
+// the toolbar's app name lookup.
+const ocrClipLabel = "框选文字"
+
 // copyText puts text on the clipboard without recording it again and
 // reports whether the write went through; callers that hide the shelf
 // afterwards use it to stay open when the copy failed.
@@ -177,6 +189,22 @@ func (a *shelf) copyText(text string) bool {
 	}
 	a.clip.skipCurrent()
 	a.toastStatus("已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second), statusOK)
+	return true
+}
+
+// copyOCRText is copyText for text Shelf just recognized: after the write it
+// also records the text as a clipboard item, so the recognized words appear
+// at the front of the clipboard page with 「框选文字」 as their source. The
+// watcher is skipped first (copyText), so the capture is this one record,
+// not a second copy of Shelf's own pasteboard write. Re-copying an existing
+// row still goes through copyText and records nothing.
+func (a *shelf) copyOCRText(text string) bool {
+	if !a.copyText(text) {
+		return false
+	}
+	if a.store != nil {
+		a.changed(a.store.AddClipText(text, clipSourceOCR))
+	}
 	return true
 }
 
@@ -260,6 +288,9 @@ func (a *shelf) setPinned(items []store.Item, pinned bool) {
 // when it is chosen, so a name resolved once cannot change under it, and
 // the lookup (running apps, then the bundle on disk) runs once per app.
 func (a *shelf) appName(bundleID string) string {
+	if bundleID == clipSourceOCR {
+		return ocrClipLabel
+	}
 	if name, ok := a.appNames[bundleID]; ok {
 		return name
 	}

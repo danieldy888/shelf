@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -290,8 +291,14 @@ func TestRecognizeCopyRunsRecognizer(t *testing.T) {
 	if rec.text != "新鲜识别 Fresh" {
 		t.Fatalf("copied %q", rec.text)
 	}
-	if a.store.Items[0].OCRText != "新鲜识别 Fresh" || !a.store.Items[0].OCRDone {
-		t.Fatalf("menu recognition must persist: %+v", a.store.Items[0])
+	// The recognized text is also a clipboard capture now, so it sits at
+	// the front; the image keeps its written-back result below it.
+	if got := a.store.Items[0]; got.Kind != store.KindText || got.Text != "新鲜识别 Fresh" || got.SourceApp != clipSourceOCR {
+		t.Fatalf("recognized text must land at the front of the clipboard page: %+v", got)
+	}
+	img := slices.IndexFunc(a.store.Items, func(x store.Item) bool { return x.Kind == store.KindImage })
+	if img < 0 || a.store.Items[img].OCRText != "新鲜识别 Fresh" || !a.store.Items[img].OCRDone {
+		t.Fatalf("menu recognition must persist: %+v", a.store.Items)
 	}
 }
 

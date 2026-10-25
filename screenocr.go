@@ -130,7 +130,7 @@ func (a *shelf) finishScreenOCR(timer *time.Timer, text string, produced bool, e
 		ocrInvalidate(a)
 	case text == "":
 		a.toastStatus("没有识别到文字", time.Now().Add(3*time.Second), statusInfo)
-	case a.copyText(text):
+	case a.copyOCRText(text):
 		a.toastStatus(fmt.Sprintf("已复制识别出的文字 · %d 字", utf8.RuneCountInString(text)),
 			time.Now().Add(3*time.Second), statusOK)
 	}
