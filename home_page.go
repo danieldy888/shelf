@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -123,13 +124,24 @@ func (p *homePage) title() (name, count string) {
 }
 
 // actions is the back row's right side: the pencil, or 完成 while
-// editing/picking.
+// editing/picking. A full canvas has no cell for the dashed catalogue
+// entry, so a + button takes its place beside 完成.
 func (p *homePage) actions(c *ui.Context) []ui.Element {
 	a := p.host
 	live := a.tab == pageHome
 	switch {
 	case p.picking, p.editing:
-		return []ui.Element{a.homeDoneButton(c, live)}
+		var out []ui.Element
+		if p.editing && !p.picking && p.homePickable() {
+			if _, _, free := p.homeFreeSpot(); !free {
+				b := a.iconButton(c, "home-add", plusSymbol, "添加小组件")
+				if live && b.Clicked() {
+					p.picking, p.press = true, nil
+				}
+				out = append(out, b)
+			}
+		}
+		return append(out, a.homeDoneButton(c, live))
 	default:
 		b := a.iconButton(c, "home-edit", pencilSymbol, "编辑主页")
 		if live && b.Clicked() {
@@ -300,11 +312,136 @@ func (p *homePage) body(c *ui.Context, _ bool, live bool) ui.Element {
 		for _, w := range p.homeWidgets() {
 			p.homeWidget(c, w, live)
 		}
+		if p.editing {
+			p.homeAddCell(c, live)
+		}
 		if d := p.press; d != nil && d.dragging {
 			p.homeLifted(c, *d)
 		}
 	})
 	return canvas
+}
+
+// homeAddCell is edit mode's way into the catalogue: a dashed 1×1 cell in
+// the first free spot of the grid, the tools page's + slot in the canvas.
+// It is drawn under the dragged copy and only while a widget is left to
+// add; a canvas with no free cell falls back to the back row's + button.
+func (p *homePage) homeAddCell(c *ui.Context, live bool) {
+	if !p.homePickable() {
+		return
+	}
+	col, row, ok := p.homeFreeSpot()
+	if !ok {
+		return
+	}
+	plus := ui.Column(c.Key("home-plus")).Absolute().Left(homeX(col)).Top(homeY(row)).
+		Width(homeCellW()).Height(homeCellH()).Radius(14).Center().
+		BorderWidth(1.5).BorderColor(ui.RGBA(255, 255, 255, 0.25)).
+		BorderStyle(ui.BorderDashed).Label("添加小组件")
+	if live {
+		plus.HandleInput(func(ev ui.InputEvent) bool {
+			if ev.Kind == ui.InputPointerUp {
+				p.picking, p.press = true, nil
+				return true
+			}
+			return false
+		})
+		plus.PointerPosition()
+	}
+	plus.Children(func() {
+		ui.Icon(c, plusSymbol).Size(22, 22).TextColor(ink3)
+	})
+}
+
+// homeFreeSpot is the first free 1×1 cell in row-major order: the cell
+// the dashed entry takes, and the same scan the catalogue places with.
+func (p *homePage) homeFreeSpot() (col, row int, ok bool) {
+	l := p.host.toolsLayout()
+	for y := range homeGridRows {
+		for x := range homeGridCols {
+			if !l.OverlapsHome("", x, y, 1, 1) {
+				return x, y, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// homePlaced reports whether id already sits on the canvas, the tools
+// page or a desktop pin. AddWidget refuses a duplicate, so the catalogue
+// leaves such a widget out instead of offering a row that cannot work.
+func homePlaced(l *layout.Layout, id string) bool {
+	if l.HomeIndex(id) >= 0 {
+		return true
+	}
+	if slices.ContainsFunc(l.Cards, func(c layout.Card) bool { return c.ID == id }) {
+		return true
+	}
+	return slices.ContainsFunc(l.Pins, func(p layout.Pin) bool { return p.ID == id })
+}
+
+// homeCandidates are the catalogue's rows: available widgets that are not
+// placed yet.
+func (p *homePage) homeCandidates() []toolCardDef {
+	l := p.host.toolsLayout()
+	var defs []toolCardDef
+	for _, def := range toolCatalog() {
+		if def.kind == cardWidget && def.available(p.host) && !homePlaced(&l, def.id) {
+			defs = append(defs, def)
+		}
+	}
+	return defs
+}
+
+// homePickable reports whether the catalogue has anything to offer; with
+// every widget placed, edit mode draws no entry at all.
+func (p *homePage) homePickable() bool {
+	l := p.host.toolsLayout()
+	for _, def := range toolCatalog() {
+		if def.kind == cardWidget && def.available(p.host) && !homePlaced(&l, def.id) {
+			return true
+		}
+	}
+	return false
+}
+
+// homeAddSizes are the sizes the catalogue tries for a widget: its
+// default size first, then the smaller sizes the corner handle offers.
+func homeAddSizes(id string) [][2]int {
+	w, h := homeDefaultSize(id)
+	out := [][2]int{{w, h}}
+	for _, s := range homeSizes(id) {
+		if s[0] <= w && s[1] <= h && (s[0] != w || s[1] != h) && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// homeAddWidget places id at the first free cell in row-major order
+// where one of its sizes fits, the default size first, and returns
+// whether the layout changed.
+func (p *homePage) homeAddWidget(id string) bool {
+	for _, s := range homeAddSizes(id) {
+		added := p.host.mutateToolsChanged(func(l *layout.Layout) bool {
+			for y := range homeGridRows {
+				for x := range homeGridCols {
+					if x+s[0] > homeGridCols || y+s[1] > homeGridRows {
+						continue
+					}
+					if l.OverlapsHome(id, x, y, s[0], s[1]) {
+						continue
+					}
+					return l.AddWidget(layout.Widget{ID: id, X: x, Y: y, W: s[0], H: s[1]})
+				}
+			}
+			return false
+		})
+		if added {
+			return true
+		}
+	}
+	return false
 }
 
 // homeWidget draws one widget at its cell and wires its pointer session.
@@ -609,82 +746,61 @@ func (p *homePage) homeWobble(c *ui.Context, card ui.Element, w layout.Widget, e
 	c.AnimationFrame()
 }
 
-// pickerBody is the widget catalogue: one sheet of 30pt rows. Placed
-// widgets are greyed as 已添加.
+// pickerBody is the widget catalogue: one sheet of 30pt rows for the
+// widgets that are on none of the three places yet. The entry that opens
+// it is hidden when nothing is left, so an empty catalogue is only ever a
+// picture of that last moment.
 func (p *homePage) pickerBody(c *ui.Context, live bool) ui.Element {
-	a := p.host
-	placed := map[string]bool{}
-	l := a.toolsLayout()
-	for _, w := range l.Home {
-		placed[w.ID] = true
-	}
-	for _, card := range l.Cards {
-		placed[card.ID] = true
-	}
-	for _, pin := range l.Pins {
-		placed[pin.ID] = true
-	}
-	var defs []toolCardDef
-	for _, def := range toolCatalog() {
-		if def.kind == cardWidget && def.available(a) {
-			defs = append(defs, def)
-		}
-	}
+	defs := p.homeCandidates()
 	return ui.Column(c.Key("home-pick")).Grow(1).MinHeight(0).Children(func() {
 		sheet := ui.Column(c.Key("home-picker")).FillWidth().Radius(14).
 			Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
 		sheet.Children(func() {
 			panelLabel(c, nil, "小组件", 11, 600).TextColor(ink3).Margin(2, 0, 6, 0)
+			if len(defs) == 0 {
+				panelLabel(c, nil, "全部已在主页", 11, 0).TextColor(ink3)
+				return
+			}
 			ui.Grid(c.Key("home-plist")).ColumnTracks(ui.Fr(1), ui.Fr(1)).
 				GapY(4).GapX(10).FillWidth().Children(func() {
 				for _, def := range defs {
-					p.pickRow(c, def, placed[def.id], live)
+					p.pickRow(c, def, live)
 				}
 			})
 		})
 	})
 }
 
-// pickRow is one catalogue row; a tap places the widget in its first free
-// cell and returns to the edit grid.
-func (p *homePage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui.Element {
+// pickRow is one catalogue row; a tap places the widget at the first free
+// cell that fits and returns to the edit grid. A full canvas keeps the
+// catalogue open and says why nothing happened.
+func (p *homePage) pickRow(c *ui.Context, def toolCardDef, live bool) ui.Element {
 	a := p.host
 	row := ui.Row(c.Key("hpi-"+def.id)).Height(toolPickRowH).Radius(8).
 		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.title)
-	if !added && live {
+	if live {
 		if row.Hovered() {
 			row.Background(fill2)
 		}
 		row.HandleInput(func(ev ui.InputEvent) bool {
-			if ev.Kind == ui.InputPointerUp {
-				w, h := homeDefaultSize(def.id)
-				fits := a.mutateToolsChanged(func(l *layout.Layout) bool {
-					return l.AddWidgetBest(def.id, w, h)
-				})
-				if !fits {
-					a.toastStatus("主页没有空位", time.Now().Add(2*time.Second), statusInfo)
-				}
+			if ev.Kind != ui.InputPointerUp {
+				return false
+			}
+			if p.homeAddWidget(def.id) {
 				p.picking = false
 				return true
 			}
-			return false
+			a.toastStatus("主页没有空位，先移除一个小组件", time.Now().Add(2*time.Second), statusInfo)
+			return true
 		})
 		row.PointerPosition()
 	}
 	row.Children(func() {
-		iconCol := ink
-		if added {
-			iconCol = ink3
-		}
-		ui.Icon(c, def.icon).Size(15, 15).TextColor(iconCol)
-		panelLabel(c, nil, def.title, 12, 500).TextColor(iconCol)
+		ui.Icon(c, def.icon).Size(15, 15).TextColor(ink)
+		panelLabel(c, nil, def.title, 12, 500).TextColor(ink)
 		ui.Box(c).Grow(1)
 		w, h := homeDefaultSize(def.id)
-		size := fmt.Sprintf("%d × %d", w, h)
-		if added {
-			size += " · 已添加"
-		}
-		panelLabel(c, nil, size, 10, 0).TextColor(ink3)
+		panelLabel(c, nil, fmt.Sprintf("%d × %d", w, h), 10, 0).TextColor(ink3)
 	})
 	return row
 }

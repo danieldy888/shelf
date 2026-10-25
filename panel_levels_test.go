@@ -237,10 +237,15 @@ func assertPageFits(t *testing.T, view *ui.Tester, page string, notes []string, 
 		// One line at the text's own font size: the seam recorded the
 		// height the words need, so a second line is caught whatever page
 		// font grew it. User content is drawn SingleLine and ellipsizes
-		// instead of wrapping; a row that repeats its words as its label
-		// is measured through those words, not through the row's box.
-		if lh, ok := labelLineHeight(text); ok && r.H > lh*1.5 {
-			t.Errorf("%s: text %q is %.1fpt tall for a %.1fpt line: it wrapped", page, text, r.H, lh)
+		// instead of wrapping. A measured label is checked through its own
+		// box: Tester.Find answers the first node carrying the text, which
+		// can be the 24pt pill or the 30pt row around the label.
+		height := r.H
+		if b, ok := labelBox(text); ok {
+			height = b.H
+		}
+		if lh, ok := labelLineHeight(text); ok && height > lh*1.5 {
+			t.Errorf("%s: text %q is %.1fpt tall for a %.1fpt line: it wrapped", page, text, height, lh)
 		}
 	}
 }
@@ -256,6 +261,32 @@ func TestEveryPageFitsTheContentBox(t *testing.T) {
 		view.Frame()
 		assertPageFits(t, view, string(id), drain(), a.sheetTop())
 	}
+	// The 主页 page's edit grid and its open catalogue draw their own
+	// labels and rows; both states fit too.
+	a.setTab(pageHome)
+	p := a.homePageOf()
+	for _, state := range []struct {
+		name          string
+		editing, pick bool
+	}{
+		{"home-edit", true, false},
+		{"home-picker", true, true},
+	} {
+		p.editing, p.picking = state.editing, state.pick
+		view.Frame()
+		drain()
+		view.Frame()
+		// The state must really be on screen, or the audit proves nothing.
+		want := "移除"
+		if state.pick {
+			want = "小组件目录"
+		}
+		if !view.HasText(want) {
+			t.Fatalf("%s: the page did not draw its state (%q missing); texts %v", state.name, want, view.Texts())
+		}
+		assertPageFits(t, view, state.name, drain(), a.sheetTop())
+	}
+	p.editing, p.picking = false, false
 }
 
 // usageStates draws the AI 用量 page in the states the local panel and the

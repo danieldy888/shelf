@@ -460,25 +460,34 @@ func TestHomeTextFits(t *testing.T) {
 	tp.editing, tp.picking = true, true
 	ui.NewTester(toolsView, contentW, contentH).Frame()
 
+	// The 主页 catalogue's own rows at the fixed size.
+	p.editing, p.picking = true, true
+	pageTester(p, true).Frame()
+	p.editing, p.picking = false, false
+
 	if len(issues) != 0 {
 		t.Fatalf("text does not fit:\n%s", strings.Join(issues, "\n"))
 	}
 }
 
-// The catalogue places a widget in the first free cell that fits its
-// default size and returns to the edit grid.
+// The catalogue places a widget at the first free cell where its default
+// size fits and returns to the edit grid; a placed widget has no row.
 func TestHomePickerAddsWidget(t *testing.T) {
 	a, p := musicShelf(t)
 	l := layout.Layout{Version: layout.Version, Home: []layout.Widget{{ID: "playing", X: 0, Y: 0, W: 2, H: 2}}}
 	a.toolsLay = &l
-	p.editing, p.picking = true, true
 	a.tab, a.visible, a.level = pageHome, true, 2
 	view := ui.NewTester(a.view, sheetW, sheetH)
+	p.editing = true
+	view.Frame()
+	if err := view.Click("添加小组件"); err != nil {
+		t.Fatalf("catalogue entry missing: %v", err)
+	}
 	if !view.HasText("小组件目录") {
 		t.Fatalf("picker title missing: %v", view.Texts())
 	}
-	if !view.HasText("已添加") {
-		t.Fatal("placed widgets are not marked 已添加")
+	if view.HasText("已添加") || view.HasText("音乐") {
+		t.Fatalf("the catalogue lists a placed widget: %v", view.Texts())
 	}
 	if err := view.Click("最近文件"); err != nil {
 		t.Fatalf("pick row missing: %v", err)
@@ -487,8 +496,8 @@ func TestHomePickerAddsWidget(t *testing.T) {
 		t.Fatal("picking did not close after adding")
 	}
 	w := widgetByID(a.toolsLayout().Home, "recent")
-	if w.X != 2 || w.Y != 1 || w.W != 2 || w.H != 1 {
-		t.Fatalf("recent placed at %+v, want (2,1) 2×1", w)
+	if w.X != 2 || w.Y != 0 || w.W != 2 || w.H != 1 {
+		t.Fatalf("recent placed at %+v, want (2,0) 2×1", w)
 	}
 }
 

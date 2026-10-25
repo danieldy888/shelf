@@ -125,6 +125,7 @@ func panelLabel(c *ui.Context, key any, text string, size float32, weight int) u
 		if b := t.Bounds(); b.W > 0 {
 			w, h := c.MeasureText(0, ui.Span{Text: text, Size: size, Weight: weight})
 			noteLine(text, h)
+			noteBox(text, b)
 			if w > b.W+0.5 {
 				fitIssue(fmt.Sprintf("%q needs %.1fpt, box is %.1fpt (size %g): the label is cut",
 					text, w, b.W, size))
@@ -157,6 +158,26 @@ func noteLine(text string, h float32) {
 func labelLineHeight(text string) (float32, bool) {
 	h, ok := labelLines[text]
 	return h, ok
+}
+
+// labelBoxes is the box each measured label drew itself in, by text —
+// filled only while a test measures. The page audit needs it because
+// Tester.Find answers the first node carrying the text, which can be the
+// 24pt pill or the 30pt row around the label rather than the label.
+var labelBoxes = map[string]ui.Rect{}
+
+// noteBox remembers the box a measured label drew in. Tests only.
+func noteBox(text string, r ui.Rect) {
+	if r.W > 0 && r.H > 0 {
+		labelBoxes[text] = r
+	}
+}
+
+// labelBox returns the box a label last drew in, when a measuring test
+// recorded it.
+func labelBox(text string) (ui.Rect, bool) {
+	r, ok := labelBoxes[text]
+	return r, ok
 }
 
 // panelLines is a fixed multi-line message: the newlines are part of the
