@@ -269,13 +269,16 @@ func registerOverlayDropTypes(window id) {
 }
 
 // SetOverlayAcceptsMouse decides whether the overlay window takes mouse
-// events at all. accept is peeking, expanded, or an in-flight drag; then
-// the whole window is a click and drop target, re-ordered to the front of
-// its level. Otherwise it ignores the mouse entirely, so every click under
-// and beside the notch reaches the app or menu bar below. WindowServer
-// routes a click to a window before any of its views is hit-tested — a
-// view refusing hitTest: still swallows the click — so ignoresMouseEvents
-// is the only switch that lets clicks through. Main thread only.
+// events at all. accept is true only while the drawn shell — or an
+// in-flight drag, which needs the whole frame — is under the pointer
+// (shelf.overlayTakesMouse); then the window is a click and drop target,
+// re-ordered to the front of its level, and follows pointer moves so the
+// window can hand the mouse back the moment the pointer leaves the shape.
+// Otherwise it ignores the mouse entirely, so every click under and beside
+// the notch reaches the app or menu bar below. WindowServer routes a click
+// to a window before any of its views is hit-tested — a view refusing
+// hitTest: still swallows the click — so ignoresMouseEvents is the only
+// switch that lets clicks through. Main thread only.
 func SetOverlayAcceptsMouse(window uintptr, accept bool) {
 	if window == 0 {
 		return
@@ -289,12 +292,44 @@ func SetOverlayAcceptsMouse(window uintptr, accept bool) {
 		ignoring := send(w, "ignoresMouseEvents") != 0
 		switch {
 		case accept && ignoring:
+			// Mouse-moved events are what ObserveMouseMoved reports
+			// while the window takes the mouse: without them AppKit
+			// drops moves that land on an inactive overlay's window and
+			// the shell-shaped gate could only notice the pointer
+			// leaving it one frame later — by which time a press on the
+			// menu bar beside the shell is already lost.
+			send(w, "setAcceptsMouseMovedEvents:", 1)
 			send(w, "setIgnoresMouseEvents:", 0)
 			send(w, "orderFrontRegardless")
 		case !accept && !ignoring:
 			send(w, "setIgnoresMouseEvents:", 1)
 		}
 	})
+}
+
+// ObserveMouseMoved reports pointer moves without consuming them, in this
+// app and in every other: moved runs on the AppKit main thread for each
+// one. Global and local monitors together cover both states of the
+// overlay's gate — a move over the accepting window reaches this app (the
+// local monitor), and a move over the ignoring window reaches whatever is
+// below it (the global monitor). Mouse-only monitors require no
+// Accessibility permission. The watch lives as long as the process:
+// Shelf has one overlay window.
+var pointerMonitor struct{ global, local id }
+
+func ObserveMouseMoved(moved func()) {
+	const mask = 1<<5 | 1<<6 // NSEventTypeMouseMoved | NSEventTypeLeftMouseDragged
+	if pointerMonitor.global != 0 || pointerMonitor.local != 0 {
+		return
+	}
+	// The block captures moved for the life of the process; the monitors
+	// copy it, so only the monitor objects are retained here.
+	globalBlock := objc.NewBlock(func(_ objc.Block, _ id) { moved() })
+	defer globalBlock.Release()
+	localBlock := objc.NewBlock(func(_ objc.Block, event id) id { moved(); return event })
+	defer localBlock.Release()
+	pointerMonitor.global = send(send(class("NSEvent"), "addGlobalMonitorForEventsMatchingMask:handler:", mask, uintptr(globalBlock)), "retain")
+	pointerMonitor.local = send(send(class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", mask, uintptr(localBlock)), "retain")
 }
 
 // OverlayIgnoresMouse reads the window's ignoresMouseEvents, the flag

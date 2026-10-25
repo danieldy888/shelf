@@ -100,6 +100,97 @@ var panelTheme = func() *ui.Theme {
 	return t
 }()
 
+// panelLabel is the panel's label text: everything that is not user
+// content — page names, counts, buttons, units, states. It draws one line,
+// because single-line text never wraps, and while a test measures it
+// (fitIssue, the same seam and the same MeasureText call the home pages'
+// fitText uses) it reports the labels whose words do not fit: the natural
+// width must fit the box the layout gave the element, so a label can no
+// longer pass by ending in an ellipsis. key may be nil; it is the
+// element's c.Key identity. Production pays one nil check.
+func panelLabel(c *ui.Context, key any, text string, size float32, weight int) ui.Element {
+	var t ui.Element
+	if key != nil {
+		t = ui.Text(c.Key(key), text)
+	} else {
+		t = ui.Text(c, text)
+	}
+	t.SingleLine().FontSize(size)
+	if weight != 0 {
+		t.FontWeight(weight)
+	}
+	if fitIssue != nil {
+		// Bounds is the previous frame's box: the width this text was laid
+		// out in. Zero means the element was not drawn yet.
+		if b := t.Bounds(); b.W > 0 {
+			w, h := c.MeasureText(0, ui.Span{Text: text, Size: size, Weight: weight})
+			noteLine(text, h)
+			if w > b.W+0.5 {
+				fitIssue(fmt.Sprintf("%q needs %.1fpt, box is %.1fpt (size %g): the label is cut",
+					text, w, b.W, size))
+			}
+			if b.H > h*1.5 {
+				fitIssue(fmt.Sprintf("%q is %.1fpt tall for a %.1fpt line (size %g): the label wrapped",
+					text, b.H, h, size))
+			}
+		}
+	}
+	return t
+}
+
+// labelLines is the single-line height every measured label was drawn at,
+// by text — filled only while a test measures (fitIssue != nil). The page
+// audit applies a text's own font size as its one-line bound instead of one
+// flat cap for the whole panel.
+var labelLines = map[string]float32{}
+
+// noteLine remembers how tall one line of text is at the size it was drawn
+// with. Tests only.
+func noteLine(text string, h float32) {
+	if h > 0 {
+		labelLines[text] = h
+	}
+}
+
+// labelLineHeight returns how tall one line of text is at the size it was
+// last drawn with, when a measuring test recorded it.
+func labelLineHeight(text string) (float32, bool) {
+	h, ok := labelLines[text]
+	return h, ok
+}
+
+// panelLines is a fixed multi-line message: the newlines are part of the
+// design (an empty state's advice, a quota card's two lines), so it wraps
+// only where the text says to. While a test measures, every line must fit
+// the box on its own and the drawn height must be the lines the text
+// spells — a message that grew a third line is a layout bug.
+func panelLines(c *ui.Context, text string, size float32, weight int) ui.Element {
+	t := ui.Text(c, text).FontSize(size)
+	if weight != 0 {
+		t.FontWeight(weight)
+	}
+	if fitIssue != nil {
+		if b := t.Bounds(); b.W > 0 {
+			lines := strings.Split(text, "\n")
+			var lineH float32
+			for _, line := range lines {
+				w, h := c.MeasureText(0, ui.Span{Text: line, Size: size, Weight: weight})
+				noteLine(line, h)
+				if w > b.W+0.5 {
+					fitIssue(fmt.Sprintf("%q needs %.1fpt, box is %.1fpt (size %g): the line is cut",
+						line, w, b.W, size))
+				}
+				lineH = max(lineH, h)
+			}
+			if b.H > lineH*float32(len(lines))*1.5 {
+				fitIssue(fmt.Sprintf("%q is %.1fpt tall for %d line(s) of %.1fpt (size %g)",
+					text, b.H, len(lines), lineH, size))
+			}
+		}
+	}
+	return t
+}
+
 // 面板只有两种尺寸，与页面内容无关（原型 index.html?variant=B）：
 // 一级岛 340 × 104，二级面板 420 × 250。二级面板的 250 由 32 菜单栏行、
 // 26 返回行、6 间距、396 × 174 内容区和 12 底边拼成；一级岛的 104 由
@@ -663,7 +754,7 @@ func (a *shelf) islandRow(c *ui.Context) {
 				a.np.miniPlayer(c)
 				return
 			}
-			ui.Text(c.Key("island-counts"), a.countsText()).SingleLine().FontSize(11.5).TextColor(ink3)
+			panelLabel(c, "island-counts", a.countsText(), 11.5, 0).TextColor(ink3)
 		})
 		ui.Box(c.Key("island-sep")).Width(1).Height(30).Background(fill2)
 		ui.Row(c.Key("island-pages")).Gap(islandIconGap).AlignItems(ui.Center).Children(func() {
@@ -799,9 +890,9 @@ func (a *shelf) backRow(c *ui.Context, p panelPage, name, count string, live boo
 		back.Children(func() {
 			ui.Row(c.Key("back-in")).AlignItems(ui.Center).Gap(2).Children(func() {
 				ui.Icon(c, backSymbol).Size(14, 14).TextColor(ink2)
-				ui.Text(c, name).SingleLine().FontSize(11.5).FontWeight(600).TextColor(ink2)
+				panelLabel(c, nil, name, 11.5, 600).TextColor(ink2)
 				if count != "" {
-					ui.Text(c, count).SingleLine().FontSize(10).FontWeight(600).TextColor(ink3)
+					panelLabel(c, nil, count, 10, 600).TextColor(ink3)
 				}
 			})
 		})
@@ -845,13 +936,13 @@ func (a *shelf) dropFrame(c *ui.Context, paths []string, class dropClass) {
 // dropBar is a plain back row for the transient drop zone and OCR card.
 func (a *shelf) dropBar(c *ui.Context, name, count, hint string) {
 	ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, name).SingleLine().FontSize(11.5).FontWeight(600).TextColor(ink)
+		panelLabel(c, nil, name, 11.5, 600).TextColor(ink)
 		if count != "" {
-			ui.Text(c, count).SingleLine().FontSize(10).FontWeight(600).TextColor(ink3)
+			panelLabel(c, nil, count, 10, 600).TextColor(ink3)
 		}
 		ui.Box(c).Grow(1)
 		if hint != "" {
-			ui.Text(c, hint).SingleLine().FontSize(10.5).FontWeight(600).TextColor(ink3)
+			panelLabel(c, nil, hint, 10.5, 600).TextColor(ink3)
 		}
 	})
 }
@@ -929,7 +1020,8 @@ func (a *shelf) clearable(list []store.Item, id pageID) []store.Item {
 // filters the list as it goes; while the shelf was opened for search the
 // box keeps the keyboard focus, so ↑/↓ walk the list and ⏎ copies and
 // collapses without reaching for the mouse. Esc clears the search first,
-// then returns to the island.
+// then closes the panel outright: the ⌃⌥V flow opens straight on the sheet,
+// so there is no island state to back out to (see shelf.escape).
 func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
 	wrap := ui.Row(c.Key("clip-search")).Width(clipSearchW).Height(clipSearchH).Padding(0, 8, 0, 8).Gap(5).
 		AlignItems(ui.Center).Radius(7).Background(fill1)
@@ -941,7 +1033,7 @@ func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
 			if a.search != "" {
 				ui.Text(c, a.search).SingleLine().FontSize(11).TextColor(ink)
 			} else {
-				ui.Text(c, "搜索剪贴板").SingleLine().FontSize(11).TextColor(ink3)
+				panelLabel(c, nil, "搜索剪贴板", 11, 0).TextColor(ink3)
 			}
 		})
 		return wrap
@@ -988,8 +1080,8 @@ func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
 func (a *shelf) emptyState(c *ui.Context, icon *ui.SVG, title, hint string) ui.Element {
 	return ui.Column(c).Grow(1).Center().Gap(8).Children(func() {
 		ui.Icon(c, icon).Size(28, 28).TextColor(ink3)
-		ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(ink2)
-		ui.Text(c, hint).TextAlign(ui.Center).FontSize(11).TextColor(ink3)
+		panelLabel(c, nil, title, 13, 500).TextColor(ink2)
+		panelLabel(c, nil, hint, 11, 0).TextAlign(ui.Center).TextColor(ink3)
 	})
 }
 
@@ -1027,7 +1119,7 @@ func (a *shelf) pill(c *ui.Context, key, text string, isErr bool) {
 		if isErr {
 			ui.Box(c).Size(6, 6).Radius(3).Background(danger)
 		}
-		ui.Text(c, text).SingleLine().FontSize(11).TextColor(ink2)
+		panelLabel(c, nil, text, 11, 0).TextColor(ink2)
 	})
 }
 
@@ -1063,7 +1155,7 @@ func (a *shelf) statusToast(c *ui.Context) {
 		if a.statusKind == statusErr {
 			ui.Box(c).Size(6, 6).Radius(3).Background(danger)
 		}
-		ui.Text(c, a.status).SingleLine().FontSize(11).TextColor(ink)
+		panelLabel(c, nil, a.status, 11, 0).TextColor(ink)
 	})
 	// 让引擎在过期时刻再起一帧，tick 趁机清掉状态。
 	c.After(remaining + 30*time.Millisecond)
@@ -1077,7 +1169,7 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 	p := ui.Row(c.Key("pill-update")).Height(30).Padding(0, 8, 0, 14).Radius(15).
 		AlignItems(ui.Center).Gap(8).Background(fill2)
 	p.Children(func() {
-		ui.Text(c, note).SingleLine().FontSize(11).TextColor(ink)
+		panelLabel(c, nil, note, 11, 0).TextColor(ink)
 		switch {
 		case a.updateInstalled:
 			if ui.Button(c, "重新启动").Label("重新启动 Shelf 完成更新").Clicked() {
@@ -1183,10 +1275,10 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			band.Children(func() {
 				if kind == peekDrop {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
-					ui.Text(c, "松开放入").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
+					panelLabel(c, nil, "松开放入", 12, 600).TextColor(ink)
 				} else if kind == peekReturn {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
-					ui.Text(c, "松开放回").FontSize(12).FontWeight(600).SingleLine().TextColor(ink)
+					panelLabel(c, nil, "松开放回", 12, 600).TextColor(ink)
 				} else {
 					ui.Icon(c, chevronDownSym).Size(12, 12).TextColor(ink2)
 				}

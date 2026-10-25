@@ -4,8 +4,8 @@ package main
 
 // Real-window proof for the motion work: the elastic opening (a numeric
 // trace of the drawn shell, frame by frame, plus a shot), the completion
-// capsule in its three states, its yield to hover, and the progressive
-// blur on a scrolled clipboard list. Run with SHELF_BASKET_SMOKE=1; PNGs
+// capsule in its three states, its yield to hover, and the bottom fade of a
+// scrolled clipboard list. Run with SHELF_BASKET_SMOKE=1; PNGs
 // land in /tmp/shelf-fix/motion/. The instance reads the smoke data dir, never
 // ~/Library/Application Support/Shelf.
 
@@ -325,10 +325,11 @@ func TestSmokeCapsuleRunning(t *testing.T) {
 	motionClosed(a)
 }
 
-// TestSmokeProgressiveBlur scrolls a long clipboard list in the real window
-// and shoots the list at the top and in the middle: the band melts into the
-// shell, and the bottom band appears only once there is more below.
-func TestSmokeProgressiveBlur(t *testing.T) {
+// TestSmokeClipListBottomFade scrolls a long clipboard list in the real
+// window and shoots the list at the top and in the middle: the content box's
+// bottom fade sits over the shell, and rows run under it only once there is
+// more below.
+func TestSmokeClipListBottomFade(t *testing.T) {
 	a := redesignShelf(t)
 	onMain(func() {
 		for i := range 24 {
@@ -351,7 +352,7 @@ func TestSmokeProgressiveBlur(t *testing.T) {
 	if maxY <= 0 {
 		t.Fatalf("the 24-row list does not scroll: MaxY=%.0f", maxY)
 	}
-	motionShot(t, a, "blur-top", 200*time.Millisecond)
+	motionShot(t, a, "fade-top", 200*time.Millisecond)
 	// A real wheel over the list: one event already runs to the end of a
 	// 24-row list, the reverse one returns to the top, which proves the
 	// gesture reaches this scroll view. The settled middle position the
@@ -371,7 +372,7 @@ func TestSmokeProgressiveBlur(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	var y float32
 	onMain(func() { y = page.scroll.Y })
-	motionShot(t, a, "blur-scrolled", 200*time.Millisecond)
+	motionShot(t, a, "fade-scrolled", 200*time.Millisecond)
 	if y <= 0 || y >= maxY {
 		t.Fatalf("the wheel left the list at Y=%.1f of %.1f, neither band visible", y, maxY)
 	}

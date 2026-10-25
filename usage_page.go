@@ -291,9 +291,9 @@ func (f *usageFeature) quotaCard(c *ui.Context, tool aiusage.Tool) ui.Element {
 func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuotaState, q aiusage.Quota, stale bool) {
 	now := f.deps.now()
 	ui.Row(c.Key("name")).AlignItems(ui.Center).Gap(5).Children(func() {
-		ui.Text(c, toolName(tool)).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+		panelLabel(c, nil, toolName(tool), 12, 600).TextColor(ink)
 		if q.Plan != "" {
-			ui.Text(c, q.Plan).SingleLine().FontSize(9.5).FontWeight(600).TextColor(ink2).
+			panelLabel(c, nil, q.Plan, 9.5, 600).TextColor(ink2).
 				Background(fill2).Radius(5).Padding(1, 5, 1, 5)
 		}
 	})
@@ -313,7 +313,7 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 		return
 	}
 	if st.latest.FetchedAt.IsZero() {
-		ui.Text(c, "正在查询…").FontSize(11).TextColor(ink3).Margin(4, 0, 0, 0)
+		panelLabel(c, nil, "正在查询…", 11, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 		return
 	}
 	f.quotaMessage(c, tool, st.latest.Status)
@@ -322,22 +322,25 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 // quotaMessage is the card's state text for the answers that produce no
 // numbers: 未登录, 已过期, 限流, 查不到.
 func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, status aiusage.QuotaStatus) {
+	// Each line must fit the 124pt info column at 10.5pt: a longer line
+	// wraps inside the card and the third line falls out of it (the page
+	// audit measures every line, so this cannot regress silently).
 	var lines string
 	switch status {
 	case aiusage.QuotaNotLoggedIn:
 		if tool == aiusage.ToolClaude {
-			lines = "本机没有登录 Claude Code\n在终端运行 claude login 后显示"
+			lines = "未登录 Claude Code\n运行 claude login 后显示"
 		} else {
-			lines = "本机没有登录 Codex\n在终端运行 codex login 后显示"
+			lines = "未登录 Codex\n运行 codex login 后显示"
 		}
 	case aiusage.QuotaExpired:
-		lines = fmt.Sprintf("登录已过期\n打开一次 %s 就会恢复", toolName(tool))
+		lines = fmt.Sprintf("登录已过期\n重新打开 %s", toolName(tool))
 	case aiusage.QuotaRateLimited:
 		lines = "额度查询暂时被限流\n稍后再看"
 	default:
 		lines = "暂时查不到额度\n稍后再看"
 	}
-	ui.Text(c, lines).FontSize(10.5).TextColor(ink3).Margin(4, 0, 0, 0)
+	panelLines(c, lines, 10.5, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 }
 
 // windowLine is one card row: coloured dot, window name, remaining % and
@@ -352,7 +355,7 @@ func (f *usageFeature) windowLine(c *ui.Context, w *aiusage.Window, name string,
 	}
 	ui.Row(c.Key("wl-"+name)).AlignItems(ui.Center).Gap(4).Margin(3, 0, 0, 0).Children(func() {
 		ui.Box(c).Size(6, 6).Radius(3).Background(col)
-		ui.Text(c, name).SingleLine().FontSize(10.5).TextColor(ink2).Width(32)
+		panelLabel(c, nil, name, 10.5, 0).TextColor(ink2).Width(32)
 		pct, pctCol := "—", ink
 		if w != nil {
 			pct = fmt.Sprintf("%.0f%%", left)
@@ -360,9 +363,9 @@ func (f *usageFeature) windowLine(c *ui.Context, w *aiusage.Window, name string,
 				pctCol = danger
 			}
 		}
-		ui.Text(c, pct).SingleLine().FontSize(11).FontWeight(600).TextColor(pctCol).MinWidth(26)
+		panelLabel(c, nil, pct, 11, 600).TextColor(pctCol).MinWidth(26)
 		if w != nil {
-			ui.Text(c, usageResetShort(w.ResetsAt, now)).SingleLine().FontSize(10.5).TextColor(ink3)
+			panelLabel(c, nil, usageResetShort(w.ResetsAt, now), 10.5, 0).TextColor(ink3)
 		}
 	})
 }
@@ -399,7 +402,7 @@ func (f *usageFeature) paceLine(c *ui.Context, q aiusage.Quota, stale bool, now 
 			text, col = name+" · "+usageDeplete(d)+"用完", usageFive
 		}
 	}
-	ui.Text(c, text).SingleLine().FontSize(10).TextColor(col).Margin(3, 0, 0, 0)
+	panelLabel(c, nil, text, 10, 0).TextColor(col).Margin(3, 0, 0, 0)
 }
 
 // quotaRing draws the card's 50pt double ring and centres the tool logo on
@@ -489,10 +492,10 @@ func (f *usageFeature) popoverBody(c *ui.Context, tool aiusage.Tool) {
 	q, _ := f.quotaShown(tool)
 	now := f.deps.now()
 	ui.Row(c.Key("ph")).AlignItems(ui.End).Children(func() {
-		ui.Text(c, toolName(tool)).SingleLine().FontSize(14).FontWeight(600).TextColor(ink)
+		panelLabel(c, nil, toolName(tool), 14, 600).TextColor(ink)
 		ui.Box(c).Grow(1)
 		if q.Plan != "" {
-			ui.Text(c, q.Plan).SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
+			panelLabel(c, nil, q.Plan, 12, 500).TextColor(ink2)
 		}
 	})
 	ui.Row(c.Key("leg")).Gap(14).Margin(6, 0, 0, 0).Children(func() {
@@ -514,7 +517,7 @@ func (f *usageFeature) popoverBody(c *ui.Context, tool aiusage.Tool) {
 func popLegend(c *ui.Context, col ui.Color, s string) {
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Size(7, 7).Radius(4).Background(col).Margin(0, 5, 0, 0)
-		ui.Text(c, s).SingleLine().FontSize(11).TextColor(ink2)
+		panelLabel(c, nil, s, 11, 0).TextColor(ink2)
 	})
 }
 
@@ -525,10 +528,10 @@ func (f *usageFeature) popWindow(c *ui.Context, name string, w *aiusage.Window, 
 	left := max(0, min(100, 100-w.UsedPct))
 	pi, hasPace := f.paceOf(w, now)
 	ui.Row(c.Key("pw-"+name)).AlignItems(ui.End).Margin(12, 0, 0, 0).Children(func() {
-		ui.Text(c, name).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-		ui.Text(c, fmt.Sprintf("剩 %.0f%%", left)).SingleLine().FontSize(11).FontWeight(600).TextColor(ink2).Margin(0, 0, 0, 6)
+		panelLabel(c, nil, name, 13, 600).TextColor(ink)
+		panelLabel(c, nil, fmt.Sprintf("剩 %.0f%%", left), 11, 600).TextColor(ink2).Margin(0, 0, 0, 6)
 		ui.Box(c).Grow(1)
-		ui.Text(c, usageResetLong(w.ResetsAt, now)).SingleLine().FontSize(11).TextColor(ink3)
+		panelLabel(c, nil, usageResetLong(w.ResetsAt, now), 11, 0).TextColor(ink3)
 	})
 	bar := ui.Box(c.Key("trk-"+name)).FillWidth().Height(5).Radius(3).Margin(6, 0, 0, 0)
 	bar.Draw(func(p *ui.Painter, r ui.Rect) {
@@ -556,14 +559,14 @@ func (f *usageFeature) popWindow(c *ui.Context, name string, w *aiusage.Window, 
 			}
 		}
 		if delta != "" {
-			ui.Text(c, delta).SingleLine().FontSize(10.5).TextColor(dcol)
+			panelLabel(c, nil, delta, 10.5, 0).TextColor(dcol)
 		}
 		ui.Box(c).Grow(1)
 		right := "可撑到重置"
 		if hasPace && !pi.LastsUntilReset {
 			right = "按这个速度 " + usageDeplete(pi.RunsOutIn) + "用完"
 		}
-		ui.Text(c, right).SingleLine().FontSize(10.5).TextColor(ink3)
+		panelLabel(c, nil, right, 10.5, 0).TextColor(ink3)
 	})
 }
 
@@ -577,7 +580,7 @@ func (f *usageFeature) localPanel(c *ui.Context) {
 		Padding(8, 10, 7, 10).Gap(4)
 	card.Children(func() {
 		ui.Row(c.Key("uh")).Height(15).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "本机用量").SingleLine().FontSize(10.5).FontWeight(600).TextColor(ink2)
+			panelLabel(c, nil, "本机用量", 10.5, 600).TextColor(ink2)
 			ui.Box(c).Grow(1)
 			f.usageSeg(c)
 		})
@@ -653,7 +656,7 @@ func (f *usageFeature) usageSeg(c *ui.Context) {
 				if on {
 					tc = ink
 				}
-				ui.Text(c, s).SingleLine().FontSize(9.5).FontWeight(600).TextColor(tc)
+				panelLabel(c, nil, s, 9.5, 600).TextColor(tc)
 			})
 			if b.Clicked() && f.rangeSel != r {
 				f.rangeSel = r
@@ -672,7 +675,7 @@ func (f *usageFeature) scanCard(c *ui.Context) {
 	ui.Column(c.Key("scan")).Grow(1).MinHeight(0).AlignItems(ui.Center).Justify(ui.Center).Gap(6).Children(func() {
 		switch {
 		case f.localErr != nil && !f.localBusy:
-			ui.Text(c, "本机记录读取失败\n稍后再试").TextAlign(ui.Center).FontSize(10.5).TextColor(ink2)
+			panelLines(c, "本机记录读取失败\n稍后再试", 10.5, 0).TextAlign(ui.Center).TextColor(ink2)
 		case f.localBusy:
 			done, total := f.scanDone.Load(), f.scanTotal.Load()
 			pct := ""
@@ -682,7 +685,7 @@ func (f *usageFeature) scanCard(c *ui.Context) {
 				pct = fmt.Sprintf(" %d%%", n)
 				frac = float32(n) / 100
 			}
-			ui.Text(c, "第一次统计本机记录…"+pct).SingleLine().FontSize(10.5).TextColor(ink2)
+			panelLabel(c, nil, "第一次统计本机记录…"+pct, 10.5, 0).TextColor(ink2)
 			ui.Box(c.Key("sbar")).Width(130).Height(3).Radius(2).Background(fill3).Draw(func(p *ui.Painter, r ui.Rect) {
 				if frac > 0 {
 					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * frac, H: r.H}, progress, 2)
@@ -690,7 +693,7 @@ func (f *usageFeature) scanCard(c *ui.Context) {
 			})
 			ui.Text(c, f.scanSources()).MaxLines(2).TextAlign(ui.Center).FontSize(9.5).TextColor(ink3)
 		default:
-			ui.Text(c, "正在统计本机用量…").SingleLine().FontSize(10.5).TextColor(ink2)
+			panelLabel(c, nil, "正在统计本机用量…", 10.5, 0).TextColor(ink2)
 		}
 	})
 }
@@ -710,29 +713,45 @@ func (f *usageFeature) scanSources() string {
 }
 
 // kpiGrid is the 2 × 2 metric block: Token, requests, cost and cache-hit
-// rate, each a 9pt label over a 12pt value.
+// rate, each a 9pt label over a 12pt value. The two cells whose number is
+// a sum take a hover tip: the Token total splits into input, output and
+// cache, and the cost line says how much of it is priced.
 func (f *usageFeature) kpiGrid(c *ui.Context, s aiusage.Summary) {
 	tot := s.Total
 	ui.Grid(c.Key("kpi")).ColumnTracks(ui.Fr(1), ui.Fr(1)).GapY(1).GapX(8).FillWidth().
 		Children(func() {
-			f.kpi(c, "Token", usageTokens(totalTokens(tot)), false)
-			f.kpi(c, "请求", fmt.Sprintf("%d", tot.Requests), false)
-			f.kpi(c, "费用", usageCost(tot), true)
-			f.kpi(c, "缓存命中", usageHitRate(tot), false)
+			f.kpi(c, "Token", usageTokens(totalTokens(tot)), false, usageTokenSub(tot))
+			f.kpi(c, "请求", fmt.Sprintf("%d", tot.Requests), false, "")
+			f.kpi(c, "费用", usageCost(tot), true, usageCostSub(tot))
+			f.kpi(c, "缓存命中", usageHitRate(tot), false, "")
 		})
 }
 
 // kpi is one metric cell: label over value. money turns the value green
-// only while a real price shows.
-func (f *usageFeature) kpi(c *ui.Context, k, v string, money bool) {
-	ui.Column(c.Key("kpi-" + k)).Height(25).MinWidth(0).Children(func() {
-		ui.Text(c, k).SingleLine().FontSize(9).TextColor(ink3)
+// only while a real price shows. tip, when not empty, explains the value
+// on hover — the 2 × 2 grid is too tight to spell the parts out inline.
+func (f *usageFeature) kpi(c *ui.Context, k, v string, money bool, tip string) {
+	cell := ui.Column(c.Key("kpi-"+k)).Height(25).MinWidth(0)
+	if tip != "" {
+		cell.Tooltip(tip)
+	}
+	cell.Children(func() {
+		panelLabel(c, nil, k, 9, 0).TextColor(ink3)
 		col := ink
 		if money && v != "—" {
 			col = usageWeekly
 		}
-		ui.Text(c, v).SingleLine().FontSize(11.5).FontWeight(600).TextColor(col)
+		panelLabel(c, nil, v, 11.5, 600).TextColor(col)
 	})
+}
+
+// usageTokenSub splits the Token KPI into the parts it adds up: input,
+// output and cache (read plus write) — the same three the local scan
+// records separately.
+func usageTokenSub(t aiusage.Totals) string {
+	return "输入 " + usageTokens(t.Input) +
+		" · 输出 " + usageTokens(t.Output) +
+		" · 缓存 " + usageTokens(t.CacheRead+t.CacheWrite)
 }
 
 // usageChart is the stacked bar chart: per bucket a column of per-tool
@@ -801,7 +820,7 @@ func (f *usageFeature) usageChart(c *ui.Context, s aiusage.Summary) {
 		labels := f.xLabels(buckets)
 		for _, i := range []int{0, 2, 4} {
 			if i < len(labels) {
-				ui.Text(c, labels[i]).SingleLine().FontSize(9).TextColor(ink3)
+				panelLabel(c, nil, labels[i], 9, 0).TextColor(ink3)
 			}
 		}
 	})
@@ -856,7 +875,7 @@ func (f *usageFeature) usageLegend(c *ui.Context, s aiusage.Summary) {
 			}
 			ui.Row(c.Key("lg-" + string(t))).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(6, 6).Radius(2).Background(toolColor(t)).Margin(0, 4, 0, 0)
-				ui.Text(c, toolName(t)).SingleLine().FontSize(9.5).TextColor(ink2)
+				panelLabel(c, nil, toolName(t), 9.5, 0).TextColor(ink2)
 			})
 		}
 	})

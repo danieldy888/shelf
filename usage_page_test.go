@@ -333,7 +333,7 @@ func TestUsageQuotaStates(t *testing.T) {
 		status aiusage.QuotaStatus
 		want   string
 	}{
-		{"not-logged-in", aiusage.QuotaNotLoggedIn, "本机没有登录 Codex"},
+		{"not-logged-in", aiusage.QuotaNotLoggedIn, "未登录 Codex"},
 		{"expired", aiusage.QuotaExpired, "登录已过期"},
 		{"rate-limited", aiusage.QuotaRateLimited, "额度查询暂时被限流"},
 		{"failed", aiusage.QuotaFailed, "暂时查不到额度"},
@@ -1150,4 +1150,61 @@ func TestUsagePageScreenshot(t *testing.T) {
 	s3.f.scanDone.Store(37)
 	s3.f.scanTotal.Store(100)
 	write("usage-scan", ui.NewTester(s3.a.view, sheetW, sheetH))
+}
+
+// The Token and 费用 cells hold one number each because the 2 × 2 grid has
+// no room for the parts; resting on them explains the number. Regression:
+// usageCostSub had no call site, so 「N 条没有价格」 never reached a screen.
+func TestUsageKpiCellsExplainTheirNumbersOnHover(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.Local)
+	draw := func(t *testing.T, unpriced int64) (*usageFixture, *ui.Tester) {
+		t.Helper()
+		fx := newUsageFixture(t, true)
+		fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", now)
+		fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", now)
+		fx.scan.summaries = map[aiusage.Range]aiusage.Summary{
+			aiusage.RangeToday: {
+				Range: aiusage.RangeToday,
+				Total: aiusage.Totals{Input: 8_400_000, Output: 1_100_000, CacheRead: 5_200_000,
+					CacheWrite: 90_000, Requests: 412, Unpriced: unpriced, Cost: 3.72},
+				Buckets: []aiusage.Bucket{{Start: now, Tokens: map[aiusage.Tool]int64{aiusage.ToolOmp: 1_000_000}}},
+			},
+		}
+		fx.a.level, fx.a.visible, fx.a.tab = 2, true, pageUsage
+		fx.f.tick(now)
+		fx.view.Frame()
+		return fx, fx.view
+	}
+	hover := func(t *testing.T, view *ui.Tester, label string) {
+		t.Helper()
+		r, ok := view.Find(label)
+		if !ok {
+			t.Fatalf("the %q cell is missing; texts %v", label, view.Texts())
+		}
+		view.Move(r.X+r.W/2, r.Y+r.H-3)
+		view.Frame()
+		view.Advance(time.Second)
+		view.Frame()
+	}
+	t.Run("token split", func(t *testing.T) {
+		_, view := draw(t, 3)
+		hover(t, view, "Token")
+		if !view.HasText("输入 8.4M · 输出 1.1M · 缓存 5.3M") {
+			t.Fatalf("the Token cell has no split tip; texts %v", view.Texts())
+		}
+	})
+	t.Run("unpriced records", func(t *testing.T) {
+		_, view := draw(t, 7)
+		hover(t, view, "费用")
+		if !view.HasText("7 条没有价格") {
+			t.Fatalf("the 费用 cell lost its unpriced tip; texts %v", view.Texts())
+		}
+	})
+	t.Run("all priced", func(t *testing.T) {
+		_, view := draw(t, 0)
+		hover(t, view, "费用")
+		if !view.HasText("只算自带价格") {
+			t.Fatalf("the 费用 cell lost its priced-only tip; texts %v", view.Texts())
+		}
+	})
 }

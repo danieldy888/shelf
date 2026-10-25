@@ -21,6 +21,7 @@ func (a *shelf) place(p mygo.Point) {
 	if a.win != nil {
 		a.syncWindowFrame()
 		a.win.SetOpacity(1)
+		a.watchPointer()
 	}
 	a.syncDragGuard()
 }
@@ -59,28 +60,12 @@ func (a *shelf) overNotch(p mygo.Point) bool {
 func (a *shelf) desiredFrame() mygo.Rectangle {
 	closing := !a.visible && a.fx.openK > 0
 	if a.visible || closing {
-		// The frame is the largest of the two levels' boxes while open. The
-		// island's frame shrinks only after the sheet has sprung back to
-		// it, so no frame clips the growing or folding shell.
 		top := a.sheetTop()
-		expW, expH := float32(sheetW), float32(sheetH+top)
-		if a.currentLevel() == 1 && a.fx.levelK <= 0.001 && !a.fx.openMoving {
-			expW, expH = islandW, float32(islandH+top)
-		}
-		// The room is constant while the springs move: a frame that
-		// changed its box at the spring's peak would slide the window
-		// sideways under the shell. Once settled, the height is the shell's
-		// exact box so its transparent margin cannot swallow clicks below.
-		w, roomH := openFrameRoom(expW, expH)
-		h := int(math.Ceil(float64(expH)))
-		if a.fx.openMoving {
-			h = roomH
-		}
 		if closing {
 			// Follow the drawn shell through its fold, with room for the
 			// ears and two points below the bottom curve.
-			w = int(math.Ceil(float64(a.fx.w))) + 2*earR
-			h = int(a.fx.h+0.5) + top + 2
+			w := int(math.Ceil(float64(a.fx.w))) + 2*earR
+			h := int(a.fx.h+0.5) + top + 2
 			if a.fb.up(time.Now()) {
 				// Folding into the capsule: the shell may grow wider or
 				// taller than the panel sliver it starts from. No glow
@@ -89,6 +74,29 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 				w = max(w, capsuleFrameW())
 				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+2)
 			}
+			return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
+		}
+		// The frame follows the level the panel is on, never the larger of
+		// the two: an island opening on the sheet's box laid a 451pt
+		// transparent frame — the shell is 420 — over the menu-bar icons
+		// beside it. A level spring leaves the drawn shell wider or taller
+		// than its target for a few frames and a spring on its way
+		// overshoots, so the frame holds that shell and the level's
+		// overshoot room. The width keeps the room at rest too: shrinking
+		// it when the spring settles would shift the window under a shell
+		// that has not moved, and the transparent columns beside the shell
+		// no longer take clicks anyway (overlayAcceptsMouse).
+		tw, th := float32(sheetW), float32(sheetH)
+		if a.currentLevel() == 1 {
+			tw, th = islandW, islandH
+		}
+		w, roomH := openFrameRoom(tw, float32(th+float32(top)))
+		w = max(w, int(math.Ceil(float64(a.fx.w)))+2*earR)
+		// Once settled the height is the shell's exact box, so its
+		// transparent margin cannot swallow clicks below.
+		h := max(int(math.Ceil(float64(th)))+top, int(math.Ceil(float64(a.fx.h)))+top)
+		if a.fx.openMoving {
+			h = max(h, roomH)
 		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
@@ -354,34 +362,125 @@ func (a *shelf) windowLevel() int {
 }
 
 // While idle the overlay ignores the mouse altogether, so clicks under and
-// beside the notch reach whatever is below. Peeking, expanded and in-flight
-// drags take the whole window: file drags to the top of the notch must hit
-// a window, or WindowServer treats Y=0 as the Spaces edge (pointerDrag
-// flips this on the drag's first movement, long before the top). A closing
-// panel follows the drawn shell (fx.openK), not the tick's eased progress:
-// the moment the shell has folded back to the peek shape the window lets
-// clicks through again. The completion capsule is a peek shape too: while
-// it shows, the window accepts the mouse only over its drawn body — never
-// over the transparent margin the frame keeps for shake and growth.
+// beside the notch reach whatever is below. An in-flight drag takes the
+// whole window: file drags to the top of the notch must hit a window, or
+// WindowServer treats Y=0 as the Spaces edge (pointerDrag flips this on
+// the drag's first movement, long before the top). Every other state takes
+// the mouse only over the shell the last frame drew: the window is a
+// rectangle (the shell plus its transparent ear margins) sitting above the
+// menu bar, and WindowServer routes a press to a window before any view is
+// hit-tested, so a window-wide press would eat the menu-bar icons beside
+// the shell. A closing panel follows the drawn shell (fx.openK), not the
+// tick's eased progress: the moment the shell has folded back to the peek
+// shape the window lets clicks through again.
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
-	acceptAll := a.visible || a.fx.openK > 0.02 || a.dragging || a.pointerDrag ||
-		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting
-	// A hovered or capsule shape only takes the mouse over its drawn body.
-	// Native shadow/ear margins must not block menu-bar items or windows
-	// below — and while the capsule shows, a press elsewhere on the strip
-	// belongs to whatever is underneath.
-	if a.winH != 0 && !a.visible && a.fx.openK <= 0.02 && !a.dragging && !a.pointerDrag {
-		acceptAll = acceptAll && a.overPeekPill(cursorPoint())
-	}
-	a.ignoringMouse = !acceptAll
+	accept := a.overlayAcceptsMouse()
+	a.ignoringMouse = !accept
 	if a.win == nil {
 		return
 	}
 	h := a.winH
-	mac.SetOverlayAcceptsMouse(h, acceptAll)
+	mac.SetOverlayAcceptsMouse(h, accept)
 	mac.SetWindowLevel(h, a.windowLevel())
 }
+
+// overlayWanted reports whether the current state needs the overlay to take
+// the mouse at all: hovering, opening, open, folding, or a capture capsule.
+func (a *shelf) overlayWanted() bool {
+	return a.visible || a.fx.openK > 0.02 || a.dragging || a.pointerDrag ||
+		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting
+}
+
+// overlayAcceptsMouse answers whether the overlay takes the mouse at the
+// current pointer, reading the pointer only when the answer depends on it:
+// a headless surface has no window to gate, a drag owns the whole frame
+// (the drop and the Spaces edge guard land on the window, not on the drawn
+// shape), and an idle overlay ignores the mouse everywhere.
+func (a *shelf) overlayAcceptsMouse() bool {
+	wanted := a.overlayWanted()
+	if !wanted || a.winH == 0 || a.dragging || a.pointerDrag {
+		return wanted
+	}
+	return a.overShell(cursorPoint())
+}
+
+// pointerWatched guards the one pointer watch: Shelf has one overlay
+// window, and installs the event source from the first placement.
+var pointerWatched bool
+
+// watchPointer installs the pointer gate's one event source. A settled
+// panel draws no frames, so nothing else would notice the pointer
+// leaving the drawn shell — and WindowServer decides which window a press
+// reaches from ignoresMouseEvents, which only a pointer move can keep
+// current. Mouse-only monitors require no Accessibility permission. The
+// watch lives as long as the process.
+func (a *shelf) watchPointer() {
+	if pointerWatched {
+		return
+	}
+	pointerWatched = true
+	mac.ObserveMouseMoved(a.syncPointerGate)
+}
+
+// syncPointerGate re-applies the shell-shaped hit test after a pointer
+// move, touching the native flag only when the answer changed.
+func (a *shelf) syncPointerGate() {
+	accept := a.overlayAcceptsMouse()
+	if accept == !a.ignoringMouse {
+		return
+	}
+	a.ignoringMouse = !accept
+	if a.win == nil {
+		return // headless surface: the flag is all there is
+	}
+	mac.SetOverlayAcceptsMouse(a.winH, accept)
+}
+
+// overShell reports whether p is on the shell the last frame drew — the
+// black body plus the two ear corners its top edge reaches past its
+// flanks, and not the corners its bottom rounds off. Screen coordinates,
+// top-left origin. The shell is centred on stripCenter and hangs from
+// a.y + sheetTop() in the window, exactly as view() draws it.
+func (a *shelf) overShell(p mygo.Point) bool {
+	w, h := float64(a.fx.w), float64(a.fx.h)
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	top := float64(a.y + a.sheetTop())
+	y := float64(p.Y) - top
+	if y < 0 || y >= h {
+		return false
+	}
+	cx := float64(a.stripCenter()) + float64(a.fx.shakeX)
+	x0, x1 := cx-w/2, cx+w/2
+	left, right := x0, x1
+	// inset is how far the path's corner cuts in d points from the edge it
+	// starts on, for radius r: 0 at the flank, r at the outer edge. Both
+	// top ears and bottom corners are quadratics with their control point
+	// in the corner, which reduce to exactly this.
+	inset := func(d, r float64) float64 {
+		if r <= 0 || d >= r {
+			return 0
+		}
+		return r * sq(1-math.Sqrt(d/r))
+	}
+	if ear := float64(earR); y < ear {
+		// The ear: the top edge runs earR past the flank at y == 0 and
+		// meets the flank at earR below.
+		left, right = x0-inset(y, ear), x1+inset(y, ear)
+	}
+	corner := float64(islandRadius) + float64(sheetRadius-islandRadius)*float64(a.fx.levelK)
+	if botR := math.Min(h/2, corner); y > h-botR {
+		cut := inset(h-y, botR)
+		left, right = x0+cut, x1-cut
+	}
+	x := float64(p.X)
+	return x >= left && x < right
+}
+
+// sq is the square of v.
+func sq(v float64) float64 { return v * v }
 
 // setPeek animates the notch shell between its idle hardware shape and the
 // peeked "I'm here" pill, and updates event pass-through to match.
@@ -616,6 +715,11 @@ func (a *shelf) hide(exit hideExit) {
 	prev := a.prevAppPID
 	a.visible, a.edgeOpened, a.peeking = false, false, false
 	a.closeAt = time.Now()
+	// 收起也复位层级进度：二级收起后 fx.levelK 若停在 1，下一次打开一级
+	// 的第一帧仍会按二级壳开窗（451pt），在菜单栏图标上方压一层透明窗。
+	// 绘制通道由 jumpLevel 在下一帧直接落位，这里同步帧几何读到的值。
+	a.fx.levelK = 0
+	a.jumpLevel = true
 	if a.usage != nil { // 隐藏即取消 AI 用量在途取数和扫描
 		a.usage.stopWork()
 	}

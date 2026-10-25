@@ -4,7 +4,7 @@ package main
 
 // The motion and completion-feedback rules of DESIGN.md 「动效」 and
 // visual-v1 groups 1, 3 and 4: the springs, the frame that holds the
-// opening's overshoot, the progressive blur's bands, and the notch capsule's
+// opening's overshoot, the content box's bottom fade, and the notch capsule's
 // states. The headless frames come from ui.Tester, so the springs are driven
 // by a fake clock and every drawn frame can be checked.
 

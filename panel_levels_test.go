@@ -8,8 +8,8 @@ package main
 // without clipped or wrapped text.
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -160,48 +160,87 @@ func TestMiniPlayerOnlyWhileATrackIsLoaded(t *testing.T) {
 	}
 }
 
-// assertPageFits walks every text the tester drew inside the content box
-// and fails when one leaves the 396 × 174 box, is clipped by it, or wraps
-// (two lines are allowed only for text that carries an explicit newline).
-func assertPageFits(t *testing.T, view *ui.Tester, page string, containers map[string]bool) {
+// fitSink installs the measuring seams' sink for one page audit: panelLabel,
+// panelLines and the home pages' fitText all report through fitIssue.
+// drain returns the notes collected since the last call.
+func fitSink(t *testing.T) (drain func() []string) {
 	t.Helper()
-	boxX, boxY := float32((sheetW-contentW)/2), float32(bandH+backRowH+contentGap)
-	boxR, boxB := boxX+contentW, boxY+contentH
-	seen := map[string]bool{}
-	count := map[string]int{}
-	for _, text := range view.Texts() {
-		count[text]++
+	old := fitIssue
+	var notes []string
+	fitIssue = func(s string) { notes = append(notes, s) }
+	t.Cleanup(func() { fitIssue = old })
+	return func() []string {
+		out := notes
+		notes = nil
+		return out
 	}
+}
+
+// pageRows are the three rows a sheet page draws in: the menu-bar row, the
+// back row (返回行 — audited like any other row, not skipped) and the 396 ×
+// 174 content box. A text outside all three has escaped its parent.
+func pageRows(top int) []ui.Rect {
+	x := float32((sheetW - contentW) / 2)
+	return []ui.Rect{
+		{X: 0, Y: float32(top), W: sheetW, H: bandH},
+		{X: x, Y: float32(top + bandH), W: contentW, H: backRowH},
+		{X: x, Y: float32(top + bandH + backRowH + contentGap), W: contentW, H: contentH},
+	}
+}
+
+// assertPageFits is the page audit. It fails when
+//   - a label's words do not fit the box the layout gave them: panelLabel
+//     and panelLines measure every label at its own font (the same
+//     MeasureText call the home pages' fitText makes) and report one that
+//     needs more width than its box or more height than its lines spell, so
+//     an ellipsis can no longer be how a label passes;
+//   - a text — the back row's own included — is drawn outside its parent
+//     row: the menu-bar band, the back row or the content box (the rows a
+//     sheet page is made of), not merely outside the content box;
+//   - a measured label is taller than one line of its own font size.
+//
+// notes are the seam's reports for this frame. top is where the sheet
+// starts inside the window (sheetTop). The tester answers one box per
+// distinct text, so a row that carries its words as its own label is
+// audited through those words' measurement rather than through the row's
+// box; text drawn with a raw ui.Text (files outside panel.go and
+// usage_page.go) has no measurement to report and is checked by the rows
+// above only.
+func assertPageFits(t *testing.T, view *ui.Tester, page string, notes []string, top int) {
+	t.Helper()
+	for _, note := range notes {
+		t.Errorf("%s: %s", page, note)
+	}
+	rows := pageRows(top)
+	seen := map[string]bool{}
 	for _, text := range view.Texts() {
-		key := page + "\x00" + text
-		if seen[key] {
+		if seen[text] {
 			continue
 		}
-		seen[key] = true
+		seen[text] = true
 		r, ok := view.Find(text)
 		if !ok || r.W <= 0 || r.H <= 0 {
 			continue
 		}
-		if r.Y < boxY-0.5 || r.Y >= boxB-0.5 {
-			continue // band, back row, or fully scrolled out
+		inside := false
+		for _, row := range rows {
+			if r.X >= row.X-0.5 && r.X+r.W <= row.X+row.W+0.5 &&
+				r.Y >= row.Y-0.5 && r.Y+r.H <= row.Y+row.H+0.5 {
+				inside = true
+				break
+			}
 		}
-		if r.X < boxX-0.5 || r.X+r.W > boxR+0.5 || r.Y+r.H > boxB+0.5 {
-			t.Fatalf("%s: text %q at %+v leaves the content box [%v,%v,%v,%v]",
-				page, text, r, boxX, boxY, boxR, boxB)
-		}
-		// A row or tile carries the same words as its own label; Find
-		// answers the container first, so its height says nothing about
-		// the words. Only labels that occur once are text nodes.
-		if count[text] > 1 || containers[text] {
+		if !inside {
+			t.Errorf("%s: text %q at %+v leaves its row (rows %v)", page, text, r, rows)
 			continue
 		}
-		limit := float32(26) // one line of the largest page font (19pt: the home canvas' countdown)
-		if strings.Contains(text, "\n") {
-			limit = 36 // up to two explicit lines (empty states, quota messages)
-		}
-		if r.H > limit {
-			t.Fatalf("%s: text %q is %v tall, over the %v single-line limit (wrapped?)",
-				page, text, r.H, limit)
+		// One line at the text's own font size: the seam recorded the
+		// height the words need, so a second line is caught whatever page
+		// font grew it. User content is drawn SingleLine and ellipsizes
+		// instead of wrapping; a row that repeats its words as its label
+		// is measured through those words, not through the row's box.
+		if lh, ok := labelLineHeight(text); ok && r.H > lh*1.5 {
+			t.Errorf("%s: text %q is %.1fpt tall for a %.1fpt line: it wrapped", page, text, r.H, lh)
 		}
 	}
 }
@@ -209,77 +248,113 @@ func assertPageFits(t *testing.T, view *ui.Tester, page string, containers map[s
 func TestEveryPageFitsTheContentBox(t *testing.T) {
 	a, view := levelShelf(t)
 	a.visible, a.level = true, 2
+	drain := fitSink(t)
 	for _, id := range []pageID{pageHome, pageTray, pageClipboard, pageTools} {
 		a.setTab(id)
 		view.Frame()
-		ignore := map[string]bool{}
-		for _, it := range a.store.Items {
-			ignore[itemTitle(it)] = true
-		}
-		for _, card := range a.toolsLayout().Cards {
-			ignore[card.ID] = true
-		}
-		if id == pageHome {
-			// A widget's card carries its title as a label; the same
-			// words may be a text or not, so the container is skipped by
-			// name.
-			for _, w := range a.toolsLayout().Home {
-				if def := toolCardDefFor(w.ID); def != nil {
-					ignore[def.title] = true
-				}
-			}
-		}
-		assertPageFits(t, view, string(id), ignore)
+		drain() // the first frame has no boxes to measure yet
+		view.Frame()
+		assertPageFits(t, view, string(id), drain(), a.sheetTop())
 	}
 }
 
+// usageStates draws the AI 用量 page in the states the local panel and the
+// quota cards can be in, and each one must fit: every range, both login
+// failures, a quota answer that only failed to arrive, the first scan and a
+// local read error.
 func TestUsagePageStatesFitTheContentBox(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.Local)
-	build := func(t *testing.T, mutate func(*usageFixture)) *ui.Tester {
+	summary := func(r aiusage.Range) aiusage.Summary {
+		return aiusage.Summary{
+			Range:   r,
+			Total:   aiusage.Totals{Input: 8_400_000, Output: 1_100_000, CacheRead: 5_200_000, CacheWrite: 90_000, Requests: 412, Unpriced: 7, Cost: 3.72},
+			ByTool:  map[aiusage.Tool]aiusage.Totals{aiusage.ToolClaude: {Requests: 260, Cost: 2.4}, aiusage.ToolCodex: {Requests: 152, Cost: 1.32}},
+			Buckets: []aiusage.Bucket{{Start: now, Tokens: map[aiusage.Tool]int64{aiusage.ToolOmp: 1_000_000, aiusage.ToolClaude: 400_000}}},
+		}
+	}
+	build := func(t *testing.T, mutate func(*usageFixture)) (*ui.Tester, int, []string) {
 		t.Helper()
+		drain := fitSink(t)
 		fx := newUsageFixture(t, true)
 		fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", now)
 		fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", now)
-		fx.scan.summaries = map[aiusage.Range]aiusage.Summary{
-			aiusage.RangeToday: {
-				Range:   aiusage.RangeToday,
-				Total:   aiusage.Totals{Input: 8_400_000, Output: 1_100_000, CacheRead: 5_200_000, Requests: 412, Cost: 3.72},
-				ByTool:  map[aiusage.Tool]aiusage.Totals{aiusage.ToolClaude: {Requests: 260, Cost: 2.4}, aiusage.ToolCodex: {Requests: 152, Cost: 1.32}},
-				Buckets: []aiusage.Bucket{{Start: now, Tokens: map[aiusage.Tool]int64{aiusage.ToolOmp: 1_000_000, aiusage.ToolClaude: 400_000}}},
-			},
+		fx.scan.summaries = map[aiusage.Range]aiusage.Summary{}
+		for _, r := range []aiusage.Range{aiusage.RangeToday, aiusage.Range7d, aiusage.Range30d, aiusage.RangeAll} {
+			fx.scan.summaries[r] = summary(r)
 		}
+		// The page must be the visible one before the tick: gotLocal drops
+		// a summary published while another page is current (and the old
+		// version of this test ticked before switching, so the KPI grid
+		// and the chart were never drawn).
+		fx.a.level, fx.a.visible, fx.a.tab = 2, true, pageUsage
 		if mutate != nil {
 			mutate(fx)
 		}
 		fx.f.tick(now)
-		fx.a.level, fx.a.visible, fx.a.tab = 2, true, pageUsage
 		fx.view.Frame()
-		return fx.view
+		drain()
+		fx.view.Frame()
+		if !fx.f.hasSummary && fx.f.localErr == nil {
+			if _, ok := fx.view.Find("正在统计本机用量…"); ok {
+				t.Fatal("the fixture lost its summary: the audit would only see the scan card")
+			}
+		}
+		return fx.view, fx.a.sheetTop(), drain()
 	}
-	t.Run("today", func(t *testing.T) {
-		assertPageFits(t, build(t, nil), "usage/today", nil)
-	})
-	t.Run("30 days", func(t *testing.T) {
-		assertPageFits(t, build(t, func(fx *usageFixture) { fx.f.rangeSel = aiusage.Range30d }), "usage/30d", nil)
-	})
-	t.Run("not logged in", func(t *testing.T) {
-		assertPageFits(t, build(t, func(fx *usageFixture) {
+	for _, tc := range []struct {
+		name   string
+		kpi    bool
+		mutate func(*usageFixture)
+	}{
+		{"today", true, nil},
+		{"7 days", true, func(fx *usageFixture) { fx.f.rangeSel = aiusage.Range7d }},
+		{"30 days", true, func(fx *usageFixture) { fx.f.rangeSel = aiusage.Range30d }},
+		{"all", true, func(fx *usageFixture) { fx.f.rangeSel = aiusage.RangeAll }},
+		{"not logged in", false, func(fx *usageFixture) {
 			fx.codex.q = aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaNotLoggedIn, FetchedAt: now}
+			fx.claude.q = aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaNotLoggedIn, FetchedAt: now}
+		}},
+		{"expired", false, func(fx *usageFixture) {
+			fx.codex.q = aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaExpired, FetchedAt: now}
 			fx.claude.q = aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaExpired, FetchedAt: now}
-		}), "usage/not-logged-in", nil)
-	})
-	t.Run("first scan", func(t *testing.T) {
-		assertPageFits(t, build(t, func(fx *usageFixture) {
+		}},
+		{"quota unavailable", false, func(fx *usageFixture) {
+			fx.codex.q = aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaFailed, Err: "dial tcp: no route to host", FetchedAt: now}
+			fx.claude.q = aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaRateLimited, RetryAfter: time.Minute, FetchedAt: now}
+		}},
+		{"first scan", false, func(fx *usageFixture) {
 			fx.f.hasSummary = false
 			fx.f.localBusy = true
 			fx.f.scanDone.Store(37)
 			fx.f.scanTotal.Store(100)
-		}), "usage/first-scan", nil)
-	})
+		}},
+		{"local read failed", false, func(fx *usageFixture) {
+			fx.f.hasSummary = false
+			fx.f.localErr = errors.New("读取本机记录失败：权限不足")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view, top, notes := build(t, tc.mutate)
+			assertPageFits(t, view, "usage/"+tc.name, notes, top)
+			// The metric cells are the point of the local panel: a state
+			// that should show numbers must draw them, not the scan card.
+			if tc.kpi {
+				for _, want := range []string{"Token", "请求", "费用", "缓存命中"} {
+					if !view.HasText(want) {
+						t.Fatalf("%s: the metric cell %q is missing; texts %v", tc.name, want, view.Texts())
+					}
+				}
+				if !view.HasText("本机用量") {
+					t.Fatalf("%s: the local panel header is missing", tc.name)
+				}
+			}
+		})
+	}
 }
 
 func TestUsageHoverDetailStaysInsideTheContentBox(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.Local)
+	drain := fitSink(t)
 	fx := newUsageFixture(t, true)
 	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", now)
 	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", now)
@@ -291,7 +366,9 @@ func TestUsageHoverDetailStaysInsideTheContentBox(t *testing.T) {
 	if !fx.view.HasText("比均匀用量") {
 		t.Fatalf("the hover detail did not appear; texts %v", fx.view.Texts())
 	}
-	assertPageFits(t, fx.view, "usage-hover", map[string]bool{"Codex": true, "Claude Code": true})
+	drain()
+	fx.view.Frame()
+	assertPageFits(t, fx.view, "usage-hover", drain(), fx.a.sheetTop())
 }
 
 func TestDragOverTheIslandOpensTheSheet(t *testing.T) {

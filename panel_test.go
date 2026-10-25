@@ -632,7 +632,11 @@ func TestPinBadgesStayInsideTheirTiles(t *testing.T) {
 }
 
 // islandFrame and sheetFrame are the native window boxes the two levels
-// need, including the ear corners and the opening spring's room.
+// need: the level's own shell, the ear corners the shell draws past its
+// flanks and the opening spring's room. Each level has its own — an open
+// island never holds the sheet's box (that 451pt transparent frame sat
+// over the menu-bar icons beside it), and the mouse only reaches the shell
+// drawn inside it (overlayAcceptsMouse).
 func islandFrame() (int, int) { return openFrameRoom(islandW, islandH) }
 func sheetFrame() (int, int)  { return openFrameRoom(sheetW, sheetH) }
 
@@ -682,6 +686,17 @@ func TestPanelSizeIsFixedPerLevel(t *testing.T) {
 	if got := a.desiredFrame(); got != island {
 		t.Fatalf("back on the island: %+v, want %+v", got, island)
 	}
+	if island.Width >= sheet.Width || island.Height >= sheet.Height {
+		t.Fatalf("the island's box %+v is not smaller than the sheet's %+v", island, sheet)
+	}
+	// An island still opening keeps its own box: the sheet's frame here
+	// would be a transparent 451pt strip over the menu-bar icons.
+	a.fx.openMoving = true
+	iw, ih := islandFrame()
+	if got := a.desiredFrame(); got.Width != iw || got.Height != ih {
+		t.Fatalf("opening island frame = %+v, want the island's in-flight %d×%d", got, iw, ih)
+	}
+	a.fx.openMoving = false
 }
 
 // Switching pages must not resize the shell: every page shares the same
@@ -793,23 +808,27 @@ func TestDisabledCurrentPageFallsBackToTray(t *testing.T) {
 	}
 }
 
-// While the sheet springs back to the island, the window keeps the sheet's
-// box until the shell has settled; then it shrinks to the island's box.
-func TestPanelFrameHoldsWhileShrinking(t *testing.T) {
+// The window follows the level the panel is on: an open island never holds
+// the sheet's box (that 451pt transparent frame sat over the menu-bar icons
+// beside it). A level spring still leaves the drawn shell wider than its
+// target for a few frames, and that shell is never clipped.
+func TestPanelFrameFollowsTheLevel(t *testing.T) {
 	a := &shelf{visible: true, level: 1}
 	a.x, a.y = 475, 0
-	a.fx.levelK = 0.5 // mid-way back from the sheet
-	sw, _ := sheetFrame()
-	if got := a.desiredFrame().Width; got != sw {
-		t.Fatalf("frame %d wide cuts the shrinking shell, want %d", got, sw)
-	}
-	a.fx.levelK = 0
 	iw, _ := islandFrame()
-	if got := a.desiredFrame().Width; got != iw {
-		t.Fatalf("frame %d did not settle to the island's width %d", got, iw)
+	if f := a.desiredFrame(); f.Width != iw || f.Height != islandH {
+		t.Fatalf("open island frame = %d×%d, want the island's %d×%d", f.Width, f.Height, iw, islandH)
 	}
-	if got := a.desiredFrame().Height; got != islandH {
-		t.Fatalf("frame %d did not settle to the island's height %d", got, islandH)
+	// Mid-way back from the sheet the drawn shell is still wide.
+	a.fx.w = islandW + (sheetW-islandW)*0.5
+	if got, want := a.desiredFrame().Width, int(a.fx.w+0.5)+2*earR; got < want {
+		t.Fatalf("frame %d wide clips the shrinking shell at %.1f, want at least %d", got, a.fx.w, want)
+	}
+	a.fx.w = 0
+	a.setLevel(2)
+	sw, _ := sheetFrame()
+	if f := a.desiredFrame(); f.Width != sw || f.Height != sheetH {
+		t.Fatalf("sheet frame = %d×%d, want the sheet's %d×%d", f.Width, f.Height, sw, sheetH)
 	}
 }
 
