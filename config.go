@@ -37,7 +37,11 @@ const (
 	dropPillBody   = 32 // 拖拽中：刘海下方「松开放入」那一行的高度
 	dropPillExtraW = 60 // 拖拽中：比刘海宽出的部分
 	panelWidth     = 560
-	panelHeight    = 400
+	// panelHeight is only the native window's initial height (main.go) and
+	// the size the headless view tests lay out at. It is not a cap: the
+	// expanded panel's bound is panelMaxH, further clamped to the display's
+	// work area by panelCap (notch.go).
+	panelHeight = 400
 	// 设置窗口：普通有标题窗口的尺寸（设置内容超出时内部滚动）。
 	settingsWidth  = 460
 	settingsHeight = 520

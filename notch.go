@@ -25,13 +25,21 @@ func (a *shelf) place(p mygo.Point) {
 	a.syncDragGuard()
 }
 
+// panelCap is the expanded panel's height bound on a display with this work
+// area: the design's panelMaxH, clamped so the panel always fits under the
+// menu bar with 24pt of slack above the Dock. panelHeight is not a bound —
+// it is the native window's initial height only. Pure; unit-tested.
+func panelCap(workAreaH int) int {
+	return min(panelMaxH, max(240, workAreaH-24))
+}
+
 func (a *shelf) placeAt(p mygo.Point) {
 	d := mygo.Screen.DisplayNearestPoint(p)
 	a.dispBounds = d.Bounds
 	nx, ny, nw, nh, hasNotch := mac.NotchRect(d.ID)
 	a.notchX, a.notchY, a.notchW, a.notchH, a.hasNotch = nx, ny, nw, nh, hasNotch
 	a.topInset = nh
-	a.h = min(panelHeight, max(240, d.WorkArea.Height-24))
+	a.h = panelCap(d.WorkArea.Height)
 	// The panel, the peek pill and the strip share one axis: the notch's
 	// centre. A different centre made the expansion jump sideways.
 	a.x = d.Bounds.X + (d.Bounds.Width-panelWidth)/2
@@ -397,11 +405,12 @@ func (a *shelf) setPeek(peek bool) {
 
 // panelH returns the expanded panel's height: the content's own measure
 // (panelTargetH) clamped to the cap place() computed from the display's
-// work area; before the first placement the cap is panelHeight.
+// work area; before the first placement the cap is panelMaxH, the design
+// bound (panelHeight is only the window's initial size).
 func (a *shelf) panelH() int {
 	cap := a.h
 	if cap <= 0 {
-		cap = panelHeight
+		cap = panelMaxH
 	}
 	return min(cap, a.panelTargetH())
 }
