@@ -292,18 +292,48 @@ type relaunchPlan struct {
 	Args []string
 }
 
-// relaunchPlanFor builds a detached /bin/sh wait-then-exec: the new process
-// starts only after pid exits, so the single-instance flock is free and the
-// user never sees the 「Shelf 已在运行」 dialog. The original arguments are
-// preserved, including --data-dir.
+// relaunchPlanFor builds a detached /bin/sh wait-then-launch: the new
+// process starts only after pid exits, so the single-instance flock is free
+// and the user never sees the 「Shelf 已在运行」 dialog. Inside an app
+// bundle the launch goes through LaunchServices (`open -n`), which is what
+// gives the restarted process the app's registered identity and TCC
+// responsibility — the screen-recording grant this relaunch exists for
+// would not follow an exec of Contents/MacOS. Outside a bundle (go test, a
+// development run) the executable is started directly. The original
+// arguments are preserved, including --data-dir.
 func relaunchPlanFor(exe string, args []string, pid int) relaunchPlan {
 	var b strings.Builder
-	fmt.Fprintf(&b, "while kill -0 %d 2>/dev/null; do sleep 0.1; done; sleep 0.3; exec %s", pid, shellQuote(exe))
+	fmt.Fprintf(&b, "while kill -0 %d 2>/dev/null; do sleep 0.1; done; sleep 0.3; ", pid)
+	if bundle, ok := appBundleForExecutable(exe); ok {
+		fmt.Fprintf(&b, "exec /usr/bin/open -n %s", shellQuote(bundle))
+		if len(args) > 0 {
+			b.WriteString(" --args")
+		}
+	} else {
+		b.WriteString("exec ")
+		b.WriteString(shellQuote(exe))
+	}
 	for _, arg := range args {
 		b.WriteByte(' ')
 		b.WriteString(shellQuote(arg))
 	}
 	return relaunchPlan{Exec: "/bin/sh", Args: []string{"-c", b.String()}}
+}
+
+// appBundleForExecutable reports the enclosing .app when exe lives at
+// <Bundle>.app/Contents/MacOS/<binary>. It is a pure path check; callers
+// only use it to choose the launch route.
+func appBundleForExecutable(exe string) (string, bool) {
+	const marker = "/Contents/MacOS/"
+	i := strings.LastIndex(exe, marker)
+	if i <= 0 {
+		return "", false
+	}
+	bundle := exe[:i]
+	if !strings.HasSuffix(bundle, ".app") {
+		return "", false
+	}
+	return bundle, true
 }
 
 func shellQuote(s string) string {

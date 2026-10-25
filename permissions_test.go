@@ -337,7 +337,7 @@ func TestPermissionRowOpensOnePermission(t *testing.T) {
 	}
 }
 
-func TestRelaunchPlanWaitsForLockAndKeepsArgs(t *testing.T) {
+func TestRelaunchPlanUsesLaunchServicesInsideBundle(t *testing.T) {
 	plan := relaunchPlanFor("/Applications/Shelf App.app/Contents/MacOS/Shelf",
 		[]string{"--data-dir", "/tmp/a b", "--show"}, 4321)
 	if plan.Exec != "/bin/sh" || len(plan.Args) != 2 || plan.Args[0] != "-c" {
@@ -346,16 +346,66 @@ func TestRelaunchPlanWaitsForLockAndKeepsArgs(t *testing.T) {
 	script := plan.Args[1]
 	for _, want := range []string{
 		"kill -0 4321", "sleep 0.1", "sleep 0.3",
-		"exec '/Applications/Shelf App.app/Contents/MacOS/Shelf'",
-		"'--data-dir' '/tmp/a b' '--show'",
+		"exec /usr/bin/open -n '/Applications/Shelf App.app'",
+		"--args '--data-dir' '/tmp/a b' '--show'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("relaunch script lacks %q:\n%s", want, script)
 		}
 	}
+	if strings.Contains(script, "Contents/MacOS") {
+		t.Fatalf("a bundled relaunch must not exec the binary directly:\n%s", script)
+	}
+	// No arguments: open is called without an empty --args.
+	noArgs := relaunchPlanFor("/tmp/My.app/Contents/MacOS/My", nil, 9).Args[1]
+	if !strings.Contains(noArgs, "exec /usr/bin/open -n '/tmp/My.app'") || strings.Contains(noArgs, "--args") {
+		t.Fatalf("empty argument list produced --args:\n%s", noArgs)
+	}
+}
+
+func TestRelaunchPlanFallsBackOutsideBundle(t *testing.T) {
+	plan := relaunchPlanFor("/tmp/Shelf", []string{"--data-dir", "/tmp/a b"}, 4321)
+	script := plan.Args[1]
+	for _, want := range []string{
+		"kill -0 4321",
+		"exec '/tmp/Shelf' '--data-dir' '/tmp/a b'",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("fallback script lacks %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "/usr/bin/open") {
+		t.Fatalf("a bare executable must be started directly:\n%s", script)
+	}
+	// A path that merely looks app-ish but is not Contents/MacOS also falls
+	// back rather than opening the wrong bundle.
+	odd := relaunchPlanFor("/tmp/Not.app/tool", nil, 7).Args[1]
+	if !strings.Contains(odd, "exec '/tmp/Not.app/tool'") {
+		t.Fatalf("odd path was treated as a bundle:\n%s", odd)
+	}
 	quoted := relaunchPlanFor("/tmp/it's", nil, 7).Args[1]
 	if !strings.Contains(quoted, `exec '/tmp/it'\''s'`) {
 		t.Fatalf("single quote was not escaped: %s", quoted)
+	}
+}
+
+func TestAppBundleForExecutable(t *testing.T) {
+	for _, tt := range []struct {
+		exe  string
+		want string
+		ok   bool
+	}{
+		{"/Applications/Shelf.app/Contents/MacOS/Shelf", "/Applications/Shelf.app", true},
+		{"/tmp/a b/My App.app/Contents/MacOS/My App", "/tmp/a b/My App.app", true},
+		{"/tmp/Shelf", "", false},
+		{"/tmp/Not.app/tool", "", false},
+		{"/Contents/MacOS/Shelf", "", false},
+		{"", "", false},
+	} {
+		got, ok := appBundleForExecutable(tt.exe)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("appBundleForExecutable(%q) = %q,%v; want %q,%v", tt.exe, got, ok, tt.want, tt.ok)
+		}
 	}
 }
 
