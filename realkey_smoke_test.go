@@ -181,7 +181,6 @@ func writePrivateClipboard(format string, data []byte) error {
 // topmost window. The pointer is put back afterwards.
 func clickAt(t *testing.T, x, y float64) {
 	t.Helper()
-	requireOwnMouseTarget(t, x, y)
 	lib, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_LAZY)
 	if err != nil {
 		t.Fatalf("CoreGraphics: %v", err)
@@ -218,10 +217,18 @@ func clickAt(t *testing.T, x, y float64) {
 		old = getLoc(ev)
 		release(ev)
 	}
+	// The notch overlay takes the mouse only over the shell it drew, and
+	// its gate follows the pointer: a press sent while the pointer still
+	// sits elsewhere reaches the window underneath and makes WindowAtPoint
+	// answer that window. Move the pointer there first and give the move
+	// monitor a beat to open the gate (the same precondition the pin tests
+	// use), then check the target and press.
+	warp(mac.CGPoint{X: x, Y: y})
 	move := create(0, moved, mac.CGPoint{X: x, Y: y}, 0)
 	post(hidTap, move)
 	release(move)
-	warp(mac.CGPoint{X: x, Y: y})
+	time.Sleep(150 * time.Millisecond)
+	requireOwnMouseTarget(t, x, y)
 	for _, typ := range []uint32{leftDown, leftUp} {
 		ev := create(0, typ, mac.CGPoint{X: x, Y: y}, 0)
 		if ev == 0 {
