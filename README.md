@@ -76,7 +76,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Let go near the left or right screen edge and it tucks into a thin strip: hover to open it, move away and it closes after 0.6 s, or bring a file drag close and it opens to take the drop. Right-click → 始终展开 (Always Open), 放回刘海 (Back to Notch) or 从桌面移除 (Remove from Desktop); drag it up to the notch to put it back.
 
 **Copy text from the screen**
-- Press `⌃⌥O`, use the menu-bar icon → 框选文字 (Screen Text), or tap its card, then drag over any part of the screen: the text in it is recognized on this Mac and copied to the clipboard.
+- Press `⌃⌥O`, use the menu-bar icon → 框选文字 (Screen Text), or tap its card, then drag over any part of the screen: the text in it is recognized on this Mac, copied to the clipboard and kept in the Clipboard list, marked 框选文字.
 - Needs Screen Recording permission — see [Optional](#optional).
 
 **Quiet by design**
@@ -219,7 +219,7 @@ MIT — see [LICENSE](LICENSE).
 - 松在屏幕左右边缘附近，它会收成一条窄条：鼠标移上去展开，移开 0.6 秒后收回；拖着文件靠近也会展开接收。右键可选「始终展开」「放回刘海」「从桌面移除」；把它拖回刘海也能放回。
 
 **框选屏幕文字**
-- 按 `⌃⌥O`、右键菜单栏图标 →「框选文字」，或点它的卡片，然后在屏幕上框一块区域：里面的文字在本机识别后直接复制到剪贴板。
+- 按 `⌃⌥O`、右键菜单栏图标 →「框选文字」，或点它的卡片，然后在屏幕上框一块区域：里面的文字在本机识别后直接复制到剪贴板，并记进剪贴板页，来源显示「框选文字」。
 - 需要「屏幕录制」权限，见下面的[可选](#可选)。
 
 **安静、不打扰**
