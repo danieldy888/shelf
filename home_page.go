@@ -76,18 +76,27 @@ type homePress struct {
 type homePage struct {
 	host *shelf
 
-	editing  bool
-	picking  bool
-	editAt   time.Time
-	press    *homePress
-	jiggle   string
-	jiggleAt time.Time
+	editing   bool
+	picking   bool
+	editAt    time.Time
+	press     *homePress
+	skipClick bool // the last release was a suppressed press, not a tap
+	jiggle    string
+	jiggleAt  time.Time
 
-	// System output volume, read once and after each write. The row
-	// greys out when the device has no settable volume.
+	// active is the set of widgets that took cells the last time the page
+	// drew. A widget that comes back after its feature was off is compared
+	// against it: one whose stored cells were taken in the meantime goes
+	// back to the catalogue instead of overlapping.
+	active map[string]bool
+
+	// System output volume, re-read on the monitor tick's pace while the
+	// page draws. The row greys out when the device has no settable
+	// volume.
 	volLoaded bool
 	volOK     bool
 	vol       float32
+	volAt     time.Time
 
 	// Progress/volume drag state: while dragging, the bar shows the
 	// pointer's value; the command (seek / volume write) goes out once,
@@ -213,6 +222,60 @@ func homeSizes(id string) [][2]int {
 	return [][2]int{{1, 1}}
 }
 
+// homePinWide reports the widgets whose card body needs a two-column pin
+// window (278pt): the music player's cover, title and transport, the
+// recent files' three thumbnails and the clipboard's icon plus two text
+// lines all draw wider than a 136pt card's 112pt content. 保持唤醒 and
+// AI 用量 fit one column.
+func homePinWide(id string) bool {
+	switch id {
+	case "playing", "recent", "clip":
+		return true
+	}
+	return false
+}
+
+// homePinSpan is the column span a widget keeps when it is pinned to the
+// desktop: the canvas width it had, raised to two columns for the widgets
+// that need it, so a pinned card never clips its content.
+func homePinSpan(id string, w int) int {
+	if w >= 2 || homePinWide(id) {
+		return 2
+	}
+	return 1
+}
+
+// settleWidgets resolves a widget that comes back after its feature was
+// off: while off its stored cells were free, so another widget may sit
+// there now. The returning widget goes back to the 小组件目录 (its stored
+// entry drops, the catalogue lists it again) instead of overlapping.
+// Nothing to resolve means no write.
+func (p *homePage) settleWidgets() {
+	l := p.host.toolsLayout()
+	active := make(map[string]bool, len(l.Home))
+	var back []string
+	for _, w := range l.Home {
+		if p.host.inactiveWidget(w.ID) {
+			continue
+		}
+		if !p.active[w.ID] && l.OverlapsHome(w.ID, w.X, w.Y, w.W, w.H) {
+			back = append(back, w.ID)
+			continue
+		}
+		active[w.ID] = true
+	}
+	p.active = active
+	if len(back) == 0 {
+		return
+	}
+	p.host.mutateToolsChanged(func(l *layout.Layout) bool {
+		for _, id := range back {
+			l.RemoveWidget(id)
+		}
+		return true
+	})
+}
+
 // homeWidgets is the canvas's widget list in draw order, skipping widgets
 // that are switched off (the AI usage page closed) so a disabled feature
 // never draws a stale card.
@@ -228,6 +291,7 @@ func (p *homePage) homeWidgets() []layout.Widget {
 
 // body draws the canvas into the sheet's fixed 396 × 174 content box.
 func (p *homePage) body(c *ui.Context, _ bool, live bool) ui.Element {
+	p.settleWidgets()
 	if p.picking {
 		return p.pickerBody(c, live)
 	}
@@ -302,6 +366,7 @@ func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, ed
 			if p.press != nil {
 				return false
 			}
+			p.skipClick = false // a fresh press owns the next release
 			p.press = &homePress{
 				id: w.ID, downAt: ev.Time,
 				downX: homeX(w.X) + ev.X, downY: homeY(w.Y) + ev.Y,
@@ -343,6 +408,9 @@ func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, ed
 				p.homeDrop(d)
 				return true
 			}
+			// A press that moved past the slop is not a tap: the release
+			// still reaches Clicked's check below, so remember it.
+			p.skipClick = d.suppress
 			p.press = nil
 			return true
 		}
@@ -357,9 +425,8 @@ func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, ed
 		}
 	}
 	if !editing && live && card.Clicked() {
-		if p.press != nil {
-			// A suppressed press is not a tap.
-			p.press = nil
+		if p.skipClick {
+			p.skipClick = false // a moved press never becomes a tap
 			return
 		}
 		p.homeTapped(w)
@@ -392,7 +459,7 @@ func (p *homePage) homeDrop(d *homePress) {
 		row := int(math.Round(float64((d.py - d.grabDY) / (homeCellH() + homeGridGap))))
 		col = max(0, min(col, homeGridCols-d.orig.W))
 		row = max(0, min(row, homeGridRows-d.orig.H))
-		if a.mutateTools(func(l *layout.Layout) { l.MoveWidget(d.id, col, row) }) {
+		if a.mutateToolsChanged(func(l *layout.Layout) bool { return l.MoveWidget(d.id, col, row) }) {
 			target.X, target.Y = col, row
 			for _, w := range a.toolsLayout().Home {
 				if w.ID == d.id {
@@ -407,10 +474,7 @@ func (p *homePage) homeDrop(d *homePress) {
 		cursor := cursorPoint()
 		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: sheetW, Height: a.panelH()}
 		if !insideRect(cursor, panel) {
-			span := d.orig.W
-			if span < 1 || span > 2 {
-				span = 1
-			}
+			span := homePinSpan(d.id, d.orig.W)
 			w := pinCardW
 			if span == 2 {
 				w = pinCardW2
@@ -460,7 +524,7 @@ func (p *homePage) homeEditChrome(c *ui.Context, card ui.Element, w layout.Widge
 		if live {
 			badge.HandleInput(func(ev ui.InputEvent) bool {
 				if ev.Kind == ui.InputPointerUp {
-					a.mutateTools(func(l *layout.Layout) { l.RemoveWidget(w.ID) })
+					a.mutateToolsChanged(func(l *layout.Layout) bool { return l.RemoveWidget(w.ID) })
 					return true
 				}
 				return true
@@ -487,7 +551,10 @@ func (p *homePage) homeEditChrome(c *ui.Context, card ui.Element, w layout.Widge
 }
 
 // cycleSize switches a widget to the next size in its list that fits its
-// anchor without overlapping another widget.
+// anchor without overlapping another active widget. Sizes that do not fit
+// (past the grid's edge, or on a neighbour) are skipped, so 2×1 on the
+// bottom row still reaches 1×1 behind a refused 2×2; when no size applies
+// the layout is left — and not rewritten.
 func (p *homePage) cycleSize(w layout.Widget) {
 	sizes := homeSizes(w.ID)
 	start := 0
@@ -502,7 +569,14 @@ func (p *homePage) cycleSize(w layout.Widget) {
 		if s[0] == w.W && s[1] == w.H {
 			continue
 		}
-		if p.host.mutateTools(func(l *layout.Layout) { l.SetWidgetSize(w.ID, s[0], s[1]) }) {
+		applied := false
+		p.host.mutateToolsChanged(func(l *layout.Layout) bool {
+			applied = l.SetWidgetSize(w.ID, s[0], s[1])
+			return applied
+		})
+		if applied {
+			// Stop even when the write failed: the size did take, and a
+			// second attempt would only report the same write error.
 			return
 		}
 	}
@@ -584,10 +658,9 @@ func (p *homePage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui.
 		}
 		row.HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind == ui.InputPointerUp {
-				fits := false
-				a.mutateTools(func(l *layout.Layout) {
-					w, h := homeDefaultSize(def.id)
-					fits = l.AddWidgetBest(def.id, w, h)
+				w, h := homeDefaultSize(def.id)
+				fits := a.mutateToolsChanged(func(l *layout.Layout) bool {
+					return l.AddWidgetBest(def.id, w, h)
 				})
 				if !fits {
 					a.toastStatus("主页没有空位", time.Now().Add(2*time.Second), statusInfo)

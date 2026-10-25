@@ -357,12 +357,12 @@ func (a *shelf) commitPin(it *pinItem) bool {
 	}
 	it.frame = pinClamp(it.frame, pinArea(it.display))
 	area := it.displayRect()
-	if !a.mutateTools(func(l *layout.Layout) {
-		l.AddPin(layout.Pin{
-			ID: it.cardID, Span: it.span, Display: pinDisplayID(it.display), Edge: it.edge.layout(),
-			X: it.frame.X - area.X, Y: it.frame.Y - area.Y, AlwaysOpen: it.always,
-		})
-	}) {
+	stored := layout.Pin{
+		ID: it.cardID, Span: it.span, Display: pinDisplayID(it.display), Edge: it.edge.layout(),
+		X: it.frame.X - area.X, Y: it.frame.Y - area.Y, AlwaysOpen: it.always,
+	}
+	stored.SetHome(it.homeSlot) // so 放回刘海 returns a widget to its cell after a restart
+	if !a.mutateTools(func(l *layout.Layout) { l.AddPin(stored) }) {
 		return false
 	}
 	if it.edge != pinFree {
@@ -436,32 +436,47 @@ func (it *pinItem) onClose(ev *mygo.CloseEvent) {
 // the end when that is gone (放回刘海); otherwise the card leaves the
 // desktop without rejoining the page and can be re-added from the "+"
 // catalog later (从桌面移除, design §4).
+//
+// A widget returns to the cell it was pinned from, at the size it had; a
+// pin that recorded none (saved by an older build) tries the catalogue
+// placement first and then the first free cell. When the canvas has no
+// room the pin and its window stay, with a hint to free a cell, instead of
+// dropping the card while taking it off the desktop.
 func (a *shelf) unpin(it *pinItem, putBack bool) bool {
-	widget := it.homeSlot
 	isWidget := false
 	if def := toolCardDefFor(it.cardID); def != nil && def.kind == cardWidget {
 		isWidget = true
-		if widget.ID == "" {
-			w, h := homeDefaultSize(it.cardID)
-			widget = layout.Widget{ID: it.cardID, W: w, H: h}
-		}
 	}
-	if !a.mutateTools(func(l *layout.Layout) {
+	noRoom := false
+	if !a.mutateToolsChanged(func(l *layout.Layout) bool {
 		// A pin restored from layout.json has no remembered slot (-1):
 		// 放回刘海 appends it to the page's end rather than the front.
 		before := it.homeIndex
 		if before < 0 {
 			before = len(l.Cards)
 		}
-		// A widget returns to the canvas, never to the tool page.
-		l.RemovePin(it.cardID, putBack && !isWidget, before)
-		if putBack && isWidget {
-			if !l.AddWidget(widget) {
-				l.AddWidgetBest(widget.ID, widget.W, widget.H)
-			}
+		if !putBack || !isWidget {
+			l.RemovePin(it.cardID, putBack, before)
+			return true
 		}
+		// A widget returns to the canvas, never to the tool page. Its own
+		// pin has to leave the copy first: one card lives in one place, so
+		// AddWidget would otherwise refuse the id it is still pinned under.
+		l.RemovePin(it.cardID, false, before)
+		if slot := it.homeSlot; slot.ID != "" && l.AddWidget(slot) {
+			return true
+		}
+		w, h := homeDefaultSize(it.cardID)
+		if l.AddWidgetBest(it.cardID, w, h) {
+			return true
+		}
+		noRoom = true
+		return false // leaves the pin in the file and in a.pins
 	}) {
 		it.wantKill = false // do not retry a failed menu action every tick
+		if noRoom {
+			a.toastStatus("主页没有空位，先移除一个小组件", time.Now().Add(3*time.Second), statusInfo)
+		}
 		return false
 	}
 	for i, p := range a.pins {
@@ -721,11 +736,13 @@ func (a *shelf) savePins() {
 			}
 			f = pinStripFrame(it.edge, area, cy)
 		}
-		pins = append(pins, layout.Pin{
+		stored := layout.Pin{
 			ID: it.cardID, Span: it.span, Display: pinDisplayID(it.display),
 			Edge: it.edge.layout(), X: f.X - area.X, Y: f.Y - area.Y,
 			AlwaysOpen: it.always,
-		})
+		}
+		stored.SetHome(it.homeSlot)
+		pins = append(pins, stored)
 	}
 	a.mutateTools(func(l *layout.Layout) { l.Pins = pins })
 }
@@ -751,7 +768,8 @@ func (a *shelf) pinRestore() {
 		}
 		it := &pinItem{
 			owner: a, cardID: p.ID, span: p.Span, cardW: w, homeIndex: -1,
-			display: disp, edge: edge, always: p.AlwaysOpen,
+			homeSlot: p.HomeSlot(),
+			display:  disp, edge: edge, always: p.AlwaysOpen,
 			expanded: edge == pinFree, frame: frame,
 		}
 		if edge != pinFree {

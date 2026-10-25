@@ -100,7 +100,9 @@ func (a *shelf) toolsPage() *toolsPage {
 }
 
 // toolsLayout is the persisted arrangement. It loads lazily from
-// layout.json, defaults first so the page never waits on the file.
+// layout.json, defaults first so the page never waits on the file. The
+// copy carries the runtime answer for which widgets are switched off, so
+// their stored cells read as free without the file losing them.
 func (a *shelf) toolsLayout() layout.Layout {
 	if a.toolsLay == nil {
 		l := layout.DefaultWith(a.settings.AIUsage.Enabled)
@@ -116,7 +118,18 @@ func (a *shelf) toolsLayout() layout.Layout {
 		}
 		a.toolsLay = &l
 	}
+	a.toolsLay.Inactive = a.inactiveWidget
 	return *a.toolsLay
+}
+
+// inactiveWidget reports widgets that live in layout.json but take no
+// space right now: a widget whose feature is off (AI 用量), or an id this
+// build cannot draw. The home canvas skips drawing them, so their cells
+// are free for anything else and the stored entry waits for the feature's
+// return.
+func (a *shelf) inactiveWidget(id string) bool {
+	def := toolCardDefFor(id)
+	return def == nil || (def.kind == cardWidget && !def.available(a))
 }
 
 // mutateTools applies fn to a copy of the layout and saves it, reporting
@@ -127,11 +140,24 @@ func (a *shelf) toolsLayout() layout.Layout {
 // page mutates for the session, the recoverable file stays put, which
 // still counts as taken.
 func (a *shelf) mutateTools(fn func(*layout.Layout)) bool {
+	return a.mutateToolsChanged(func(l *layout.Layout) bool {
+		fn(l)
+		return true
+	})
+}
+
+// mutateToolsChanged is mutateTools for an operation that knows whether it
+// changed anything: fn reports it, and a false answer writes nothing — a
+// refused gesture (a size that does not fit, a drop on an occupied cell)
+// leaves the file untouched instead of rewriting the same layout.
+func (a *shelf) mutateToolsChanged(fn func(*layout.Layout) bool) bool {
 	l := a.toolsLayout()
 	l.Cards = slices.Clone(l.Cards)
 	l.Home = slices.Clone(l.Home)
 	l.Pins = slices.Clone(l.Pins)
-	fn(&l)
+	if !fn(&l) {
+		return false
+	}
 	if a.dataDir != "" && !a.toolsLayBroken {
 		if err := layout.Write(a.dataDir, l); err != nil {
 			a.report(fmt.Errorf("tools layout: %w", err))

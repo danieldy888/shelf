@@ -8,6 +8,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -130,13 +131,18 @@ func (p *homePage) musicFull(c *ui.Context, card ui.Element, st mac.NowPlayingSt
 			})
 		})
 		ui.Row(c.Key("hw-track-row")).AlignItems(ui.Center).Gap(6).Children(func() {
-			ui.Text(c, mac.FormatClock(pos)).SingleLine().FontSize(9.5).FontWeight(500).TextColor(ink3).Width(30)
-			p.progressBar(c, "hw-progress", frac, dur > 0, dur, 103)
 			rem := float64(0)
 			if dur > 0 {
 				rem = max(0, dur-pos)
 			}
-			ui.Text(c, "-"+mac.FormatClock(rem)).SingleLine().FontSize(9.5).FontWeight(500).TextColor(ink3).Width(30)
+			// The labels are as wide as their own text at this font: a
+			// fixed 30pt clipped -10:00 and 1:02:03, and the bar takes
+			// what is left of the card's 175pt inner width.
+			nowLabel, remLabel := mac.FormatClock(pos), "-"+mac.FormatClock(rem)
+			nw, rw := clockLabelW(c, nowLabel), clockLabelW(c, remLabel)
+			ui.Text(c, nowLabel).SingleLine().FontSize(9.5).FontWeight(500).TextColor(ink3).Width(nw)
+			p.progressBar(c, "hw-progress", frac, dur > 0, dur, max(40, homeTrackW-12-nw-rw))
+			ui.Text(c, remLabel).SingleLine().FontSize(9.5).FontWeight(500).TextColor(ink3).Width(rw)
 		})
 		ui.Row(c.Key("hw-ctrl")).Justify(ui.Center).AlignItems(ui.Center).Gap(18).Children(func() {
 			m.controlButton(c, "hw-prev", prevFill, "上一首", mac.NPPrevious, 26, 15)
@@ -173,6 +179,17 @@ func (p *homePage) musicCompact(c *ui.Context, card ui.Element, st mac.NowPlayin
 		ui.Text(c.Key("hw-title"), st.Title).SingleLine().FontSize(10.5).FontWeight(600).
 			TextColor(ink).MaxWidth(homeCellW() - 16)
 	})
+}
+
+// homeTrackW is the music 2×2 card's inner width: the 195pt widget span
+// less its 10pt side padding.
+const homeTrackW = float32(175)
+
+// clockLabelW is the width a 9.5pt time label needs, rounded up with a
+// point of slack: the row spends exactly this much on the label.
+func clockLabelW(c *ui.Context, s string) float32 {
+	w, _ := c.MeasureText(0, ui.Span{Text: s, Size: 9.5, Weight: 500})
+	return float32(math.Ceil(float64(w))) + 1
 }
 
 // progressBar is the seekable track: a 4pt rail with a knob on hover or
@@ -227,7 +244,14 @@ func (p *homePage) progressBar(c *ui.Context, key string, frac float32, enabled 
 // volumeRow is the speaker pair, the volume bar, and the grey-out state
 // of a device that cannot change its volume.
 func (p *homePage) volumeRow(c *ui.Context) {
-	v, ok := p.volume()
+	// The row is the only place that knows about the output device, so
+	// while it is on screen it asks for the next frame at the poll's pace:
+	// a paused panel then still notices a device switch, at the monitor
+	// tick's cadence instead of one read per repaint.
+	if p.host.visible && p.host.tab == pageHome {
+		c.After(volumePoll)
+	}
+	v, ok := p.volume(c.Now())
 	frac := v
 	if p.dragVol {
 		frac = p.volFrac
@@ -265,7 +289,7 @@ func (p *homePage) volumeBar(c *ui.Context, frac float32, enabled bool) ui.Eleme
 				if p.dragVol {
 					p.dragVol = false
 					p.volFrac = f
-					p.commitVolume(f)
+					p.commitVolume(f, c.Now())
 				}
 				return true
 			}
@@ -286,28 +310,43 @@ func (p *homePage) volumeBar(c *ui.Context, frac float32, enabled bool) ui.Eleme
 	return bar
 }
 
-// volume reads the cached system volume, loading it once.
-func (p *homePage) volume() (float32, bool) {
-	if !p.volLoaded {
-		if v, ok := p.host.volumeControl().level(); ok {
-			p.vol, p.volOK = v, true
-		} else {
-			p.volOK = false
-		}
-		p.volLoaded = true
+// volumePoll is how often the drawn music widget re-reads the output
+// device: the monitor tick's pace, not every frame, so switching the
+// system output while the panel is open reaches the bar without a read
+// per repaint.
+const volumePoll = 500 * time.Millisecond
+
+// volume reads the system volume: once, then on volumePoll's pace while
+// the page draws. A drag owns the shown value, so a poll never moves the
+// knob under the pointer.
+func (p *homePage) volume(now time.Time) (float32, bool) {
+	if p.dragVol {
+		return p.vol, p.volOK
 	}
+	if p.volLoaded && now.Sub(p.volAt) < volumePoll {
+		return p.vol, p.volOK
+	}
+	p.volAt = now
+	if v, ok := p.host.volumeControl().level(); ok {
+		p.vol, p.volOK = v, true
+	} else {
+		p.volOK = false
+	}
+	p.volLoaded = true
 	return p.vol, p.volOK
 }
 
 // commitVolume writes the chosen volume; a device that refuses greys the
 // row and says why.
-func (p *homePage) commitVolume(v float32) {
+func (p *homePage) commitVolume(v float32, now time.Time) {
 	if err := p.host.volumeControl().set(v); err != nil {
 		p.volOK = false
+		p.volAt = now
+		p.volLoaded = true
 		p.host.toastStatus("此设备不支持调音量", time.Now().Add(2*time.Second), statusInfo)
 		return
 	}
-	p.vol, p.volOK = v, true
+	p.vol, p.volOK, p.volAt, p.volLoaded = v, true, now, true
 }
 
 // awakeBody draws the keep-awake widget for its size.

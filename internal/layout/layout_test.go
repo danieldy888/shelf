@@ -847,3 +847,103 @@ func TestWriteIsAtomic(t *testing.T) {
 		}
 	}
 }
+
+// TestInactiveWidgetLeavesCellsFree is review #6 at the layout level: a
+// widget Inactive names takes no space, so moves, additions and resizes
+// treat its cells as free, while the entry stays in the layout.
+func TestInactiveWidgetLeavesCellsFree(t *testing.T) {
+	l := Layout{Version: Version,
+		Home: []Widget{
+			{ID: "playing", X: 0, Y: 0, W: 2, H: 2},
+			{ID: "awake", X: 2, Y: 0, W: 1, H: 1},
+			{ID: "usage", X: 3, Y: 0, W: 1, H: 1},
+			{ID: "recent", X: 2, Y: 1, W: 2, H: 1},
+		},
+		Inactive: func(id string) bool { return id == "usage" },
+	}
+	if l.OverlapsHome("awake", 3, 0, 1, 1) {
+		t.Fatal("a switched-off widget still blocks its cell")
+	}
+	if !l.MoveWidget("awake", 3, 0) {
+		t.Fatal("MoveWidget refused a cell under a switched-off widget")
+	}
+	if !l.AddWidget(Widget{ID: "clip", X: 2, Y: 0, W: 1, H: 1}) {
+		t.Fatal("AddWidget refused a cell under a switched-off widget")
+	}
+	if got := l.HomeIndex("usage"); got < 0 {
+		t.Fatal("the switched-off widget left the layout")
+	}
+
+	// Active again: the same geometry is refused.
+	l.Inactive = nil
+	if !l.OverlapsHome("awake", 3, 0, 1, 1) {
+		t.Fatal("an active widget does not occupy its cell")
+	}
+	if l.MoveWidget("recent", 3, 0) {
+		t.Fatal("an active widget's cell took a move")
+	}
+}
+
+// TestPinHomeSlotRoundTrip is review #3's file half: the pin records the
+// canvas rect a widget came from, an old file without it still loads, and
+// an off-canvas rect is dropped rather than believed.
+func TestPinHomeSlotRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	l := Default()
+	slot := Widget{ID: "recent", X: 2, Y: 1, W: 2, H: 1}
+	var pin Pin
+	pin.ID = "recent"
+	pin.Span = 2
+	pin.SetHome(slot)
+	l.AddPin(pin)
+	if err := Write(dir, l); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Pins) != 1 || got.Pins[0].HomeSlot() != slot {
+		t.Fatalf("pin home slot = %+v, want %+v", got.Pins[0].HomeSlot(), slot)
+	}
+	// An action card has none.
+	if (Pin{ID: "zip"}).HomeSlot() != (Widget{}) {
+		t.Fatal("a pin without a recorded rect reports one")
+	}
+	// Off the canvas: dropped by normalize, so 放回刘海 falls back.
+	off := Widget{ID: "recent", X: 3, Y: 0, W: 2, H: 1}
+	pin.SetHome(off)
+	if pin.HomeSlot() != (Widget{}) {
+		t.Fatalf("an off-canvas rect was kept: %+v", pin.HomeSlot())
+	}
+}
+
+// TestPinHomeSlotOmittedInOldFiles pins the version compatibility review
+// #3 asks for: a layout.json written before the fields existed loads
+// normally and is not rewritten.
+func TestPinHomeSlotOmittedInOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	old := `{
+  "version": 2,
+  "home": [{"id": "playing", "x": 0, "y": 0, "w": 2, "h": 2}],
+  "pins": [{"id": "recent", "span": 2, "display": "1", "x": 10, "y": 20}]
+}`
+	file := filepath.Join(dir, FileName)
+	if err := os.WriteFile(file, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(dir)
+	if err != nil {
+		t.Fatalf("an old file failed to load: %v", err)
+	}
+	if len(l.Pins) != 1 || l.Pins[0].HomeSlot() != (Widget{}) {
+		t.Fatalf("pins = %+v", l.Pins)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != old {
+		t.Fatalf("loading an old file rewrote it:\n%s", data)
+	}
+}

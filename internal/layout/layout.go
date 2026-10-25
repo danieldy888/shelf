@@ -66,6 +66,11 @@ type Widget struct {
 // on, the screen edge it sticks to (empty edge floats free), its
 // position in the display's visible frame, and whether it stays
 // expanded instead of folding into the edge strip.
+//
+// HomeX/HomeY/HomeW/HomeH remember the home-canvas rect a widget pin came
+// from, so 放回刘海 puts it back in its cell after a restart. They are
+// absent (HomeW 0) for action cards and for files written by builds that
+// did not record the rect; both fall back to the catalogue placement.
 type Pin struct {
 	ID         string `json:"id"`
 	Span       int    `json:"span,omitempty"`       // column span it keeps when put back on the tool page
@@ -74,6 +79,30 @@ type Pin struct {
 	X          int    `json:"x,omitempty"`          // left offset inside the display's visible frame
 	Y          int    `json:"y,omitempty"`          // top offset inside the display's visible frame
 	AlwaysOpen bool   `json:"alwaysOpen,omitempty"` // never folds into the edge strip
+	HomeX      int    `json:"homeX,omitempty"`      // home-canvas cell the widget returns to
+	HomeY      int    `json:"homeY,omitempty"`
+	HomeW      int    `json:"homeW,omitempty"` // home-canvas size the widget returns at; 0 = none
+	HomeH      int    `json:"homeH,omitempty"`
+}
+
+// SetHome records the home-canvas rect the pin goes back to; a zero
+// widget, or one off the canvas, clears it (an action card has none).
+func (p *Pin) SetHome(w Widget) {
+	if w.ID == "" || !fitsGrid(w.X, w.Y, clampCells(w.W), clampCells(w.H)) {
+		p.HomeX, p.HomeY, p.HomeW, p.HomeH = 0, 0, 0, 0
+		return
+	}
+	p.HomeX, p.HomeY = w.X, w.Y
+	p.HomeW, p.HomeH = clampCells(w.W), clampCells(w.H)
+}
+
+// HomeSlot is the home-canvas rect the pin returns to, its own id set;
+// the zero Widget when the pin recorded none.
+func (p Pin) HomeSlot() Widget {
+	if p.HomeW < 1 || p.HomeH < 1 {
+		return Widget{}
+	}
+	return Widget{ID: p.ID, X: p.HomeX, Y: p.HomeY, W: p.HomeW, H: p.HomeH}
 }
 
 // Layout is the persisted arrangement: the tool page's card list, the
@@ -83,6 +112,12 @@ type Layout struct {
 	Cards   []Card   `json:"cards,omitempty"`
 	Home    []Widget `json:"home,omitempty"`
 	Pins    []Pin    `json:"pins,omitempty"`
+
+	// Inactive names widgets that are in the file but take no space right
+	// now (a widget whose feature is switched off). Geometry skips them, so
+	// their cells read as free; the entries themselves stay in the file.
+	// Runtime only: never written, and nil means every widget is active.
+	Inactive func(id string) bool `json:"-"`
 }
 
 // widgetCatalog lists the home widgets and the rectangle each starts at.
@@ -245,7 +280,7 @@ func (l *Layout) normalize() {
 		if !fitsGrid(w.X, w.Y, w.W, w.H) {
 			continue
 		}
-		if overlapsAny(home, w.ID, w.X, w.Y, w.W, w.H) {
+		if overlapsAny(home, nil, w.ID, w.X, w.Y, w.W, w.H) {
 			continue
 		}
 		seen[w.ID] = true
@@ -271,6 +306,11 @@ func (l *Layout) normalize() {
 		case "", EdgeLeft, EdgeRight:
 		default:
 			pin.Edge = ""
+		}
+		// A recorded home rect that no longer fits the canvas is dropped;
+		// 放回刘海 then falls back to the catalogue placement.
+		if slot := pin.HomeSlot(); slot.ID != "" {
+			pin.SetHome(slot)
 		}
 		seen[pin.ID] = true
 		pins = append(pins, pin)
@@ -301,7 +341,7 @@ func (l *Layout) migrate() {
 		if slices.ContainsFunc(home, func(o Widget) bool { return o.ID == w.ID }) {
 			continue
 		}
-		if !fitsGrid(w.X, w.Y, w.W, w.H) || overlapsAny(home, w.ID, w.X, w.Y, w.W, w.H) {
+		if !fitsGrid(w.X, w.Y, w.W, w.H) || overlapsAny(home, nil, w.ID, w.X, w.Y, w.W, w.H) {
 			continue
 		}
 		home = append(home, w)
@@ -344,16 +384,22 @@ func (l *Layout) HomeAt(x, y int) (Widget, bool) {
 }
 
 // OverlapsHome reports whether the rectangle x, y, w, h shares a cell
-// with a home widget. The widget with id is ignored, so a widget can ask
-// about its own new rectangle.
+// with an active home widget. The widget with id is ignored, so a widget
+// can ask about its own new rectangle, and so is every widget Inactive
+// names — a switched-off widget leaves its cells free.
 func (l *Layout) OverlapsHome(id string, x, y, w, h int) bool {
-	return overlapsAny(l.Home, id, x, y, w, h)
+	return overlapsAny(l.Home, l.inactive, id, x, y, w, h)
+}
+
+// inactive answers whether id takes no space right now.
+func (l *Layout) inactive(id string) bool {
+	return l.Inactive != nil && l.Inactive(id)
 }
 
 // AddWidget places w on the home canvas. It refuses — leaving the layout
 // untouched — when the id is already placed anywhere (home, tool page, or
 // desktop), the rectangle leaves the 4x2 grid, W or H is outside 1..2, or
-// the rectangle overlaps an existing widget.
+// the rectangle overlaps an active widget.
 func (l *Layout) AddWidget(w Widget) bool {
 	if w.ID == "" || l.hasCard(w.ID) {
 		return false
@@ -537,10 +583,11 @@ func fitsGrid(x, y, w, h int) bool {
 }
 
 // overlapsAny reports whether the rectangle x, y, w, h shares a cell with
-// a widget in home, ignoring the widget with id.
-func overlapsAny(home []Widget, id string, x, y, w, h int) bool {
+// a widget in home, ignoring the widget with id and every widget skip
+// reports true for.
+func overlapsAny(home []Widget, skip func(string) bool, id string, x, y, w, h int) bool {
 	for _, o := range home {
-		if o.ID == id {
+		if o.ID == id || (skip != nil && skip(o.ID)) {
 			continue
 		}
 		if x < o.X+o.W && o.X < x+w && y < o.Y+o.H && o.Y < y+h {
