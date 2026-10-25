@@ -849,29 +849,36 @@ func TestWriteIsAtomic(t *testing.T) {
 }
 
 // TestInactiveWidgetLeavesCellsFree is review #6 at the layout level: a
-// widget Inactive names takes no space, so moves, additions and resizes
-// treat its cells as free, while the entry stays in the layout.
+// widget Inactive names takes no space, so moves and additions treat its
+// cells as free. Its entry stays while nothing takes those cells; a
+// placement that does take them sends it back to the catalogue (the
+// re-review: two rectangles on one cell would make the next load drop the
+// widget the user just placed).
 func TestInactiveWidgetLeavesCellsFree(t *testing.T) {
-	l := Layout{Version: Version,
+	inactive := func(id string) bool { return id == "usage" }
+	l := Layout{Version: Version, Inactive: inactive,
 		Home: []Widget{
 			{ID: "playing", X: 0, Y: 0, W: 2, H: 2},
 			{ID: "awake", X: 2, Y: 0, W: 1, H: 1},
 			{ID: "usage", X: 3, Y: 0, W: 1, H: 1},
-			{ID: "recent", X: 2, Y: 1, W: 2, H: 1},
 		},
-		Inactive: func(id string) bool { return id == "usage" },
 	}
 	if l.OverlapsHome("awake", 3, 0, 1, 1) {
 		t.Fatal("a switched-off widget still blocks its cell")
 	}
-	if !l.MoveWidget("awake", 3, 0) {
-		t.Fatal("MoveWidget refused a cell under a switched-off widget")
+	// A placement that leaves its cell alone keeps the entry.
+	if !l.MoveWidget("awake", 2, 1) {
+		t.Fatal("MoveWidget refused a free cell")
 	}
-	if !l.AddWidget(Widget{ID: "clip", X: 2, Y: 0, W: 1, H: 1}) {
+	if l.HomeIndex("usage") < 0 {
+		t.Fatal("a placement away from the switched-off cell dropped the widget")
+	}
+	// One that takes the cells hands them over.
+	if !l.AddWidget(Widget{ID: "clip", X: 3, Y: 0, W: 1, H: 1}) {
 		t.Fatal("AddWidget refused a cell under a switched-off widget")
 	}
-	if got := l.HomeIndex("usage"); got < 0 {
-		t.Fatal("the switched-off widget left the layout")
+	if l.HomeIndex("usage") >= 0 {
+		t.Fatal("the covered switched-off widget stayed on the canvas")
 	}
 
 	// Active again: the same geometry is refused.
@@ -879,7 +886,7 @@ func TestInactiveWidgetLeavesCellsFree(t *testing.T) {
 	if !l.OverlapsHome("awake", 3, 0, 1, 1) {
 		t.Fatal("an active widget does not occupy its cell")
 	}
-	if l.MoveWidget("recent", 3, 0) {
+	if l.MoveWidget("awake", 3, 0) {
 		t.Fatal("an active widget's cell took a move")
 	}
 }
@@ -945,5 +952,63 @@ func TestPinHomeSlotOmittedInOldFiles(t *testing.T) {
 	}
 	if string(data) != old {
 		t.Fatalf("loading an old file rewrote it:\n%s", data)
+	}
+}
+
+// TestInactiveWidgetYieldsItsCell is the re-review's first item at the
+// layout level: a placement on a switched-off widget's cell takes the
+// entry off the canvas, so the file never holds two rectangles on one cell
+// — a later Load, which has no Inactive yet, would drop the widget the
+// user just placed.
+func TestInactiveWidgetYieldsItsCell(t *testing.T) {
+	inactive := func(id string) bool { return id == "usage" }
+	l := Layout{Version: Version, Inactive: inactive,
+		Home: []Widget{
+			{ID: "usage", X: 3, Y: 0, W: 1, H: 1},
+			{ID: "recent", X: 2, Y: 1, W: 1, H: 1},
+		},
+	}
+	if !l.MoveWidget("recent", 3, 0) {
+		t.Fatal("MoveWidget refused a cell under a switched-off widget")
+	}
+	if l.HomeIndex("usage") >= 0 {
+		t.Fatalf("the covered switched-off widget stayed on the canvas: %+v", l.Home)
+	}
+	dir := t.TempDir()
+	if err := Write(dir, l); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir) // no Inactive: normalize sees both as solid
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := got.HomeIndex("recent"); w < 0 {
+		t.Fatalf("the widget placed last was dropped by the next load: %+v", got.Home)
+	}
+
+	// Adding onto the cells does the same.
+	l = Layout{Version: Version, Inactive: inactive,
+		Home: []Widget{{ID: "usage", X: 3, Y: 0, W: 1, H: 1}},
+	}
+	if !l.AddWidget(Widget{ID: "clip", X: 3, Y: 0, W: 1, H: 1}) {
+		t.Fatal("AddWidget refused a cell under a switched-off widget")
+	}
+	if l.HomeIndex("usage") >= 0 {
+		t.Fatalf("the covered switched-off widget stayed after an add: %+v", l.Home)
+	}
+}
+
+// TestMoveWidgetInPlaceReportsNoChange is the re-review's third item: a
+// widget already at x, y has not changed, so the caller must not save it.
+func TestMoveWidgetInPlaceReportsNoChange(t *testing.T) {
+	l := Layout{Version: Version, Home: []Widget{{ID: "awake", X: 2, Y: 0, W: 1, H: 1}}}
+	if l.MoveWidget("awake", 2, 0) {
+		t.Fatal("moving a widget to its own cell reported a change")
+	}
+	if got := l.Home[0]; got.X != 2 || got.Y != 0 {
+		t.Fatalf("home changed: %+v", got)
+	}
+	if !l.MoveWidget("awake", 3, 0) {
+		t.Fatal("a real move reported no change")
 	}
 }

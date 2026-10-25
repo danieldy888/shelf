@@ -463,8 +463,16 @@ func (a *shelf) unpin(it *pinItem, putBack bool) bool {
 		// pin has to leave the copy first: one card lives in one place, so
 		// AddWidget would otherwise refuse the id it is still pinned under.
 		l.RemovePin(it.cardID, false, before)
-		if slot := it.homeSlot; slot.ID != "" && l.AddWidget(slot) {
-			return true
+		if slot := it.homeSlot; slot.ID != "" {
+			if l.AddWidget(slot) {
+				return true
+			}
+			// The cell it came from is gone: a free cell of the same size
+			// keeps the widget as it was, before the catalogue's size has
+			// its say.
+			if l.AddWidgetBest(it.cardID, slot.W, slot.H) {
+				return true
+			}
 		}
 		w, h := homeDefaultSize(it.cardID)
 		if l.AddWidgetBest(it.cardID, w, h) {

@@ -116,6 +116,30 @@ func TestPinWithoutSlotReturnsToCatalogueCell(t *testing.T) {
 	}
 }
 
+// TestPinPutBackKeepsTheRecordedSize is the re-review's second item: when
+// the cell a widget was pinned from is taken, a free cell of the size it
+// had keeps the widget whole; the catalogue size is only the last resort
+// before 主页没有空位.
+func TestPinPutBackKeepsTheRecordedSize(t *testing.T) {
+	pinCanvasDrag(t)
+	a, it := dropPin(t, layout.Widget{ID: "usage", X: 2, Y: 0, W: 2, H: 1})
+	// Its cell is filled while the widget is on the desktop; the bottom
+	// row's 2×1 stays free.
+	a.settings.AIUsage.Enabled = true
+	l := a.toolsLayout()
+	l.Home = []layout.Widget{
+		{ID: "playing", X: 0, Y: 0, W: 2, H: 2},
+		{ID: "clip", X: 2, Y: 0, W: 2, H: 1},
+	}
+	a.toolsLay = &l
+	if !a.unpin(it, true) {
+		t.Fatal("放回刘海 failed")
+	}
+	if got := widgetByID(a.toolsLayout().Home, "usage"); got.X != 2 || got.Y != 1 || got.W != 2 || got.H != 1 {
+		t.Fatalf("usage returned at %+v, want the free 2×1 at (2,1)", got)
+	}
+}
+
 // TestPinStaysWhenHomeIsFull is review #4: with every cell taken, 放回刘海
 // keeps the pin and its window and asks for a free cell, instead of
 // deleting the card from the desktop.

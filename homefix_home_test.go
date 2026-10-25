@@ -249,6 +249,73 @@ func TestHomeDisabledWidgetLeavesItsCellsFree(t *testing.T) {
 	}
 }
 
+// TestHomePlacementUnderDisabledWidgetSurvivesRestart is the re-review's
+// first item: a widget dropped on the cells of a switched-off one must not
+// leave two rectangles in layout.json — the next Load has no Inactive yet,
+// so normalize would drop whichever came later, which is the widget the
+// user just placed. The switched-off widget yields its cell at placement
+// time and waits in the catalogue instead.
+func TestHomePlacementUnderDisabledWidgetSurvivesRestart(t *testing.T) {
+	a, _ := musicShelf(t)
+	dir := t.TempDir()
+	a.dataDir = dir
+	a.settings.AIUsage.Enabled = false
+	homeReviewLayout(a,
+		layout.Widget{ID: "playing", X: 0, Y: 0, W: 2, H: 2},
+		layout.Widget{ID: "usage", X: 3, Y: 0, W: 1, H: 1},
+		layout.Widget{ID: "recent", X: 2, Y: 1, W: 2, H: 1},
+	)
+	// 最近文件 shrinks to 1×1 and takes 用量's cell, free while it is off.
+	if !a.mutateToolsChanged(func(l *layout.Layout) bool { return l.SetWidgetSize("recent", 1, 1) }) {
+		t.Fatal("fixture: could not shrink recent")
+	}
+	if !a.mutateToolsChanged(func(l *layout.Layout) bool { return l.MoveWidget("recent", 3, 0) }) {
+		t.Fatal("a cell under the switched-off widget refused a move")
+	}
+
+	// A restart: Load has no Inactive yet, so normalize runs on the file.
+	reloaded := layoutOf(t, dir)
+	if got := widgetByID(reloaded.Home, "recent"); got.X != 3 || got.Y != 0 || got.W != 1 || got.H != 1 {
+		t.Fatalf("the widget placed last was lost on the next load: home=%+v", reloaded.Home)
+	}
+	if got := widgetByID(reloaded.Home, "usage"); got.ID != "" {
+		t.Fatalf("layout.json still holds the covered switched-off widget: %+v", reloaded.Home)
+	}
+}
+
+// TestHomeDropInPlaceDoesNotRewriteLayout is the re-review's third item: a
+// drop back on the widget's own cell changes nothing, so it must leave
+// layout.json alone instead of rewriting the same bytes.
+func TestHomeDropInPlaceDoesNotRewriteLayout(t *testing.T) {
+	a, p := musicShelf(t)
+	a.dataDir = t.TempDir()
+	awake := layout.Widget{ID: "awake", X: 2, Y: 0, W: 1, H: 1}
+	homeReviewLayout(a, layout.Widget{ID: "playing", X: 0, Y: 0, W: 2, H: 2}, awake)
+	file := filepath.Join(a.dataDir, layout.FileName)
+	if err := layout.Write(a.dataDir, a.toolsLayout()); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(file, old, old); err != nil {
+		t.Fatal(err)
+	}
+	a.x, a.y = 400, 0
+	p.editing = true
+	// Grab 10pt in and release over the cell it started on.
+	p.homeDrop(&homePress{id: "awake", dragging: true, orig: awake, grabDX: 10, grabDY: 10,
+		px: homeX(2) + 12, py: homeY(0) + 12})
+	if got := widgetByID(a.toolsLayout().Home, "awake"); got.X != 2 || got.Y != 0 {
+		t.Fatalf("the widget left its cell: %+v", got)
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(old) {
+		t.Fatalf("a drop in place rewrote layout.json (mtime %v, want %v)", info.ModTime(), old)
+	}
+}
+
 // layoutOf reads the written layout back.
 func layoutOf(t *testing.T, dir string) layout.Layout {
 	t.Helper()

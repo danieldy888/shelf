@@ -396,6 +396,28 @@ func (l *Layout) inactive(id string) bool {
 	return l.Inactive != nil && l.Inactive(id)
 }
 
+// dropInactiveUnder takes the switched-off widgets whose cells the
+// rectangle covers off the canvas. Those cells were free for this
+// placement — OverlapsHome skips them — so keeping their entries would put
+// two rectangles on one cell in layout.json, and the next Load (which has
+// no Inactive yet) would drop whichever came later: the widget the user
+// just placed. Removing them here sends the switched-off widget back to
+// the 小组件目录 instead.
+func (l *Layout) dropInactiveUnder(id string, x, y, w, h int) {
+	if l.Inactive == nil || id == "" {
+		return
+	}
+	kept := l.Home[:0]
+	for _, o := range l.Home {
+		if o.ID != id && l.inactive(o.ID) &&
+			x < o.X+o.W && o.X < x+w && y < o.Y+o.H && o.Y < y+h {
+			continue
+		}
+		kept = append(kept, o)
+	}
+	l.Home = kept
+}
+
 // AddWidget places w on the home canvas. It refuses — leaving the layout
 // untouched — when the id is already placed anywhere (home, tool page, or
 // desktop), the rectangle leaves the 4x2 grid, W or H is outside 1..2, or
@@ -410,6 +432,7 @@ func (l *Layout) AddWidget(w Widget) bool {
 	if l.OverlapsHome(w.ID, w.X, w.Y, w.W, w.H) {
 		return false
 	}
+	l.dropInactiveUnder(w.ID, w.X, w.Y, w.W, w.H)
 	l.Home = append(l.Home, w)
 	return true
 }
@@ -450,18 +473,23 @@ func (l *Layout) RemoveWidget(id string) bool {
 
 // MoveWidget moves id to x, y keeping its size. It reports false — the
 // layout untouched — when id is not on the home canvas, the rectangle
-// would leave the grid, or it would overlap another widget.
+// would leave the grid, it would overlap another widget, or the widget is
+// already there (a drop in place changes nothing, so nothing is saved).
 func (l *Layout) MoveWidget(id string, x, y int) bool {
 	i := l.HomeIndex(id)
 	if i < 0 {
 		return false
 	}
 	w := l.Home[i]
+	if w.X == x && w.Y == y {
+		return false
+	}
 	if !fitsGrid(x, y, w.W, w.H) || l.OverlapsHome(id, x, y, w.W, w.H) {
 		return false
 	}
 	l.Home[i].X = x
 	l.Home[i].Y = y
+	l.dropInactiveUnder(id, x, y, w.W, w.H)
 	return true
 }
 
@@ -480,6 +508,7 @@ func (l *Layout) SetWidgetSize(id string, w, h int) bool {
 	}
 	l.Home[i].W = w
 	l.Home[i].H = h
+	l.dropInactiveUnder(id, cur.X, cur.Y, w, h)
 	return true
 }
 
