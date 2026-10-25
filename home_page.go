@@ -158,7 +158,7 @@ func (a *shelf) homeDoneButton(c *ui.Context, live bool) ui.Element {
 		}
 	}
 	b.Children(func() {
-		ui.Text(c, "完成").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+		panelLabel(c, nil, "完成", 12, 600).TextColor(ink)
 	})
 	return b
 }
@@ -634,8 +634,7 @@ func (p *homePage) pickerBody(c *ui.Context, live bool) ui.Element {
 		sheet := ui.Column(c.Key("home-picker")).FillWidth().Radius(14).
 			Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
 		sheet.Children(func() {
-			ui.Text(c, "小组件").SingleLine().FontSize(11).FontWeight(600).
-				TextColor(ink3).Margin(2, 0, 6, 0)
+			panelLabel(c, nil, "小组件", 11, 600).TextColor(ink3).Margin(2, 0, 6, 0)
 			ui.Grid(c.Key("home-plist")).ColumnTracks(ui.Fr(1), ui.Fr(1)).
 				GapY(4).GapX(10).FillWidth().Children(func() {
 				for _, def := range defs {
@@ -678,14 +677,14 @@ func (p *homePage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui.
 			iconCol = ink3
 		}
 		ui.Icon(c, def.icon).Size(15, 15).TextColor(iconCol)
-		ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(500).TextColor(iconCol)
+		panelLabel(c, nil, def.title, 12, 500).TextColor(iconCol)
 		ui.Box(c).Grow(1)
 		w, h := homeDefaultSize(def.id)
 		size := fmt.Sprintf("%d × %d", w, h)
 		if added {
 			size += " · 已添加"
 		}
-		ui.Text(c, size).SingleLine().FontSize(10).TextColor(ink3)
+		panelLabel(c, nil, size, 10, 0).TextColor(ink3)
 	})
 	return row
 }

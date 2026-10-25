@@ -216,7 +216,7 @@ func (a *shelf) toolCardEditBody(c *ui.Context, card ui.Element, def *toolCardDe
 		ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
 		fitText(c, def.title, 12, 600, toolColW(def.span)-8).TextColor(ink)
 		if def.span == 2 && def.kind == cardWidget {
-			ui.Text(c, "小组件").SingleLine().FontSize(10).TextColor(ink3)
+			panelLabel(c, nil, "小组件", 10, 0).TextColor(ink3)
 		}
 	})
 }
@@ -250,7 +250,7 @@ func (a *shelf) toolCardBody(c *ui.Context, card ui.Element, def *toolCardDef, s
 	default:
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-			ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+			panelLabel(c, nil, def.title, 12, 600).TextColor(ink)
 		})
 	}
 }
@@ -504,8 +504,8 @@ func (a *shelf) toolAwakeBodyNarrow(c *ui.Context, card ui.Element) {
 	on := m != nil && m.active()
 	card.Center().Gap(5).Children(func() {
 		ui.Icon(c, cupSymbol).Size(20, 20).TextColor(ink)
-		ui.Text(c, "保持唤醒").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-		ui.Text(c, a.awakeRemain()).SingleLine().FontSize(10).TextColor(ink3)
+		panelLabel(c, nil, "保持唤醒", 12, 600).TextColor(ink)
+		panelLabel(c, nil, a.awakeRemain(), 10, 0).TextColor(ink3)
 		if on {
 			ui.Box(c.Key("on-dot")).Absolute().Top(8).Right(8).Size(6, 6).Radius(3).Background(awakeWarn)
 		}
@@ -521,8 +521,8 @@ func (a *shelf) toolAwakeBodyWide(c *ui.Context, card ui.Element) {
 			ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 				ui.Icon(c, cupSymbol).Size(20, 20).TextColor(ink)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					ui.Text(c, "保持唤醒").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-					ui.Text(c, a.awakeRemain()).SingleLine().FontSize(10).TextColor(ink3)
+					panelLabel(c, nil, "保持唤醒", 12, 600).TextColor(ink)
+					panelLabel(c, nil, a.awakeRemain(), 10, 0).TextColor(ink3)
 				})
 				if on {
 					ui.Box(c.Key("on-dot")).Size(6, 6).Radius(3).Background(awakeWarn)
@@ -553,7 +553,7 @@ func (a *shelf) awakeChip(c *ui.Context, key, label string, d time.Duration) {
 		chip.Background(fill2)
 	}
 	chip.Children(func() {
-		t := ui.Text(c, label).SingleLine().FontSize(10).FontWeight(600)
+		t := panelLabel(c, nil, label, 10, 600)
 		if on {
 			t.TextColor(ink)
 		} else {
@@ -582,8 +582,8 @@ func (a *shelf) toolRecentBody(c *ui.Context, card ui.Element) {
 	card.Padding(0, 12, 0, 12).Justify(ui.Center).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Text(c, "最近文件").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-				ui.Text(c, "拖出即可").SingleLine().FontSize(10).TextColor(ink3)
+				panelLabel(c, nil, "最近文件", 12, 600).TextColor(ink)
+				panelLabel(c, nil, "拖出即可", 10, 0).TextColor(ink3)
 			})
 			ui.Row(c.Key("recent-thumbs")).Gap(6).AlignItems(ui.Center).Children(func() {
 				items := a.itemsFor(pageTray)
@@ -652,10 +652,10 @@ func (a *shelf) toolClipBody(c *ui.Context, card ui.Element) {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				if it, ok := a.latestClipboardItem(); ok {
 					ui.Text(c, itemTitle(it)).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-					ui.Text(c, "点按复制").SingleLine().FontSize(10).TextColor(ink3)
+					panelLabel(c, nil, "点按复制", 10, 0).TextColor(ink3)
 				} else {
-					ui.Text(c, "剪贴板最新").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-					ui.Text(c, "还没有剪贴板记录").SingleLine().FontSize(10).TextColor(ink3)
+					panelLabel(c, nil, "剪贴板最新", 12, 600).TextColor(ink)
+					panelLabel(c, nil, "还没有剪贴板记录", 10, 0).TextColor(ink3)
 				}
 			})
 		})
@@ -675,7 +675,7 @@ func (a *shelf) toolUsageBody(c *ui.Context, card ui.Element) {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 			a.toolUsageRing(c, five, week)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				ui.Text(c, "AI 用量").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+				panelLabel(c, nil, "AI 用量", 12, 600).TextColor(ink)
 				sub := "暂无数据"
 				if ok {
 					w := five
@@ -684,7 +684,7 @@ func (a *shelf) toolUsageBody(c *ui.Context, card ui.Element) {
 					}
 					sub = fmt.Sprintf("剩余 %.0f%%", max(0, 100-w.UsedPct))
 				}
-				ui.Text(c, sub).SingleLine().FontSize(10).TextColor(ink3)
+				panelLabel(c, nil, sub, 10, 0).TextColor(ink3)
 			})
 		})
 	})
@@ -714,7 +714,7 @@ func (a *shelf) toolPlayingBody(c *ui.Context, card ui.Element) {
 	if m == nil {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, musicSymbol).Size(20, 20).TextColor(ink3)
-			ui.Text(c, "正在播放").SingleLine().FontSize(12).FontWeight(600).TextColor(ink3)
+			panelLabel(c, nil, "正在播放", 12, 600).TextColor(ink3)
 		})
 		return
 	}
@@ -722,8 +722,8 @@ func (a *shelf) toolPlayingBody(c *ui.Context, card ui.Element) {
 	if !ok {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, musicSymbol).Size(20, 20).TextColor(ink3)
-			ui.Text(c, "正在播放").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-			ui.Text(c, "没有内容").SingleLine().FontSize(10).TextColor(ink3)
+			panelLabel(c, nil, "正在播放", 12, 600).TextColor(ink)
+			panelLabel(c, nil, "没有内容", 10, 0).TextColor(ink3)
 		})
 		return
 	}

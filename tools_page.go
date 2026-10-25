@@ -237,7 +237,7 @@ func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element 
 		}
 	}
 	b.Children(func() {
-		ui.Text(c, "完成").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+		panelLabel(c, nil, "完成", 12, 600).TextColor(ink)
 	})
 	return b
 }
@@ -699,8 +699,7 @@ func (p *toolsPage) pickerBody(c *ui.Context, live bool) ui.Element {
 					if gi == 1 {
 						title = "小组件"
 					}
-					ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).
-						TextColor(ink3).Margin(2, 0, 6, 0)
+					panelLabel(c, nil, title, 11, 600).TextColor(ink3).Margin(2, 0, 6, 0)
 					ui.Grid(c.Key("plist-"+title)).ColumnTracks(ui.Fr(1), ui.Fr(1)).
 						GapY(4).GapX(10).FillWidth().Children(func() {
 						for _, def := range group {

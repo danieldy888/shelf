@@ -140,9 +140,9 @@ func (p *homePage) musicFull(c *ui.Context, card ui.Element, st mac.NowPlayingSt
 			// what is left of the card's 175pt inner width.
 			nowLabel, remLabel := mac.FormatClock(pos), "-"+mac.FormatClock(rem)
 			nw, rw := clockLabelW(c, nowLabel), clockLabelW(c, remLabel)
-			ui.Text(c, nowLabel).SingleLine().FontSize(9.5).FontWeight(500).TextColor(ink3).Width(nw)
+			panelLabel(c, nil, nowLabel, 9.5, 500).TextColor(ink3).Width(nw)
 			p.progressBar(c, "hw-progress", frac, dur > 0, dur, max(40, homeTrackW-12-nw-rw))
-			ui.Text(c, remLabel).SingleLine().FontSize(9.5).FontWeight(500).TextColor(ink3).Width(rw)
+			panelLabel(c, nil, remLabel, 9.5, 500).TextColor(ink3).Width(rw)
 		})
 		ui.Row(c.Key("hw-ctrl")).Justify(ui.Center).AlignItems(ui.Center).Gap(18).Children(func() {
 			m.controlButton(c, "hw-prev", prevFill, "上一首", mac.NPPrevious, 26, 15)
