@@ -50,6 +50,30 @@ func TestScreenCaptureResetRunsOnFailedPreflight(t *testing.T) {
 	}
 }
 
+// The read-only preflight used by the Settings/menu status display never
+// clears a record, even while it reports false.
+func TestScreenCapturePreflightHasNoSideEffects(t *testing.T) {
+	var resets, opens, requests int
+	oldReset, oldOpen := tccutilReset, openURL
+	oldPre, oldReq := cgPreflightScreenCaptureAccess, cgRequestScreenCaptureAccess
+	preflightOnce.Do(func() {})
+	tccutilReset = func(string) { resets++ }
+	openURL = func(string) { opens++ }
+	cgPreflightScreenCaptureAccess = func() bool { return false }
+	cgRequestScreenCaptureAccess = func() bool { requests++; return false }
+	t.Cleanup(func() {
+		tccutilReset, openURL = oldReset, oldOpen
+		cgPreflightScreenCaptureAccess, cgRequestScreenCaptureAccess = oldPre, oldReq
+	})
+
+	if ScreenCapturePreflight() {
+		t.Fatal("untrusted stub reported trusted")
+	}
+	if resets != 0 || opens != 0 || requests != 0 {
+		t.Fatalf("preflight ran side effects: resets=%d opens=%d requests=%d", resets, opens, requests)
+	}
+}
+
 // An already-trusted process never resets, asks or opens anything.
 func TestRequestScreenCaptureTrustedShortCircuits(t *testing.T) {
 	var resets, opens, requests int

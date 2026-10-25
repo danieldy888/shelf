@@ -38,14 +38,12 @@ var (
 	requestBundleID  = bundleIdentifier
 )
 
-// ScreenCaptureAllowed reports whether this process may capture the
-// screen right now. It never prompts. The first false answer clears any
-// stale record of this app — one that grants nothing to the current
-// build and suppresses the system prompt — once per process, before any
-// grant could exist to lose. Note macOS caches the answer for the
-// lifetime of the process: a grant made while the app is running can
-// keep answering false until the next launch.
-func ScreenCaptureAllowed() bool {
+// ScreenCapturePreflight reports whether this process may capture the
+// screen right now. It never prompts and never clears anything, so UI that
+// only displays the state can call it freely. Note macOS caches the answer
+// for the lifetime of the process: a grant made while the app is running
+// can keep answering false until the next launch.
+func ScreenCapturePreflight() bool {
 	if err := Init(); err != nil {
 		return false
 	}
@@ -53,7 +51,15 @@ func ScreenCaptureAllowed() bool {
 		purego.RegisterLibFunc(&cgPreflightScreenCaptureAccess, libCG, "CGPreflightScreenCaptureAccess")
 		purego.RegisterLibFunc(&cgRequestScreenCaptureAccess, libCG, "CGRequestScreenCaptureAccess")
 	})
-	if cgPreflightScreenCaptureAccess() {
+	return cgPreflightScreenCaptureAccess()
+}
+
+// ScreenCaptureAllowed is the permission check used by the user-initiated
+// request path. The first false answer clears any stale record of this app
+// — one that grants nothing to the current build and suppresses the system
+// prompt — once per process, before any grant could exist to lose.
+func ScreenCaptureAllowed() bool {
+	if ScreenCapturePreflight() {
 		return true
 	}
 	if tccutilResetDone.CompareAndSwap(false, true) {
