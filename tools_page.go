@@ -7,7 +7,7 @@ package main
 // tools_cards.go. This file owns the page's four-column packing, the
 // long-press / drag-to-reorder gestures, the editing chrome (⊖ badge,
 // span handle, wobble, the + tile), the card catalogue picker, and the
-// module-bar entries (pencil, 完成).
+// back-row entries (pencil, 完成).
 
 import (
 	"fmt"
@@ -24,18 +24,17 @@ import (
 const (
 	pageTools pageID = "tools" // 工具：用户排版的卡片页
 
-	toolCols         = 4                             // 4 列网格
-	toolCellH        = 84                            // 行高
-	toolCellGap      = 6                             // 卡片间距
-	toolMaxRows      = 3                             // 最多 3 行可见，再多在舞台内滚动
-	toolStageW       = panelWidth - 16 - 2*panelPadX // 舞台内容宽（panel.go 的 560-16-2·16）
-	toolPickRowH     = 30                            // 目录行高（design §3 .pi 30px）
-	toolLongPress    = 500 * time.Millisecond        // 长按进入编辑
-	toolDragSlop     = 6                             // 普通态拖动超过此距离作废点击
-	toolJiggleSpan   = 300 * time.Millisecond        // 无可执行项时的轻摇
-	toolSettleAnim   = 240 * time.Millisecond        // 松手吸附
-	toolWobblePeriod = 520 * time.Millisecond        // 编辑摆动周期
-	toolWobbleDeg    = 0.7                           // 编辑摆动 ±0.7°
+	toolCols         = 4                      // 4 列网格
+	toolCellH        = 84                     // 行高（两行正好填满 174）
+	toolCellGap      = 6                      // 卡片间距
+	toolStageW       = contentW               // 内容区宽 396
+	toolPickRowH     = 30                     // 目录行高（design §3 .pi 30px）
+	toolLongPress    = 500 * time.Millisecond // 长按进入编辑
+	toolDragSlop     = 6                      // 普通态拖动超过此距离作废点击
+	toolJiggleSpan   = 300 * time.Millisecond // 无可执行项时的轻摇
+	toolSettleAnim   = 240 * time.Millisecond // 松手吸附
+	toolWobblePeriod = 520 * time.Millisecond // 编辑摆动周期
+	toolWobbleDeg    = 0.7                    // 编辑摆动 ±0.7°
 )
 
 // toolCell is one card's position in content coordinates.
@@ -89,8 +88,7 @@ func (p *toolsPage) label() string { return "工具" }
 func (p *toolsPage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, toolsNavSymbol)
 }
-func (p *toolsPage) enabled() bool      { return true }
-func (p *toolsPage) sharesHeight() bool { return false }
+func (p *toolsPage) enabled() bool { return true }
 
 // toolsPageOf is the shelf's tools page, or nil for test shelves that
 // never registered one.
@@ -159,15 +157,30 @@ func (a *shelf) resetToolsEdit() {
 	}
 }
 
-func (p *toolsPage) moduleTitle() (title, count string) {
+func (p *toolsPage) title() (name, count string) {
 	if p.picking {
 		return "卡片目录", ""
 	}
 	return "工具", fmt.Sprintf("%d 项", len(p.host.toolsLayout().Cards))
 }
 
-func (p *toolsPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
+// overflows reports a third row of cards (or the catalogue, which is
+// always taller than the box).
+func (p *toolsPage) overflows() bool {
+	if p.picking {
+		return true
+	}
+	cells := packToolCards(p.host.toolsLayout().Cards, p.editing)
+	rows := 0
+	for _, cell := range cells {
+		rows = max(rows, int((cell.y+toolCellH)/toolCellH))
+	}
+	return rows > 2
+}
+
+func (p *toolsPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
+	live := a.tab == pageTools
 	switch {
 	case p.picking:
 		return []ui.Element{a.toolDoneButton(c, live, "pick-done")}
@@ -182,7 +195,7 @@ func (p *toolsPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
 	}
 }
 
-// toolDoneButton is the 完成 pill at the module bar's right.
+// toolDoneButton is the 完成 pill at the back row's right.
 func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element {
 	b := ui.Row(c.Key(key)).Height(24).Padding(0, 12, 0, 12).Radius(12).
 		Background(accent).Center().Label("完成")
@@ -200,45 +213,6 @@ func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element 
 		ui.Text(c, "完成").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
 	})
 	return b
-}
-
-// stageH is what the grid needs: up to three rows of cards, or the
-// picker's three tiles.
-func (p *toolsPage) stageH() int {
-	a := p.host
-	if p.picking {
-		return p.pickerH()
-	}
-	l := a.toolsLayout()
-	editing := p.editing
-	cells := packToolCards(l.Cards, editing)
-	if d := p.press; d != nil && editing && (d.dragging || d.settling) {
-		if ins := toolInsertIndex(l.Cards, d.id, d.index, d.px, d.py); ins >= 0 {
-			cells = packToolCards(toolVirtualCards(l.Cards, d.id, ins), editing)
-		}
-	}
-	rows := 0
-	for _, cell := range cells {
-		rows = max(rows, int((cell.y+toolCellH)/toolCellH))
-	}
-	if rows == 0 {
-		rows = 1 // keep a one-cell stage so editing a pin-everything grid still shows +
-	}
-	rows = min(rows, toolMaxRows)
-	return rows*toolCellH + (rows-1)*toolCellGap
-}
-
-// pickerH is the catalogue's stage height: padding, one h4 per group
-// that has entries, and 30pt rows two per line.
-func (p *toolsPage) pickerH() int {
-	groups := p.pickerGroups()
-	h := 10 + 12 // picker padding top+bottom (design .picker 10px/12px)
-	for _, g := range groups {
-		h += 8 + 18 // h4 margin+text
-		rows := (len(g) + 1) / 2
-		h += rows*toolPickRowH + max(0, rows-1)*4 + 8 // rows, 4px gaps, group gap
-	}
-	return h - 8 // last group has no trailing gap
 }
 
 // pickerGroups is the catalogue split into 动作 and 小组件 rows in
@@ -264,8 +238,7 @@ func (p *toolsPage) pickerGroups() (groups [][]toolCardDef) {
 	return
 }
 
-// body is the stage: the picker's tile list while picking, else the card
-// grid. The + slot only exists while editing.
+// body is the fixed content box: the picker's tile list while picking, else the card grid.
 func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 	a := p.host
 	if p.picking {
@@ -529,7 +502,7 @@ func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
 	// viewport the scroll shows — the stage's own height. scrollEdges
 	// would answer contentH−MaxY, which shrinks as the content grows and
 	// misreads releases near the viewport's bottom.
-	viewH := float32(a.currentStageH())
+	viewH := float32(contentH)
 	inside := d.px >= 0 && d.px <= toolStageW &&
 		d.py >= p.scroll.Y && d.py <= p.scroll.Y+viewH
 	target := d.origCell
@@ -548,7 +521,7 @@ func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
 		// A release beyond the panel's drawn body pins the card at the
 		// cursor (grab point preserved so the window lands under it);
 		// a release on another pane of the panel still flies back.
-		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: panelWidth, Height: a.panelH()}
+		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: sheetW, Height: a.panelH()}
 		if !insideRect(cursor, panel) {
 			spec := p.dragSpec(d.id)
 			span, w := spec.Span, pinCardW
@@ -702,26 +675,28 @@ func (p *toolsPage) pickerBody(c *ui.Context, live bool) ui.Element {
 		placed[pin.ID] = true
 	}
 	return ui.Column(c.Key("tools-pick")).Grow(1).MinHeight(0).Children(func() {
-		sheet := ui.Column(c.Key("picker")).FillWidth().Radius(14).
-			Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
-		sheet.Children(func() {
-			for gi, group := range p.pickerGroups() {
-				title := "动作"
-				if gi == 1 {
-					title = "小组件"
-				}
-				ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).
-					TextColor(ink3).Margin(2, 0, 6, 0)
-				ui.Grid(c.Key("plist-"+title)).ColumnTracks(ui.Fr(1), ui.Fr(1)).
-					GapY(4).GapX(10).FillWidth().Children(func() {
-					for _, def := range group {
-						p.pickRow(c, def, placed[def.id], live)
+		ui.Scroll(c.Key("pick-scroll")).Grow(1).MinHeight(0).Children(func() {
+			sheet := ui.Column(c.Key("picker")).FillWidth().Radius(14).
+				Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
+			sheet.Children(func() {
+				for gi, group := range p.pickerGroups() {
+					title := "动作"
+					if gi == 1 {
+						title = "小组件"
 					}
-				})
-				if gi == 0 {
-					ui.Box(c).Height(8)
+					ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).
+						TextColor(ink3).Margin(2, 0, 6, 0)
+					ui.Grid(c.Key("plist-"+title)).ColumnTracks(ui.Fr(1), ui.Fr(1)).
+						GapY(4).GapX(10).FillWidth().Children(func() {
+						for _, def := range group {
+							p.pickRow(c, def, placed[def.id], live)
+						}
+					})
+					if gi == 0 {
+						ui.Box(c).Height(8)
+					}
 				}
-			}
+			})
 		})
 	})
 }

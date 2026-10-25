@@ -135,10 +135,10 @@ func TestToolsNativeDragOutStaysVisible(t *testing.T) {
 		t.Skip("native window smoke requires SHELF_BASKET_SMOKE=1")
 	}
 	arena, area := newSmokePointerArena(t)
-	a := &shelf{store: mustStore(t), dataDir: t.TempDir(), tab: pageTools, visible: true,
+	a := &shelf{store: mustStore(t), dataDir: t.TempDir(), tab: pageTools, level: 2, visible: true,
 		progress: 1, topInset: 32, notchW: 180, notchH: 32, hasNotch: true,
-		x: area.X + 24, y: area.Y + 24, h: 550, dispBounds: mygo.Screen.PrimaryDisplay().Bounds}
-	a.notchX, a.notchY = a.x+(panelWidth-180)/2, a.y
+		x: area.X + 24, y: area.Y + 24, dispBounds: mygo.Screen.PrimaryDisplay().Bounds}
+	a.notchX, a.notchY = a.x+(sheetW-180)/2, a.y
 	var panelNum, arenaNum int
 	onMain(func() {
 		a.newNotchWindow()
@@ -164,7 +164,7 @@ func TestToolsNativeDragOutStaysVisible(t *testing.T) {
 	var frame mygo.Rectangle
 	onMain(func() {
 		frame = a.frame
-		mirror := &shelf{store: a.store, tab: pageTools, visible: true,
+		mirror := &shelf{store: a.store, tab: pageTools, level: 2, visible: true,
 			topInset: a.topInset, notchW: a.notchW, notchH: a.notchH}
 		tr := ui.NewTester(mirror.view, frame.Width, frame.Height)
 		var ok bool
@@ -229,7 +229,7 @@ func TestToolsNativeDragOutStaysVisible(t *testing.T) {
 		t.Error("the drag preview intercepts input or takes keyboard focus")
 	}
 	// Returning to the grid removes the external copy without committing.
-	back := mygo.Point{X: a.x + panelWidth/2, Y: start.Y + 24}
+	back := mygo.Point{X: a.x + sheetW/2, Y: start.Y + 24}
 	postMouse(t, float64(back.X), float64(back.Y), 6)
 	time.Sleep(150 * time.Millisecond)
 	for _, w := range ownSmokeWindows(t) {

@@ -4,7 +4,6 @@ package main
 
 import (
 	"archive/zip"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -337,7 +336,7 @@ func dropViewShelf(t *testing.T, paths []string) (*shelf, *ui.Tester) {
 	old := dragFiles
 	dragFiles = func(*shelf) []string { return paths }
 	t.Cleanup(func() { dragFiles = old })
-	return a, ui.NewTester(a.view, panelWidth, panelHeight)
+	return a, ui.NewTester(a.view, sheetW, sheetH)
 }
 
 func TestDropZoneShowsForImageDrag(t *testing.T) {
@@ -348,7 +347,7 @@ func TestDropZoneShowsForImageDrag(t *testing.T) {
 		writeFile(t, dir, "3.png", testPNGBytes(t)),
 	}
 	_, view := dropViewShelf(t, imgs)
-	for _, want := range []string{"投放", "3 张图片", "松开放入托盘，或拖到动作上", "放入托盘", "保存引用，随时拖出", "压缩到 1 MB", "合成一个 PDF", "转 JPEG", "隔空投送"} {
+	for _, want := range []string{"投放", "3 张图片", "松开放入托盘", "放入托盘", "保存引用，随时拖出", "压缩到 1 MB", "合成一个 PDF", "转 JPEG", "隔空投送"} {
 		if !view.HasText(want) {
 			t.Fatalf("drop zone missing %q; texts %v", want, view.Texts())
 		}
@@ -360,7 +359,7 @@ func TestDropZoneHiddenForOwnDragAndNonFiles(t *testing.T) {
 	img := writeFile(t, dir, "1.png", testPNGBytes(t))
 	a, view := dropViewShelf(t, []string{img})
 	a.ownDrag = true
-	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	view = ui.NewTester(a.view, sheetW, sheetH)
 	if view.HasText("投放") || view.HasText("放入托盘") {
 		t.Fatal("own drag-out showed the drop zone")
 	}
@@ -368,7 +367,7 @@ func TestDropZoneHiddenForOwnDragAndNonFiles(t *testing.T) {
 	a.ownDrag = false
 	a.dragging = false
 	a.drop.until = time.Now().Add(-time.Minute)
-	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	view = ui.NewTester(a.view, sheetW, sheetH)
 	if view.HasText("投放") {
 		t.Fatal("an ended drag still showed the drop zone")
 	}
@@ -403,18 +402,18 @@ func TestDropZoneSnapPointerGates(t *testing.T) {
 	// The pointer-inside branch needs the seam.
 	old := cursorPoint
 	defer func() { cursorPoint = old }()
-	a2 := &shelf{dragging: true, visible: true, notchW: 180, notchH: 32, h: 500}
+	a2 := &shelf{dragging: true, visible: true, notchW: 180, notchH: 32}
 	a2.x, a2.y = 400, 0
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 10, Y: 500} }
 	// a2.win == nil keeps the headless shortcut; exercise the math itself.
 	p := cursorPoint()
-	inside := p.X >= a2.x && p.X < a2.x+panelWidth && p.Y >= a2.y && p.Y < a2.y+a2.panelH()
+	inside := p.X >= a2.x && p.X < a2.x+sheetW && p.Y >= a2.y && p.Y < a2.y+a2.panelH()
 	if inside {
 		t.Fatal("point left of the panel counted as inside")
 	}
-	cursorPoint = func() mygo.Point { return mygo.Point{X: 400 + panelWidth/2, Y: 100} }
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 400 + sheetW/2, Y: 100} }
 	p = cursorPoint()
-	inside = p.X >= a2.x && p.X < a2.x+panelWidth && p.Y >= a2.y && p.Y < a2.y+a2.panelH()
+	inside = p.X >= a2.x && p.X < a2.x+sheetW && p.Y >= a2.y && p.Y < a2.y+a2.panelH()
 	if !inside {
 		t.Fatal("point inside the panel counted as outside")
 	}
@@ -477,7 +476,7 @@ func TestDropZoneSurvivesReleaseFrame(t *testing.T) {
 		t.Fatal("no zone while dragging")
 	}
 	a.dragging = false // the release's mouse-up, before the drop lands
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if !view.HasText("投放") || !view.HasText("压缩到 1 MB") {
 		t.Fatalf("release frame lost the drop zone; texts %v", view.Texts())
 	}
@@ -487,7 +486,7 @@ func TestDropZoneSurvivesReleaseFrame(t *testing.T) {
 		t.Fatalf("the released action never ran: formats %v", f.formats)
 	}
 	// Consumed: the zone closes, panel back to the tray page.
-	view = ui.NewTester(a.view, panelWidth, panelHeight)
+	view = ui.NewTester(a.view, sheetW, sheetH)
 	if view.HasText("投放") {
 		t.Fatal("consumed drop kept the zone")
 	}
@@ -539,37 +538,22 @@ func TestDropZoneBoardReadsOncePerChange(t *testing.T) {
 	}
 }
 
-func TestDropZonePanelHeightCoversZone(t *testing.T) {
-	// A shallow stage (empty tray → stageMinH) must not clip the zone:
-	// the panel grows to hold it plus the bottom padding.
+func TestDropZoneFitsContentBox(t *testing.T) {
+	// The zone is 64 + 6 + 84 = 154 tall and must fit the page's fixed
+	// 396 × 174 content box, so a drag never grows or clips the sheet.
+	if need := dropZoneNeedH(); need > contentH {
+		t.Fatalf("drop zone needs %d, content box is %d", need, contentH)
+	}
 	dir := t.TempDir()
 	img := writeFile(t, dir, "1.png", testPNGBytes(t))
-	a, _, _ := snapShelf(t, []string{img})
-	s, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	a, view := dropViewShelf(t, []string{img})
+	a.level = 2
+	view.Frame()
+	if !view.HasText("放入托盘") || !view.HasText("投放") {
+		t.Fatalf("the zone did not draw in the sheet; texts %v", view.Texts())
 	}
-	t.Cleanup(func() { s.Close() })
-	a.store = s
-	a.dropZoneSnap(true)
-	spacer, rowH, _ := a.earLayout()
-	minH := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom + dropZoneNeedH()
-	if got := a.panelContentH(); got < minH {
-		t.Fatalf("panelContentH = %d, zone needs %d", got, minH)
-	}
-	// A taller stage keeps its height — the zone never shrinks the panel.
-	a2, _, _ := snapShelf(t, []string{img})
-	a2.store = s
-	for i := range 40 {
-		f := writeFile(t, dir, fmt.Sprintf("tall-%02d.txt", i), []byte("x"))
-		if err := s.AddFiles([]string{f}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	a2.dropZoneSnap(true)
-	tall := a2.currentStageH()
-	if a2.panelContentH() != spacer+rowH+earBottomGap+moduleBarH+stageGap+panelPadBottom+min(tall, stageMaxH) {
-		t.Fatalf("zone shrank the panel: %d", a2.panelContentH())
+	if got := a.desiredFrame().Height; got < sheetH {
+		t.Fatalf("the sheet's frame is %d tall, want at least %d", got, sheetH)
 	}
 }
 
@@ -588,7 +572,7 @@ func TestDropZoneHidesReleasePill(t *testing.T) {
 	// Without the zone the capsule still shows.
 	a2, view2 := dropViewShelf(t, nil)
 	a2.drop.on = false
-	view2 = ui.NewTester(a2.view, panelWidth, panelHeight)
+	view2 = ui.NewTester(a2.view, sheetW, sheetH)
 	if !view2.HasText("松开放入") {
 		t.Fatalf("idle drag lost the capsule; texts %v", view2.Texts())
 	}

@@ -132,7 +132,7 @@ func newUsageFixture(t *testing.T, on bool) *usageFixture {
 		now:         func() time.Time { return *fx.now },
 	})
 	a.registerPage(fx.f)
-	fx.view = ui.NewTester(a.view, panelWidth, panelHeight)
+	fx.view = ui.NewTester(a.view, sheetW, sheetH)
 	return fx
 }
 
@@ -193,7 +193,7 @@ func TestUsagePageSwitchTriggersOneFetchAndScan(t *testing.T) {
 		t.Fatalf("one local scan expected, got %d", fx.scan.scans)
 	}
 	fx.view.Frame()
-	for _, want := range []string{"Codex", "Plus", "Claude Code", "Pro", "95%", "4:25 后重置", "本机用量", "刚刚更新"} {
+	for _, want := range []string{"Codex", "Plus", "Claude Code", "Pro", "95%", "4:25 后", "本机用量", "刚刚更新"} {
 		if !fx.view.HasText(want) {
 			t.Fatalf("page missing %q; texts=%v", want, fx.view.Texts())
 		}
@@ -294,7 +294,7 @@ func TestUsageRefreshClickShowsProgress(t *testing.T) {
 	}
 	flush()
 	fx.f.tick(*fx.now)
-	if _, count := fx.f.moduleTitle(); count == "正在更新…" {
+	if _, count := fx.f.title(); count == "正在更新…" {
 		t.Fatal("finished work must settle back to the data stamp")
 	}
 }
@@ -478,7 +478,7 @@ func TestUsageKpiFormats(t *testing.T) {
 	fx.view.Click("AI 用量")
 	fx.f.tick(*fx.now)
 	fx.view.Frame()
-	for _, want := range []string{"164M", "626", "≈$42.96+", "143 条没有价格", "98%", "输入2.5M·输出467K·缓存161M"} {
+	for _, want := range []string{"164M", "626", "≈$42.96+", "98%"} {
 		if !fx.view.HasText(want) {
 			t.Fatalf("KPI %q missing; texts=%v", want, fx.view.Texts())
 		}
@@ -598,7 +598,7 @@ func TestUsageSettingsTableLockedWhileOff(t *testing.T) {
 
 // The card's logo sits on the ring's centre: render one quotaRing, find
 // the logo's ink pixels by colour and check their centroid is the circle
-// centre — (32, 32) inside the 64pt box at the view's origin.
+// centre — (25, 25) inside the 50pt box at the view's origin.
 func TestQuotaRingLogoCentred(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -621,7 +621,7 @@ func TestQuotaRingLogoCentred(t *testing.T) {
 			now := *fx.now
 			view := ui.NewTester(func(c *ui.Context) {
 				fx.f.quotaRing(c, tc.tool, okQuota(tc.tool, "Plus", now), false)
-			}, 64, 64)
+			}, usageRingSize, usageRingSize)
 			view.Frame()
 			img := view.Image()
 			b := img.Bounds()
@@ -641,8 +641,8 @@ func TestQuotaRingLogoCentred(t *testing.T) {
 				t.Fatalf("no %s logo pixels found", tc.name)
 			}
 			cx, cy := sx/n, sy/n
-			if math.Abs(cx-32) > 1.5 || math.Abs(cy-32) > 1.5 {
-				t.Fatalf("%s logo centroid (%.1f, %.1f) is not the ring centre (32, 32); %d ink px",
+			if math.Abs(cx-usageRingSize/2) > 1.5 || math.Abs(cy-usageRingSize/2) > 1.5 {
+				t.Fatalf("%s logo centroid (%.1f, %.1f) is not the ring centre (25, 25); %d ink px",
 					tc.name, cx, cy, int(n))
 			}
 		})
@@ -1120,7 +1120,7 @@ func TestUsagePageScreenshot(t *testing.T) {
 	s.claude.q = okQuota(aiusage.ToolClaude, "Pro", now)
 	s.claude.q.FiveHour.UsedPct = 53
 	s.f.tick(now)
-	write("usage-main", ui.NewTester(s.a.view, panelWidth, panelHeight))
+	write("usage-main", ui.NewTester(s.a.view, sheetW, sheetH))
 	s2 := newUsageShot(now)
 	good := okQuota(aiusage.ToolCodex, "Plus", now)
 	good.FetchedAt = now.Add(-12 * time.Minute)
@@ -1133,7 +1133,7 @@ func TestUsagePageScreenshot(t *testing.T) {
 	}
 	s2.f.tick(now)
 	s2.f.localAt = now.Add(-12 * time.Minute) // the mock's stale stamp
-	write("usage-states", ui.NewTester(s2.a.view, panelWidth, panelHeight))
+	write("usage-states", ui.NewTester(s2.a.view, sheetW, sheetH))
 
 	// The first-scan progress card (mock frame 3's bottom) with the two
 	// other card states: 未登录 and 快用完了.
@@ -1149,5 +1149,5 @@ func TestUsagePageScreenshot(t *testing.T) {
 	s3.f.scanned = false
 	s3.f.scanDone.Store(37)
 	s3.f.scanTotal.Store(100)
-	write("usage-scan", ui.NewTester(s3.a.view, panelWidth, panelHeight))
+	write("usage-scan", ui.NewTester(s3.a.view, sheetW, sheetH))
 }

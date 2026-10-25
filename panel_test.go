@@ -34,7 +34,7 @@ func TestLongTextPreviewKeepsFullPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &shelf{store: s}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if !view.HasText("开头 😀") {
 		t.Fatal("text preview lost its readable beginning")
 	}
@@ -86,7 +86,7 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if !view.HasText("清空") {
 		t.Fatal("clear-all button missing with items present")
 	}
@@ -183,7 +183,7 @@ func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if err := view.Click("清空"); err != nil {
 		t.Fatalf("tray clear: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
 // housing — never over it — and the page content starts below the notch.
 // While the clipboard search holds the keyboard the window drops under the
 // menu bar, so the bar moves below it.
-func TestEarBarFlanksTheNotch(t *testing.T) {
+func TestBandFlanksTheNotch(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -224,32 +224,33 @@ func TestEarBarFlanksTheNotch(t *testing.T) {
 		t.Fatal(err)
 	}
 	const notchW, notchH = 180, 32
-	a := &shelf{store: s, topInset: notchH, notchW: notchW, notchH: notchH, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	housingL := float32(panelWidth-notchW) / 2
+	a := &shelf{store: s, level: 2, topInset: notchH, notchW: notchW, notchH: notchH, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	view := ui.NewTester(a.view, sheetW, sheetH)
+	housingL := float32(sheetW-notchW) / 2
 	housingR := housingL + notchW
-	for _, label := range []string{"托盘", "剪贴板", "设置", "收起"} {
+	for _, label := range []string{"设置", "收起"} {
 		r, ok := view.Find(label)
 		if !ok {
-			t.Fatalf("ear button %q missing", label)
+			t.Fatalf("band button %q missing", label)
 		}
 		if r.Y+r.H > notchH {
-			t.Fatalf("ear button %q at %+v leaves the notch band", label, r)
+			t.Fatalf("band button %q at %+v leaves the notch band", label, r)
 		}
 		if r.X+r.W > housingL && r.X < housingR {
-			t.Fatalf("ear button %q at %+v sits under the camera housing [%v, %v]", label, r, housingL, housingR)
+			t.Fatalf("band button %q at %+v sits under the camera housing [%v, %v]", label, r, housingL, housingR)
 		}
 	}
 	if r, ok := view.Find("清空"); !ok || r.Y < notchH {
-		t.Fatalf("the module bar's 清空 must sit below the notch: %+v %v", r, ok)
+		t.Fatalf("the back row's 清空 must sit below the notch: %+v %v", r, ok)
 	}
+	// The page icons live in the back row, below the band.
 	if err := view.Click("剪贴板"); err != nil || a.tab != pageClipboard {
-		t.Fatalf("the ear icon must switch pages: %v tab=%s", err, a.tab)
+		t.Fatalf("the back-row page icon must switch pages: %v tab=%s", err, a.tab)
 	}
 	a.focusMode = true
 	view.Frame()
-	for _, label := range []string{"托盘", "收起"} {
-		if r, ok := view.Find(label); !ok || r.Y < notchH {
+	for _, label := range []string{"设置", "收起"} {
+		if r, ok := view.Find(label); !ok || r.Y < notchH+headerTopGap {
 			t.Fatalf("with the keyboard taken, %q must move below the menu bar: %+v %v", label, r, ok)
 		}
 	}
@@ -258,48 +259,44 @@ func TestEarBarFlanksTheNotch(t *testing.T) {
 	}
 }
 
-// The activity strip holds the first liveMax modules with something under
-// way, on every page; sharing the strip asks each for its compact form.
-func TestActivityStripShowsUpToTwoLiveModules(t *testing.T) {
+// The sheet's left ear holds the first chipMax live modules; the island
+// has no activity chips at all (its mini player carries the track).
+func TestActivityChipsShowUpToTwoLiveModules(t *testing.T) {
 	idle := &fakeActivity{label: "空闲"}
 	first := &fakeActivity{label: "第一个活动", isLive: true}
 	second := &fakeActivity{label: "第二个活动", isLive: true}
 	third := &fakeActivity{label: "第三个活动", isLive: true}
-	a := &shelf{tab: pageTray}
+	a := &shelf{tab: pageTray, level: 2}
 	a.modules = []module{idle, first, second, third}
-	for _, tab := range []pageID{pageTray, pageClipboard} {
-		a.tab = tab
-		first.compact, second.compact = false, false
-		view := ui.NewTester(a.view, panelWidth, panelHeight)
-		if view.HasText("空闲") || view.HasText("第三个活动") {
-			t.Fatalf("page %s: an idle activity and a third live one must not show", tab)
-		}
-		if !view.HasText("第一个活动") || !view.HasText("第二个活动") {
-			t.Fatalf("page %s: the first two live activities must show", tab)
-		}
-		if !first.compact || !second.compact {
-			t.Fatalf("page %s: two activities side by side must both be compact", tab)
-		}
+	view := ui.NewTester(a.view, sheetW, sheetH)
+	if view.HasText("空闲") || view.HasText("第三个活动") {
+		t.Fatalf("an idle activity and a third live one must not show")
 	}
-	a.modules = []module{first}
-	ui.NewTester(a.view, panelWidth, panelHeight)
-	if first.compact {
-		t.Fatal("a lone activity must get the full strip")
+	if !view.HasText("第一个活动") || !view.HasText("第二个活动") {
+		t.Fatalf("the first two live activities must show")
+	}
+	a.level = 1
+	view = ui.NewTester(a.view, sheetW, sheetH)
+	if view.HasText("第一个活动") || view.HasText("第二个活动") {
+		t.Fatal("the island must not draw activity chips")
 	}
 }
 
 type fakeActivity struct {
-	label   string
-	isLive  bool
-	compact bool
+	label  string
+	isLive bool
 }
 
 func (f *fakeActivity) tick(time.Time) {}
 func (f *fakeActivity) live() bool     { return f.isLive }
 
-func (f *fakeActivity) activity(c *ui.Context, compact bool) {
-	f.compact = compact
-	ui.Text(c, f.label).FontSize(12).TextColor(ink)
+func (f *fakeActivity) chip(c *ui.Context) ui.Element {
+	box := ui.Row(c.Key("chip-"+f.label)).Height(chipH).Padding(0, 6, 0, 6).Radius(chipH / 2).
+		Background(fill1).AlignItems(ui.Center)
+	box.Children(func() {
+		ui.Text(c, f.label).FontSize(11).TextColor(ink)
+	})
+	return box
 }
 
 // Resting on an ear icon shows its name in a tip the user can read: text
@@ -307,7 +304,7 @@ func (f *fakeActivity) activity(c *ui.Context, compact bool) {
 // transparent background left the text invisible on a blank white chip).
 func TestEarIconTooltipIsReadable(t *testing.T) {
 	a := &shelf{topInset: 32, notchW: 180, notchH: 32}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	r, ok := view.Find("剪贴板")
 	if !ok {
 		t.Fatal("clipboard ear icon missing")
@@ -350,7 +347,7 @@ func TestNotchPeekClickExpandsShelf(t *testing.T) {
 	}
 	defer s.Close()
 	a := &shelf{store: s, peeking: true, peekProgress: 1, notchW: 182, notchH: 32, topInset: 32}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if _, ok := view.Find("展开 Shelf"); !ok {
 		t.Fatal("peek pill missing its expand affordance (chevron)")
 	}
@@ -480,7 +477,7 @@ func TestMouseDownAwayFromPeekDoesNotExpand(t *testing.T) {
 // Hover must not move or resize the native surface; only the drawing changes.
 // Keeping the strip anchored also prevents it from covering the Dock.
 func TestHoverKeepsWindowAnchored(t *testing.T) {
-	a := &shelf{x: 470, y: 0, h: 380, notchX: 600, notchW: 180, notchH: 32}
+	a := &shelf{x: 470, y: 0, notchX: 600, notchW: 180, notchH: 32}
 	idle := a.desiredFrame()
 	for _, progress := range []float32{0, 0.2, 0.8, 1, 0.4, 0} {
 		a.peeking = progress > 0
@@ -515,7 +512,7 @@ func TestHoverKeepsWindowAnchored(t *testing.T) {
 // is in-band the corridor reaches the landing row below the bar, which
 // the grown window covers.
 func TestDragGuardLandsInsideCollapsedStrip(t *testing.T) {
-	a := &shelf{x: 470, y: 0, h: 380, notchX: 600, notchW: 180, notchH: 32}
+	a := &shelf{x: 470, y: 0, notchX: 600, notchW: 180, notchH: 32}
 	strip := a.desiredFrame()
 	g := a.dragGuardRegion()
 	if g.Y != strip.Y {
@@ -546,7 +543,7 @@ func TestDragGuardLandsInsideCollapsedStrip(t *testing.T) {
 // 测试环境没有真实窗口，tester 尺寸即窗口帧。
 func TestPeekShellFlushWithWindowTop(t *testing.T) {
 	a := &shelf{peeking: true, peekProgress: 1, notchW: 180, notchH: 32}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	img := view.Image()
 	b := img.Bounds()
 	first, last := -1, -1
@@ -619,7 +616,7 @@ func TestPinBadgesStayInsideTheirTiles(t *testing.T) {
 		}
 	}
 	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	tile, ok := view.Find("pinned two") // 最新置顶项排第一格
 	if !ok {
 		t.Fatal("pinned tile missing")
@@ -634,20 +631,24 @@ func TestPinBadgesStayInsideTheirTiles(t *testing.T) {
 	}
 }
 
-// The panel's height follows the page: it grows with the tray's rows until
-// the stage reaches stageMaxH (then the stage scrolls), and an activity
-// adds exactly its strip. desiredFrame is what syncWindowFrame applies on
-// every tick.
-func TestPanelHeightFollowsVisibleItems(t *testing.T) {
+// islandFrame and sheetFrame are the native window boxes the two levels
+// need, including the ear corners and the opening spring's room.
+func islandFrame() (int, int) { return openFrameRoom(islandW, islandH) }
+func sheetFrame() (int, int)  { return openFrameRoom(sheetW, sheetH) }
+
+// The shell has exactly two sizes, whatever the pages hold: the island's
+// 340 × 104 and the sheet's 420 × 250. Rows and live activities change the
+// content inside the fixed box, never the frame.
+func TestPanelSizeIsFixedPerLevel(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	a := &shelf{store: s, visible: true, level: 1, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	// place() 需要真实显示器（AppKit）；无窗口测试直接给定几何。
 	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
-	a.x, a.y, a.h = 455, 0, 900
+	a.x, a.y = 455, 0
 	add := func(n int) {
 		for range n {
 			if err := s.AddText(fmt.Sprintf("row %d", len(s.Items))); err != nil {
@@ -655,30 +656,37 @@ func TestPanelHeightFollowsVisibleItems(t *testing.T) {
 			}
 		}
 	}
-	empty := a.desiredFrame().Height
-	add(gridCols + 1) // two rows: past the empty stage's minimum
-	twoRows := a.desiredFrame().Height
-	if twoRows <= empty {
-		t.Fatalf("panel did not grow with items: %d -> %d", empty, twoRows)
+	island := a.desiredFrame()
+	iw, ih := islandFrame()
+	if island.Width != iw || island.Height != ih {
+		t.Fatalf("empty island frame = %d×%d, want %d×%d", island.Width, island.Height, iw, ih)
 	}
-	add(gridCols * 4) // six rows: past stageMaxH
-	full := a.desiredFrame().Height
+	add(gridCols * 4)
+	if got := a.desiredFrame(); got != island {
+		t.Fatalf("items resized the island: %+v -> %+v", island, got)
+	}
+	a.setLevel(2)
+	sheet := a.desiredFrame()
+	sw, sh := sheetFrame()
+	if sheet.Width != sw || sheet.Height != sh {
+		t.Fatalf("sheet frame = %d×%d, want %d×%d", sheet.Width, sheet.Height, sw, sh)
+	}
 	add(gridCols)
-	if got := a.desiredFrame().Height; got != full || full-twoRows != stageMaxH-(2*tileH+gridGap) {
-		t.Fatalf("a full stage must stop growing at stageMaxH: two rows %d, full %d, more %d", twoRows, full, got)
-	}
 	a.settings.IslandNowPlaying = true
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T", Artist: "A"}}
 	a.modules = []module{a.np}
-	if got := a.desiredFrame().Height; got != full+liveH+liveGap {
-		t.Fatalf("the activity strip must add exactly its own height: %d -> %d", full, got)
+	if got := a.desiredFrame(); got != sheet {
+		t.Fatalf("rows or a live activity resized the sheet: %+v -> %+v", sheet, got)
+	}
+	a.setLevel(1)
+	if got := a.desiredFrame(); got != island {
+		t.Fatalf("back on the island: %+v, want %+v", got, island)
 	}
 }
 
-// Switching pages must not resize the panel: the stage is sized for the
-// taller page, so a short tray and a long clipboard history share one
-// height and the switch is only a change of content.
-func TestPageSwitchKeepsPanelHeight(t *testing.T) {
+// Switching pages must not resize the shell: every page shares the same
+// 420 × 250 sheet and scrolls inside its 396 × 174 content box.
+func TestPageSwitchKeepsPanelSize(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -687,34 +695,32 @@ func TestPageSwitchKeepsPanelHeight(t *testing.T) {
 	if err := s.AddText("托盘里一条"); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 4 { // 4 rows: taller than the tray's one row, under stageMaxH
+	for i := range 12 {
 		if err := s.AddClipText(fmt.Sprintf("剪贴板 %d", i), ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	a := &shelf{store: s, visible: true, level: 2, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
-	a.x, a.y, a.h = 455, 0, 900
-	tray := a.desiredFrame().Height
+	a.x, a.y = 455, 0
+	tray := a.desiredFrame()
 	a.setTab(pageClipboard)
-	if clip := a.desiredFrame().Height; clip != tray {
-		t.Fatalf("switching to the clipboard resized the panel: %d -> %d", tray, clip)
+	if clip := a.desiredFrame(); clip != tray {
+		t.Fatalf("switching to the clipboard resized the sheet: %+v -> %+v", tray, clip)
 	}
-	// Content coming in still grows it.
+	// A longer list scrolls inside the box instead of growing the shell.
 	if err := s.AddClipText("再来一条", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.desiredFrame().Height; got <= tray {
-		t.Fatalf("a longer clipboard list must still grow the panel: %d -> %d", tray, got)
+	if got := a.desiredFrame(); got != tray {
+		t.Fatalf("a longer clipboard list resized the sheet: %+v -> %+v", tray, got)
 	}
 }
 
-// fakePage is a registered page outside the height-sharing group: the
-// panel must follow its own stage height instead of the tray/clipboard
-// group max. on flips enabled().
+// fakePage is a registered page used to prove the registry and the
+// disabled-page fallback. on flips enabled().
 type fakePage struct {
-	on     bool
-	height int
+	on bool
 }
 
 func (p *fakePage) id() pageID    { return "fake" }
@@ -722,82 +728,47 @@ func (p *fakePage) label() string { return "假页面" }
 func (p *fakePage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, textSymbol)
 }
-func (p *fakePage) enabled() bool      { return p.on }
-func (p *fakePage) sharesHeight() bool { return false }
-func (p *fakePage) stageH() int        { return p.height }
+func (p *fakePage) enabled() bool { return p.on }
 func (p *fakePage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	return ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Text(c, "假页面内容").FontSize(13).TextColor(ink)
 	})
 }
-func (p *fakePage) moduleTitle() (title, count string) { return "假页面", "" }
-func (p *fakePage) moduleTrailing(c *ui.Context, _ bool) []ui.Element {
+func (p *fakePage) title() (name, count string) { return "假页面", "" }
+func (p *fakePage) actions(c *ui.Context) []ui.Element {
 	return nil
 }
 
-// A page that opts out of height sharing owns the stage height: switching
-// to it eases the panel to its own measure, and switching back to a
-// sharing page restores the group height — while tray↔clipboard stays
-// constant (TestPageSwitchKeepsPanelHeight).
-func TestNonSharingPageDrivesPanelHeight(t *testing.T) {
-	s, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err := s.AddText("托盘里一条"); err != nil {
-		t.Fatal(err)
-	}
-	for i := range 4 {
-		if err := s.AddClipText(fmt.Sprintf("剪贴板 %d", i), ""); err != nil {
-			t.Fatal(err)
-		}
-	}
-	a := &shelf{store: s, visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+// A page registered later joins the page order after the built-ins and
+// draws inside the same fixed content box — the shell's size never
+// depends on which page is current.
+func TestRegisteredPageJoinsTheOrderAtFixedSize(t *testing.T) {
+	a := &shelf{visible: true, level: 2, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
-	a.x, a.y, a.h = 455, 0, 900
-
-	fake := &fakePage{on: true, height: 260}
+	a.x, a.y = 455, 0
+	fake := &fakePage{on: true}
 	a.registerPage(fake)
 	if got := a.pageIndex("fake"); got != 3 {
 		t.Fatalf("the fake page must register after the three built-ins, got index %d", got)
 	}
-
-	shared := a.desiredFrame().Height // tray: the group's taller stage (clipboard)
-	a.setTab(pageClipboard)
-	if got := a.desiredFrame().Height; got != shared {
-		t.Fatalf("tray→clipboard must keep the group height: %d -> %d", shared, got)
-	}
+	before := a.desiredFrame()
 	a.setTab("fake")
-	fixed := spacerH() + 8 + min(max(fake.stageH(), stageMinH), stageMaxH)
-	if got := a.desiredFrame().Height; got != fixed {
-		t.Fatalf("a non-sharing page must own the stage height: want %d, got %d", fixed, got)
+	if got := a.desiredFrame(); got != before {
+		t.Fatalf("a registered page resized the sheet: %+v -> %+v", before, got)
 	}
-	fake.height = 190
-	if got := a.desiredFrame().Height; got != spacerH()+8+190 {
-		t.Fatalf("the panel must follow the page's own stageH: want %d, got %d", spacerH()+8+190, got)
+	view := ui.NewTester(a.view, sheetW, sheetH)
+	if !view.HasText("假页面内容") {
+		t.Fatal("the fake page's content is missing")
 	}
-	a.setTab(pageTray)
-	if got := a.desiredFrame().Height; got != shared {
-		t.Fatalf("switching back must restore the group height: %d -> %d", fake.stageH(), got)
-	}
-}
-
-// spacerH is panelContentH without its stage: ears, module bar and the
-// bottom padding (no activity, no search hint).
-func spacerH() int {
-	a := &shelf{}
-	spacer, rowH, _ := a.earLayout()
-	return spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
 }
 
 // Switching off the current page (e.g. AI 用量's setting) folds the panel
 // back to the tray on the next frame; its ear icon also disappears.
 func TestDisabledCurrentPageFallsBackToTray(t *testing.T) {
 	a := &shelf{visible: true, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	fake := &fakePage{on: true, height: 200}
+	fake := &fakePage{on: true}
 	a.registerPage(fake)
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	a.setTab("fake")
 	view.Frame()
 	if !view.HasText("假页面内容") {
@@ -822,20 +793,23 @@ func TestDisabledCurrentPageFallsBackToTray(t *testing.T) {
 	}
 }
 
-// While the shell eases down to a shorter panel (a tab switch), the window
-// must keep the drawn height, or the shell's bottom is cut off; once the
-// drawn height arrives, the frame follows the content again.
+// While the sheet springs back to the island, the window keeps the sheet's
+// box until the shell has settled; then it shrinks to the island's box.
 func TestPanelFrameHoldsWhileShrinking(t *testing.T) {
-	a := &shelf{visible: true}
-	a.x, a.y, a.h = 475, 0, 560
-	target := a.panelH()
-	a.shownH = float32(target + 120)
-	if got := a.desiredFrame().Height; got != target+120 {
-		t.Fatalf("frame %d cuts the shell drawn at %d", got, target+120)
+	a := &shelf{visible: true, level: 1}
+	a.x, a.y = 475, 0
+	a.fx.levelK = 0.5 // mid-way back from the sheet
+	sw, _ := sheetFrame()
+	if got := a.desiredFrame().Width; got != sw {
+		t.Fatalf("frame %d wide cuts the shrinking shell, want %d", got, sw)
 	}
-	a.shownH = float32(target)
-	if got := a.desiredFrame().Height; got != target {
-		t.Fatalf("frame %d did not settle to the content height %d", got, target)
+	a.fx.levelK = 0
+	iw, ih := islandFrame()
+	if got := a.desiredFrame().Width; got != iw {
+		t.Fatalf("frame %d did not settle to the island's width %d", got, iw)
+	}
+	if got := a.desiredFrame().Height; got != ih {
+		t.Fatalf("frame %d did not settle to the island's height %d", got, ih)
 	}
 }
 
@@ -872,7 +846,7 @@ func TestTrayClearHidesClipboardCaptureInsteadOfDeleting(t *testing.T) {
 	}
 	managed := clip.Path
 	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 
 	if err := view.Click("清空"); err != nil {
 		t.Fatalf("tray clear: %v", err)
@@ -935,7 +909,7 @@ func TestTrayMenuRemoveHidesClipboardCapture(t *testing.T) {
 	clip := s.Items[0]
 	managed := clip.Path
 	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 
 	if err := view.RightClick(itemTitle(clip)); err != nil {
 		t.Fatalf("right-click clip: %v", err)

@@ -145,24 +145,21 @@ func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 	}
 }
 
-func TestNowPlayingActivityDrawsTrackAndControls(t *testing.T) {
+func TestNowPlayingChipDrawsTrackAndToggle(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}}
 	a.modules = []module{s.mod, &retentionModule{host: a}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	if !view.HasText("夜曲") || !view.HasText("周杰伦") {
-		t.Fatal("the activity must show title and artist")
+	view := ui.NewTester(a.view, sheetW, sheetH)
+	// The chip is a 22pt capsule: cover, bars and play/pause, named by the
+	// track (the words themselves live in the tooltip).
+	if _, ok := view.Find("夜曲"); !ok {
+		t.Fatalf("the chip must carry the track's name; texts %v", view.Texts())
 	}
-	for _, label := range []string{"上一首", "下一首"} {
-		if _, ok := view.Find(label); !ok {
-			t.Fatalf("a lone activity keeps its %s control", label)
-		}
-	}
-	// The strip sits above every page, not only the tray.
+	// The chip sits in the band above every page, not only the tray.
 	a.tab = pageClipboard
-	if !ui.NewTester(a.view, panelWidth, panelHeight).HasText("夜曲") {
-		t.Fatal("the clipboard page must keep the activity strip")
+	if _, ok := ui.NewTester(a.view, sheetW, sheetH).Find("夜曲"); !ok {
+		t.Fatal("the clipboard page must keep the activity chip")
 	}
 	a.tab = pageTray
 	// Clicking the play/pause button must send the toggle command to the
@@ -176,7 +173,7 @@ func TestNowPlayingActivityDrawsTrackAndControls(t *testing.T) {
 	if s.mod.last.Playing {
 		t.Fatal("the press must optimistically pause the shown state")
 	}
-	next := ui.NewTester(a.view, panelWidth, panelHeight)
+	next := ui.NewTester(a.view, sheetW, sheetH)
 	if err := next.Click("播放"); err != nil {
 		t.Fatalf("the button must now offer play: %v", err)
 	}
@@ -262,7 +259,7 @@ func TestPeekWingsShowCoverAndBarsOnly(t *testing.T) {
 	s.mod.host = a
 	a.np = s.mod
 	a.modules = []module{s.mod}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	// The wings carry no title, artist, clock or transport: the only
 	// label is the accessibility one, which opens the shelf.
 	for _, txt := range []string{"夜曲", "周杰伦", "暂停", "上一首", "下一首"} {
@@ -318,7 +315,7 @@ func TestPeekWingsLabelWithoutATitle(t *testing.T) {
 		peekProgress: 1,
 	}
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Playing: true}}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if _, ok := view.Find("展开 Shelf"); !ok {
 		t.Fatalf("the untitled wings must still be labeled; texts %v", view.Texts())
 	}
@@ -341,7 +338,7 @@ func TestPeekPressExpandsAndSendsNoCommand(t *testing.T) {
 	s.mod.host = a
 	a.np = s.mod
 	a.modules = []module{s.mod}
-	_ = ui.NewTester(a.view, panelWidth, panelHeight) // draws the pill
+	_ = ui.NewTester(a.view, sheetW, sheetH) // draws the pill
 	origReg, origUnreg := registerKey, unregisterKey
 	registerKey = func(string, func()) error { return nil }
 	unregisterKey = func(string) {}

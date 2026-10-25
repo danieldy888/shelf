@@ -91,7 +91,8 @@ func fakeTrack(a *shelf, playing bool) {
 	a.np = mod
 }
 
-// expandShelf puts the real notch window into the fully expanded state.
+// expandShelf puts the real notch window into the fully expanded state:
+// the sheet on its current page, with the springs already at rest.
 func expandShelf(t *testing.T, a *shelf) {
 	t.Helper()
 	onMain(func() {
@@ -99,6 +100,8 @@ func expandShelf(t *testing.T, a *shelf) {
 		a.peeking = true
 		a.peekProgress, a.peekFrom = 1, 1
 		a.show(false)
+		a.setLevel(2)
+		a.jumpLevel = true
 		a.progress, a.animationFrom = 1, 1
 		a.animationStart = time.Time{}
 		a.syncMousePassThrough()

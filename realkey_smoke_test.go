@@ -392,12 +392,12 @@ func TestSmokeUsageRefreshAnswers(t *testing.T) {
 
 	// The button itself: a real pointer click on the refresh glyph answers
 	// with the wait instead of silence (「刚查过，N 秒后可再刷新」). The glyph
-	// sits 54 pt under the window top and 524 pt from its left edge; a
+	// sits in the back row, 45 pt under the window top and 413 pt from its
 	// sentinel status tells a hit from a miss.
 	b := a.win.Bounds()
 	var status string
 	onMain(func() { a.status = "click-probe" })
-	clickAt(t, float64(b.X)+524, float64(b.Y)+54)
+	clickAt(t, float64(b.X)+413, float64(b.Y)+45)
 	onMain(func() { status = a.status })
 	fix2Shot(t, a, "refresh-held-back")
 	t.Logf("refresh click status=%q", status)

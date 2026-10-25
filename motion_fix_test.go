@@ -24,7 +24,7 @@ import (
 // window must hold the ears on every frame of the open flight and at rest.
 func TestFrameAlwaysHoldsTheEars(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	for i := range 120 {
@@ -35,7 +35,8 @@ func TestFrameAlwaysHoldsTheEars(t *testing.T) {
 		}
 		view.Advance(16 * time.Millisecond)
 	}
-	if got, want := a.desiredFrame().Width, panelWidth+2*earR; got != want {
+	sw, _ := sheetFrame()
+	if got, want := a.desiredFrame().Width, sw; got != want {
 		t.Fatalf("the settled frame is %d wide, want the panel plus both ears (%d)", got, want)
 	}
 	// The idle strip holds the peek shape's ears too.
@@ -50,7 +51,7 @@ func TestFrameAlwaysHoldsTheEars(t *testing.T) {
 // spring's outward velocity does not carry into the fold.
 func TestMidOpenCloseNeverGrowsOutward(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	// Open partway: long enough to be fast-moving, not settled.
@@ -79,7 +80,7 @@ func TestMidOpenCloseNeverGrowsOutward(t *testing.T) {
 // old spring's inward velocity wears off.
 func TestMidCloseReopenIsContinuous(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	for range 40 {
@@ -94,7 +95,7 @@ func TestMidCloseReopenIsContinuous(t *testing.T) {
 	a.visible = true // reopen mid-fold
 	reopenedH := a.fx.h
 	prevH := reopenedH
-	targetH := float32(a.panelH() - 8)
+	targetH := float32(a.panelH())
 	for i := range 60 {
 		view.Frame()
 		if i == 1 && a.fx.h <= reopenedH {
@@ -116,7 +117,7 @@ func TestMidCloseReopenIsContinuous(t *testing.T) {
 // eased progress still says "open".
 func TestFoldedShellRestoresClicksAndTheStrip(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	for range 40 {
@@ -145,7 +146,7 @@ func TestFoldedShellRestoresClicksAndTheStrip(t *testing.T) {
 // notch band is sub-point, not a visible snap.
 func TestCloseTailHasNoVisibleSnap(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	for range 40 {
@@ -173,53 +174,48 @@ func TestCloseTailHasNoVisibleSnap(t *testing.T) {
 	}
 }
 
-// tallPage is a registered test page taller than the tray, for the closing
-// freeze test (#18).
+// tallPage is a registered test page with content taller than the fixed
+// content box, for the closing freeze test (#18).
 type tallPage struct{ host *shelf }
 
-func (p *tallPage) id() pageID         { return "tall" }
-func (p *tallPage) label() string      { return "高页" }
-func (p *tallPage) enabled() bool      { return true }
-func (p *tallPage) stageH() int        { return 400 }
-func (p *tallPage) sharesHeight() bool { return false }
+func (p *tallPage) id() pageID    { return "tall" }
+func (p *tallPage) label() string { return "高页" }
+func (p *tallPage) enabled() bool { return true }
 func (p *tallPage) icon(c *ui.Context, active bool) ui.Element {
 	return ui.Box(c).Size(16, 16)
 }
 func (p *tallPage) body(c *ui.Context, over bool, live bool) ui.Element {
 	return ui.Box(c).Grow(1)
 }
-func (p *tallPage) moduleTitle() (string, string) { return "高页", "" }
-func (p *tallPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
+func (p *tallPage) title() (string, string) { return "高页", "" }
+func (p *tallPage) actions(c *ui.Context) []ui.Element {
 	return nil
 }
 
-// #18: the closing height freeze lasts while the drawn shell is still
-// folding (openK), not just while the tick's progress says open — a page
-// taller than the tray must not jump at the fold's tail.
+// #18: the closing frame follows the drawn shell while it folds, so the
+// sheet's bottom is never cut off at the fold's tail.
 func TestClosingFreezeFollowsTheDrawnShell(t *testing.T) {
 	a := motionWindow()
 	a.registerPage(&tallPage{host: a})
-	a.tab = "tall"
-	a.visible = true
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	a.tab, a.level, a.visible = "tall", 2, true
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	for range 40 {
 		view.Frame()
 		view.Advance(16 * time.Millisecond)
 	}
-	tallH := a.shownH
-	if tallH < 350 {
-		t.Fatalf("the tall page did not size the panel: %.0f", tallH)
+	if got := a.desiredFrame().Height; got < sheetH {
+		t.Fatalf("the settled sheet frame is %d tall, want at least %d", got, sheetH)
 	}
-	a.hide(hideExplicit) // resets the tab to the tray: panelH drops at once
+	a.hide(hideExplicit) // the view state stays for the 120 ms fade
 	a.progress = 0       // the tick's EaseOut already ended; the drawn spring has not
 	for i := range 30 {
 		view.Frame()
 		if a.fx.openK <= 0.01 {
 			break
 		}
-		if a.shownH != tallH {
-			t.Fatalf("frame %d: the frozen height jumped to %.1f mid-fold (openK %.3f)",
-				i, a.shownH, a.fx.openK)
+		if drawn := int(a.fx.h + 0.5); a.desiredFrame().Height+2 < drawn {
+			t.Fatalf("frame %d cuts the shell drawn at %d (openK %.3f)",
+				i, drawn, a.fx.openK)
 		}
 		view.Advance(16 * time.Millisecond)
 	}
@@ -282,24 +278,26 @@ func TestHeadlessThumbnailNeverTouchesTheWindow(t *testing.T) {
 
 // #22: the drop zone changing panelH re-syncs the window on the same
 // frame, not at the next 30ms tick.
-func TestDropZoneHeightSyncsTheWindowAtOnce(t *testing.T) {
+// #22: the drop zone is content inside the fixed sheet, so the window's
+// size must not change when a drag appears or leaves.
+func TestDropZoneKeepsTheSheetSize(t *testing.T) {
 	a := motionWindow()
 	a.visible = true
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	for range 40 {
 		view.Frame()
 		view.Advance(16 * time.Millisecond)
 	}
-	before := a.frame.Height
+	before := a.frame
 	dir := t.TempDir()
 	img := writeFile(t, dir, "1.png", testPNGBytes(t))
 	t.Setenv("SHELF_DEBUG_DROP_FILES", img)
 	view.Frame()
-	if a.frame.Height <= before {
-		t.Fatalf("the window kept its %dpt height with the drop zone up", a.frame.Height)
+	if a.frame != before {
+		t.Fatalf("the drop zone resized the window: %+v -> %+v", before, a.frame)
 	}
-	if want := a.desiredFrame().Height; a.frame.Height != want {
-		t.Fatalf("window height %d, want the synced %d", a.frame.Height, want)
+	if !view.HasText("放入托盘") {
+		t.Fatalf("the zone did not draw; texts %v", view.Texts())
 	}
 	t.Setenv("SHELF_DEBUG_DROP_FILES", "")
 	view.Frame()
@@ -308,8 +306,8 @@ func TestDropZoneHeightSyncsTheWindowAtOnce(t *testing.T) {
 		view.Frame()
 		view.Advance(16 * time.Millisecond)
 	}
-	if a.frame.Height != before {
-		t.Fatalf("after the zone the window is %dpt tall, want the original %d", a.frame.Height, before)
+	if a.frame != before {
+		t.Fatalf("after the zone the window is %+v, want the original %+v", a.frame, before)
 	}
 	// The frame's width still holds the ears after every sync.
 	if a.frame.Width < int(a.fx.w+0.5)+2*earR-1 {
@@ -326,7 +324,7 @@ func TestOpeningFrameStaysAlignedAndFreezesPeekMorph(t *testing.T) {
 	dir := t.TempDir()
 	img := writeFile(t, dir, "1.png", testPNGBytes(t))
 	t.Setenv("SHELF_DEBUG_DROP_FILES", img)
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	// Start a peek morph partway (as a drag or hover wings does), then open.
 	a.dragging, a.peeking = true, true
 	view.Frame()
@@ -382,7 +380,7 @@ func TestClosingFollowsCurrentPeekAfterOpeningStateChanges(t *testing.T) {
 				a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "Track"}}
 				a.modules = []module{a.np}
 				a.dragging = name == "drag ends"
-				v := ui.NewTester(a.view, panelWidth, panelHeight)
+				v := ui.NewTester(a.view, sheetW, sheetH)
 				v.Frame()
 				a.peeking = true
 				for range 24 {

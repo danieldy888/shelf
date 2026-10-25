@@ -21,13 +21,13 @@ import (
 // tests never reach the window.
 func motionShelf() *shelf {
 	return &shelf{
+		level:        2,
 		notchX:       600,
 		notchY:       0,
 		notchW:       180,
 		notchH:       32,
 		x:            410,
 		y:            0,
-		h:            560,
 		thumbnails:   map[string]*ui.Bitmap{},
 		thumbPending: map[string]bool{},
 		appNames:     map[string]string{},
@@ -48,10 +48,10 @@ func motionWindow() *shelf {
 // bottom corners are never cut — then settle back to the panel's size.
 func TestOpeningIsElasticAndTheFrameNeverClips(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame() // the idle frame the spring starts from
 	a.visible = true
-	target := float32(a.panelH() - 8)
+	target := float32(a.panelH())
 	peak := float32(0)
 	for i := range 120 {
 		view.Frame()
@@ -78,8 +78,9 @@ func TestOpeningIsElasticAndTheFrameNeverClips(t *testing.T) {
 	if got := a.fx.h; got > target+0.5 || got < target-2 {
 		t.Fatalf("the opening settled at %.1f, not the panel's %.1f", got, target)
 	}
-	if got := a.desiredFrame().Width; got != panelWidth+2*earR {
-		t.Fatalf("the settled frame is %d wide, want the panel plus both ears (%d)", got, panelWidth+2*earR)
+	sw, _ := sheetFrame()
+	if got := a.desiredFrame().Width; got != sw {
+		t.Fatalf("the settled frame is %d wide, want the panel plus both ears (%d)", got, sw)
 	}
 }
 
@@ -88,7 +89,7 @@ func TestOpeningIsElasticAndTheFrameNeverClips(t *testing.T) {
 // notch band without dipping below it.
 func TestClosingFoldsCrisp(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	for range 120 {
@@ -203,7 +204,7 @@ func TestRowsFadeOnlyInTheBand(t *testing.T) {
 		{"row past the band", 60, true, false, 0},
 		{"row scrolled fully out", -46, true, true, 0},
 		{"row straddling the top edge", -20, true, false, 1},
-		{"last row at the bottom band", 254, false, true, 1},
+		{"last row at the bottom band", 268, false, true, 1},
 		{"row above the bottom band", 200, false, true, 0},
 		{"bands off", 0, false, false, 0},
 	}
@@ -307,7 +308,7 @@ func TestLiveJobDrivesTheCapsuleAndHandsOverToItsVerdict(t *testing.T) {
 	j.total.Store(3)
 	j.done.Store(1)
 	a.conv = &converter{host: a, job: j}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	if a.fb.text != "正在转成 JPEG · 2/3" || !a.fb.live {
 		t.Fatalf("capsule = %q live=%v, want the job's progress", a.fb.text, a.fb.live)
@@ -454,7 +455,7 @@ func TestLiveCapsuleRearmsAfterAToastExpires(t *testing.T) {
 	j.total.Store(3)
 	j.done.Store(1)
 	a.conv = &converter{host: a, job: j}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	if !a.fb.live {
 		t.Fatal("the job's capsule is not up")
@@ -487,7 +488,7 @@ func TestLiveCapsuleRearmsAfterAToastExpires(t *testing.T) {
 // holds for its full span from the first drawn frame.
 func TestToastPostedWhileClosingStillShows(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.visible = true
 	for range 40 {
@@ -546,7 +547,7 @@ func TestCollapsedToastKeepsItsClockInThePill(t *testing.T) {
 // its drawn edge — nothing may paint over the menu bar.
 func TestCapsuleGrowNeverPaintsPastTheShell(t *testing.T) {
 	a := motionWindow()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame() // the idle frame the grow starts from
 	a.toastStatus("已压缩 3 张 · 4.6 MB → 1.8 MB", time.Now().Add(3*time.Second), statusOK)
 	view.Frame()
@@ -679,7 +680,7 @@ func TestWingsFadeOutWithTheShell(t *testing.T) {
 	// show, drawn at their fading opacity.
 	view := ui.NewTester(func(c *ui.Context) {
 		a.peekView(c, 284, 36, 0, 0.6, 0, false, false)
-	}, panelWidth, panelHeight)
+	}, sheetW, sheetH)
 	view.Frame()
 	if _, ok := view.Find("正在播放：Fashion Killa · 展开 Shelf"); !ok {
 		t.Fatal("the wings vanished mid-retract instead of fading with the shell")

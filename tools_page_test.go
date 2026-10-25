@@ -25,7 +25,7 @@ func TestToolsPageRenders(t *testing.T) {
 	}
 	defer s.Close()
 	a := &shelf{store: s, tab: pageTools, visible: true}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if !view.HasText("工具") {
 		t.Fatal("module bar did not show 工具")
 	}
@@ -97,7 +97,7 @@ func TestToolsPageEditMode(t *testing.T) {
 	}
 	defer s.Close()
 	a := &shelf{store: s, tab: pageTools, visible: true, dataDir: t.TempDir()}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if err := view.Click("编辑"); err != nil {
 		t.Fatalf("pencil button missing: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestToolsPagePicker(t *testing.T) {
 		t.Fatal("tools page missing")
 	}
 	p.editing, p.picking = true, true
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	if !view.HasText("卡片目录") {
 		t.Fatal("picker title missing")
 	}
@@ -265,7 +265,7 @@ func TestToolsAwakeChipGetsItsOwnPress(t *testing.T) {
 	a.awake = &awakeModule{host: a, create: power.create, release: power.release}
 	a.toolsLay = &l
 	a.mutateTools(func(l *layout.Layout) { l.SetSpan("awake", 2) }) // dataDir empty: memory only
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	r, ok := view.Find("30 分钟")
 	if !ok {
 		t.Fatal("awake chip missing")
@@ -317,7 +317,7 @@ func TestToolsStillLongPressEntersEdit(t *testing.T) {
 	}
 	defer s.Close()
 	a := &shelf{store: s, tab: pageTools, visible: true}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	r, ok := view.Find("框选文字")
 	if !ok {
 		t.Fatal("ocr card missing")
@@ -365,7 +365,7 @@ func TestToolsSettleEndsWhenFlightNeverMoves(t *testing.T) {
 	}
 	defer s.Close()
 	a := &shelf{store: s, tab: pageTools, visible: true, dataDir: t.TempDir()}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.SetPreferences(ui.Preferences{ReduceMotion: true})
 	r, ok := view.Find("打成 zip")
 	if !ok {
@@ -424,7 +424,7 @@ func TestToolsGridScrollsPastThreeRows(t *testing.T) {
 	a := &shelf{store: s, tab: pageTools, visible: true}
 	l := toolsOverflowLayout()
 	a.toolsLay = &l
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	p := a.toolsPage()
 	first, ok := view.Find("打成 zip")
 	if !ok {
@@ -466,18 +466,20 @@ func TestToolsDropInVisibleGridCommits(t *testing.T) {
 	a := &shelf{store: s, tab: pageTools, visible: true}
 	l := toolsOverflowLayout()
 	a.toolsLay = &l
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	p := a.toolsPage()
 	p.editing = true
 	view.Frame()
-	stage := float32(p.stageH())
+	stage := float32(contentH)
 	if p.scroll.MaxY <= 28 {
-		t.Fatalf("fixture did not overflow the stage enough: %+v", p.scroll)
+		t.Fatalf("fixture did not overflow the content box enough: %+v", p.scroll)
 	}
-	// Slightly past the shrunken bound, still inside the viewport.
-	py := p.scroll.Y + stage - p.scroll.MaxY + 24
-	if py >= p.scroll.Y+stage-4 {
-		t.Fatalf("no gap between the probe and the content bottom: py=%.1f", py)
+	// Near the viewport's bottom: the scrollEdges bound (contentH−MaxY) is
+	// negative for this overflowing grid, so a release here must still
+	// count as inside the stage rather than pin the card.
+	py := p.scroll.Y + stage - 20
+	if py < p.scroll.Y || py > p.scroll.Y+stage-4 {
+		t.Fatalf("probe is not inside the viewport: py=%.1f scroll=%+v", py, p.scroll)
 	}
 	last := l.Cards[len(l.Cards)-1].ID
 	oldCursor := cursorPoint
@@ -529,7 +531,7 @@ func TestToolsDragOutWriteFailureKeepsGrid(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	a.x, a.y, a.h = 400, 0, 600
+	a.x, a.y = 400, 0
 	p := &toolsPage{host: a, editing: true}
 	p.toolCardDrop(&toolPress{id: "zip", dragging: true, grabDX: 8, grabDY: 8, px: 20, py: 2000, index: 0}, cursorPoint())
 	if len(a.pins) != 0 {
@@ -563,7 +565,7 @@ func TestToolsDragOutWriteFailureKeepsGrid(t *testing.T) {
 
 func TestToolsExactFitGridDoesNotScroll(t *testing.T) {
 	a := &shelf{tab: pageTools, visible: true, store: mustStore(t)}
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	p := a.toolsPage()
 	view.Frame()
 	if p.scroll.MaxY != 0 {
@@ -575,7 +577,7 @@ func TestToolsEditBadgeIsVisibleAndClickableAtGridEdges(t *testing.T) {
 	for _, edge := range []string{"top", "left"} {
 		t.Run(edge, func(t *testing.T) {
 			a := &shelf{tab: pageTools, visible: true, store: mustStore(t)}
-			view := ui.NewTester(a.view, panelWidth, panelHeight)
+			view := ui.NewTester(a.view, sheetW, sheetH)
 			view.SetPreferences(ui.Preferences{ReduceMotion: true})
 			p := a.toolsPage()
 			p.editing = true

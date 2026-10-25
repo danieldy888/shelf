@@ -20,9 +20,8 @@ import (
 func secondaryShelfBelow() *shelf {
 	return &shelf{
 		dispBounds: mygo.Rectangle{X: 0, Y: 1440, Width: 1470, Height: 956},
-		x:          (1470 - panelWidth) / 2,
+		x:          (1470 - sheetW) / 2,
 		y:          1440,
-		h:          400,
 		notchX:     646, notchY: 1440, notchW: 180, notchH: 32,
 		hasNotch: true,
 	}
@@ -33,9 +32,8 @@ func secondaryShelfBelow() *shelf {
 func secondaryShelfNegative() *shelf {
 	return &shelf{
 		dispBounds: mygo.Rectangle{X: -1920, Y: -1080, Width: 1920, Height: 1080},
-		x:          -1920 + (1920-panelWidth)/2,
+		x:          -1920 + (1920-sheetW)/2,
 		y:          -1080,
-		h:          400,
 		notchX:     -1920 + (1920-180)/2, notchY: -1080, notchW: 180, notchH: 32,
 		hasNotch: false, // external panels have no camera housing: fallback box
 	}
@@ -63,7 +61,8 @@ func TestSecondaryDisplayKeepsStripAtItsOwnTop(t *testing.T) {
 			}
 			a.visible = true
 			panel := a.desiredFrame()
-			if panel.Y != a.dispBounds.Y || panel.Width != panelWidth+2*earR || panel.Height != a.panelH() {
+			sw, sh := sheetFrame()
+			if panel.Y != a.dispBounds.Y || panel.Width != sw || panel.Height != sh {
 				t.Fatalf("expanded panel %+v lost the display-top anchor", panel)
 			}
 			if panel.X+panel.Width/2 != cx {

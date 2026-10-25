@@ -17,7 +17,7 @@ import (
 func dragShelf() *shelf {
 	return &shelf{
 		notchX: 600, notchY: 0, notchW: 180, notchH: 32,
-		x: 410, y: 0, h: 560,
+		x: 410, y: 0,
 		dispBounds:   mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956},
 		dragging:     true,
 		settings:     settings.Default(),
@@ -134,7 +134,7 @@ func TestMonitorDragBandTransitions(t *testing.T) {
 	}
 	// Drag ends: the strip comes back to the no-drag resident frame.
 	idle := (&shelf{notchX: 600, notchY: 0, notchW: 180, notchH: 32,
-		x: 410, y: 0, h: 560, settings: settings.Default()}).desiredFrame()
+		x: 410, y: 0, settings: settings.Default()}).desiredFrame()
 	driveMonitor(t, a, mygo.Point{X: 100, Y: 800}, false, 1, nil)
 	if a.dragging || a.dropHot || a.inBand {
 		t.Fatalf("drag end: dragging=%v dropHot=%v inBand=%v", a.dragging, a.dropHot, a.inBand)

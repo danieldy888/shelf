@@ -261,7 +261,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	// edgeLeaveDelay 后缩回刘海；点击探头/托盘唤出的托盘由用户显式收起。
 	// 动画途中不判离开。
 	if a.visible && a.edgeOpened && !a.received {
-		inside := p.X >= a.x-24 && p.X < a.x+panelWidth+24 && p.Y >= a.y && p.Y < a.y+a.panelH()+24
+		inside := p.X >= a.x-24 && p.X < a.x+sheetW+24 && p.Y >= a.y && p.Y < a.y+a.panelH()+24
 		// Keep the panel alive for the whole card gesture, including
 		// drag-out and settling; restart the leave delay afterward.
 		tp := a.toolsPage()

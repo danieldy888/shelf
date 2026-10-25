@@ -215,7 +215,7 @@ func (a *shelf) ready(show bool) {
 // against what production shows.
 func (a *shelf) newNotchWindow() {
 	a.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName, Width: panelWidth, Height: panelHeight,
+		Title: appName, Width: sheetW, Height: sheetH,
 		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
 		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,
 		DisableMove: true, DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,

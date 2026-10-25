@@ -41,8 +41,9 @@ type shelf struct {
 	buildingView, frameQueued                                   bool // defer native resize until the current UI frame has painted
 	animationStart                                              time.Time
 	animationFrom, progress                                     float32
-	openGen                                                     int     // counts openings; keys the panel's height animation
-	shownH                                                      float32 // panel height the shell is drawn at (eases toward panelH)
+	level                                                       int       // drawn level: 1 island, 2 sheet
+	jumpLevel                                                   bool      // the next frame snaps the level spring (fresh open)
+	closeAt                                                     time.Time // when hide started the content fade; zero = none
 	settings                                                    settings.Settings
 	modules                                                     []module
 	np                                                          *nowPlayingModule     // the peek wings read its state
@@ -85,7 +86,7 @@ type shelf struct {
 	selection                                                   selection
 	stopMouseObservation, stopDragObservation                   func()
 	leftSince                                                   time.Time
-	h, topInset                                                 int
+	topInset                                                    int
 	notchX, notchY, notchW, notchH                              int
 	hasNotch                                                    bool
 	peeking                                                     bool
@@ -455,10 +456,7 @@ func (a *shelf) openClipboardSearch() {
 	// drag-edge auto-collapse must never hide the search underneath.
 	a.takeServiceOwnership()
 	a.edgeOpened = false
-	if a.win == nil {
-		return
-	}
-	if !a.focusMode {
+	if a.win != nil && !a.focusMode {
 		if pid := mac.FrontmostPID(); pid > 0 && pid != mac.OwnPID() {
 			a.prevAppPID = pid
 		}
@@ -466,6 +464,11 @@ func (a *shelf) openClipboardSearch() {
 	a.switchTab(pageClipboard) // leaving pageUsage retires its work the same way setTab does
 	a.search = ""
 	a.focusMode = true
+	a.level = 2
+	a.jumpLevel = true
+	if a.win == nil {
+		return // headless surface: state only
+	}
 	// The window must sit below the IM candidate band before the search
 	// field takes the keyboard — even when the panel was already open
 	// and show() returns early. syncMousePassThrough applies windowLevel.

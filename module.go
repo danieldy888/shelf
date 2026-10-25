@@ -16,14 +16,12 @@ type module interface {
 	tick(now time.Time)
 }
 
-// A liveActivity is a module with something under way (now playing; later
-// timers or transfers) for the expanded panel's activity strip, which sits
-// above every page. It is drawn inside the panel's content column and must
-// keep to the panel palette.
+// A liveActivity is a module with something under way (now playing, a
+// conversion, a keep-awake hold) for the sheet's left ear. At most two
+// chips fit; each is a 22pt capsule that must keep to the panel palette.
 type liveActivity interface {
-	live() bool // has something to show now
-	// activity draws it at liveH tall, growing to share the strip's width;
-	// compact asks for one primary control because another activity sits
-	// beside it.
-	activity(c *ui.Context, compact bool)
+	live() bool
+	// chip draws the activity as one 22pt capsule. The module keeps its
+	// own actions (play/pause, 取消, stopping the hold) inside it.
+	chip(c *ui.Context) ui.Element
 }

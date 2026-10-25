@@ -110,7 +110,7 @@ type dropZoneState struct {
 	done   bool      // this session's drop already landed
 	frozen bool      // the release happened (or the board rewrote): the shown set is final
 	on     bool      // the zone drew this frame
-	need   int       // stage height the zone asks for (0 while off)
+
 }
 
 // dropHoldGrace is how long the zone outlives the dragging flag so the
@@ -301,7 +301,7 @@ func (a *shelf) dropZoneShow() (on bool, need int) {
 // drop zone for a fixed file list, for screenshots and smoke tests.
 func (a *shelf) dropZoneSnap(over bool) []string {
 	d := &a.drop
-	d.on, d.need = false, 0
+	d.on = false
 	if a.ownDrag {
 		return nil
 	}
@@ -311,7 +311,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 			d.class = classifyDrop(d.files)
 		}
 		if len(d.files) > 0 {
-			d.on, d.need = a.dropZoneShow()
+			d.on, _ = a.dropZoneShow()
 			return d.files
 		}
 	} else if !a.dragging && !d.loaded && !d.frozen {
@@ -330,13 +330,13 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		}
 		if a.win != nil {
 			p := cursorPoint()
-			if p.X < a.x || p.X >= a.x+panelWidth || p.Y < a.y || p.Y >= a.y+a.panelH() {
+			if p.X < a.x || p.X >= a.x+sheetW || p.Y < a.y || p.Y >= a.y+a.panelH() {
 				d.frozen = false
 				*d = dropZoneState{}
 				return nil // released outside the panel: nothing to deliver
 			}
 		}
-		d.on, d.need = a.dropZoneShow()
+		d.on, _ = a.dropZoneShow()
 		return d.files
 	}
 	if a.dragging {
@@ -346,7 +346,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		inside := over || a.win == nil
 		if !inside {
 			p := cursorPoint()
-			inside = p.X >= a.x && p.X < a.x+panelWidth && p.Y >= a.y && p.Y < a.y+a.panelH()
+			inside = p.X >= a.x && p.X < a.x+sheetW && p.Y >= a.y && p.Y < a.y+a.panelH()
 		}
 		if !inside {
 			return nil
@@ -362,13 +362,13 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		} else if len(d.files) > 0 && count != d.count {
 			d.frozen = true
 			d.until = time.Now().Add(dropHoldGrace)
-			d.on, d.need = a.dropZoneShow()
+			d.on, _ = a.dropZoneShow()
 			return d.files
 		}
 		if len(d.files) == 0 {
 			return nil
 		}
-		d.on, d.need = a.dropZoneShow()
+		d.on, _ = a.dropZoneShow()
 		return d.files
 	}
 	// The drag flag fell: keep serving this session's files briefly so a
@@ -385,58 +385,17 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 	}
 	if a.win != nil {
 		p := cursorPoint()
-		if p.X < a.x || p.X >= a.x+panelWidth || p.Y < a.y || p.Y >= a.y+a.panelH() {
+		if p.X < a.x || p.X >= a.x+sheetW || p.Y < a.y || p.Y >= a.y+a.panelH() {
 			return nil // released outside the panel: nothing to deliver
 		}
 	}
 	d.frozen = true // the drag ended: this set is final until delivered
-	d.on, d.need = a.dropZoneShow()
+	d.on, _ = a.dropZoneShow()
 	return d.files
 }
 
-// dropBody is the view() entry that owns the stage: while a file drag
-// hovers the expanded panel the module bar and stage become the drop
-// zone — the live gesture wins over the screen-OCR permission card, which
-// is armed again as soon as the drag leaves; without a hover the armed
-// card takes the stage under the current page's own module bar, and
-// anything else defers to the current page unchanged.
-func (a *shelf) dropBody(c *ui.Context, over bool) {
-	paths := a.drop.files
-	if !a.drop.on {
-		paths = nil
-	}
-	switch {
-	case len(paths) > 0:
-		a.dropModuleBar(c, a.drop.class, len(paths))
-		stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
-		stage.Children(func() { a.dropStage(c, paths, a.drop.class) })
-	case a.ocrSheet:
-		a.moduleBar(c, a.currentPage(), true)
-		stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
-		stage.Children(func() { a.ocrSheetStage(c) })
-	default:
-		a.tabBody(c, over)
-	}
-}
-
-// dropModuleBar is the module bar while the zone is up: 投放 and the
-// dragged count on the left, the release hint on the right.
-func (a *shelf) dropModuleBar(c *ui.Context, class dropClass, n int) {
-	ui.Row(c.Key("module-bar")).Height(moduleBarH).AlignItems(ui.Center).FillWidth().
-		Padding(0, 0, 0, 2).Margin(0, 0, stageGap, 0).Children(func() {
-		ui.Text(c, "投放").SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-		if count := dropCountTextFor(n, class); count != "" {
-			ui.Text(c, count).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 0, 0, 8)
-		}
-		ui.Box(c).Grow(1)
-		ui.Text(c, "松开放入托盘，或拖到动作上").SingleLine().FontSize(11).FontWeight(600).TextColor(ink3)
-	})
-}
-
-// dropStage draws the stage during a file drag: the 放入托盘 row, then the
-// action cells. The zone asks for at least its own height — a stage
-// shorter than that would squeeze the cells — while a taller stage keeps
-// it, so the panel never jumps mid-drag.
+// dropStage draws the content during a file drag: the 放入托盘 row, then
+// the action cells, inside the fixed 396 × 174 box (154 of it used).
 func (a *shelf) dropStage(c *ui.Context, paths []string, class dropClass) {
 	zone := ui.Column(c.Key("drop-zone")).FillWidth().Grow(1).MinHeight(float32(dropZoneNeedH())).Gap(dropZoneGap)
 	zone.Children(func() {

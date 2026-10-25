@@ -24,8 +24,8 @@ const (
 	dropHintExtraW = 32 // 拖拽带外提示：壳比刘海多出的宽度（两侧各半），单位 pt。
 	notchHoverPadX = 8  // 空手移入刘海探头的水平余量，单位 pt。
 	notchHoverPadY = 4  // 空手移入刘海探头的垂直余量，单位 pt。
-	// Idle, hover and drag share one transparent strip. Only expansion
-	// changes the native window size; the drag filter protects its centre.
+	// Idle, hover and drag share one transparent strip. Opening, closing and
+	// a level change resize the window; the drag filter protects its centre.
 	edgeLeaveDelay  = 350 * time.Millisecond
 	pointerInterval = 30 * time.Millisecond
 	panelAnimation  = 260 * time.Millisecond // 展开/收起 260ms 缓出（DESIGN.md「动效」）
@@ -36,12 +36,8 @@ const (
 	peekBody       = 18 // 空手悬停：刘海下方露出的高度（放下拉箭头）
 	dropPillBody   = 32 // 拖拽中：刘海下方「松开放入」那一行的高度
 	dropPillExtraW = 60 // 拖拽中：比刘海宽出的部分
-	panelWidth     = 560
-	// panelHeight is only the native window's initial height (main.go) and
-	// the size the headless view tests lay out at. It is not a cap: the
-	// expanded panel's bound is panelMaxH, further clamped to the display's
-	// work area by panelCap (notch.go).
-	panelHeight = 400
+	// 面板尺寸见 panel.go 的 islandW/islandH/sheetW/sheetH；原生窗口初始
+	// 尺寸用 sheetW × sheetH，两种状态都画在同一个窗口里。
 	// 设置窗口：普通有标题窗口的尺寸（设置内容超出时内部滚动）。
 	settingsWidth  = 460
 	settingsHeight = 520

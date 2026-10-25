@@ -49,7 +49,7 @@ func foldFrames(t *testing.T, a *shelf, view *ui.Tester, keepText string) {
 				t.Fatalf("frame %d: %q vanished while the shell is still up (peekK %.2f)", i, keepText, a.fx.peekK)
 			}
 			// The shell draws centered at the top of the surface.
-			sx0 := (panelWidth - a.fx.w) / 2
+			sx0 := (sheetW - a.fx.w) / 2
 			ix0 := max(tr.X, sx0)
 			iy0 := max(tr.Y, float32(0))
 			ix1 := min(tr.X+tr.W, sx0+a.fx.w)
@@ -67,7 +67,7 @@ func foldFrames(t *testing.T, a *shelf, view *ui.Tester, keepText string) {
 // not appear.
 func TestPeekFoldKeepsShownShape(t *testing.T) {
 	a := dragPeekShelf()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	if _, ok := view.Find("松开放入"); !ok {
 		t.Fatal("the drop pill is not up before the fold")
@@ -84,7 +84,7 @@ func TestPeekFoldKeepsShownShape(t *testing.T) {
 // velocity and grew the shell one more step).
 func TestPeekFoldMidMorphOnlyShrinks(t *testing.T) {
 	a := dragPeekShelf()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	// Drag ends over the notch: the shell starts morphing toward the wings.
 	a.dragging = false
 	for range 2 {
@@ -112,7 +112,7 @@ func TestPeekFoldMidMorphOnlyShrinks(t *testing.T) {
 func TestPeekFoldWithoutTrackAlsoPlain(t *testing.T) {
 	a := dragPeekShelf()
 	a.np = nil
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.dragging = false
 	a.peeking = false
@@ -124,7 +124,7 @@ func TestPeekFoldWithoutTrackAlsoPlain(t *testing.T) {
 // freeze only applies while the peek is going away.
 func TestPeekFoldHoverStillGetsTheWings(t *testing.T) {
 	a := dragPeekShelf()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	// Drag ends while hovering the notch: peeking stays true.
 	a.dragging = false
@@ -149,7 +149,7 @@ func TestPeekFoldHoverStillGetsTheWings(t *testing.T) {
 // wings flash.
 func TestPeekFoldInterruptedByNewDrag(t *testing.T) {
 	a := dragPeekShelf()
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	a.dragging, a.dropHot = false, false
 	a.peeking = false

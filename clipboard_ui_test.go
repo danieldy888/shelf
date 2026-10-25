@@ -58,7 +58,7 @@ func clipShelf(t *testing.T, texts ...string) (*shelf, *ui.Tester, *recordClip) 
 		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{},
 		appNames: map[string]string{}, write: rec,
 	}
-	return a, ui.NewTester(a.view, panelWidth, panelHeight), rec
+	return a, ui.NewTester(a.view, sheetW, sheetH), rec
 }
 
 func clipTexts(a *shelf) []string {
@@ -323,8 +323,13 @@ func TestClipboardKeyboardFlow(t *testing.T) {
 	if rec.text != "first clip" {
 		t.Fatalf("⏎ copied %q, want %q", rec.text, "first clip")
 	}
-	if a.visible || a.tab != pageTray || a.search != "" {
-		t.Fatal("⏎ did not collapse the shelf back to the tray tab")
+	if a.visible {
+		t.Fatal("⏎ did not collapse the shelf")
+	}
+	view.Advance(time.Second)
+	view.Frame()
+	if a.tab != pageTray || a.search != "" {
+		t.Fatal("⏎ did not settle back to the tray tab after the fade")
 	}
 }
 
@@ -412,11 +417,13 @@ func TestEnterCopiesImageAsPNG(t *testing.T) {
 	}
 }
 
-// hide() 的键盘模式清理：回到托盘标签并交还焦点标记。
+// hide() 的键盘模式清理：内容淡出（120 ms）后回到托盘标签并交还焦点标记。
 func TestHideLeavesKeyboardMode(t *testing.T) {
-	a, _, _ := clipShelf(t, "x")
+	a, view, _ := clipShelf(t, "x")
 	a.tab, a.search, a.focusMode, a.prevAppPID = pageClipboard, "q", true, 999999
 	a.hide(hideExplicit)
+	view.Advance(time.Second)
+	view.Frame()
 	if a.tab != pageTray || a.search != "" || a.focusMode || a.prevAppPID != 0 {
 		t.Fatalf("hide left keyboard state: tab=%s search=%q focus=%v", a.tab, a.search, a.focusMode)
 	}

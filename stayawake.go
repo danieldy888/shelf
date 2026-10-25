@@ -192,7 +192,7 @@ func (m *awakeModule) tick(now time.Time) {
 	}
 }
 
-// live reports whether the activity strip shows the awake row.
+// live reports whether the sheet's left ear shows the awake chip.
 func (m *awakeModule) live() bool { return m.active() }
 
 // refresh redraws the panel when the countdown text changed.
@@ -207,7 +207,7 @@ func (m *awakeModule) refresh(now time.Time) {
 	}
 }
 
-// remainText is the strip's second line: a m:ss / h:mm:ss countdown for
+// remainText is the chip's tooltip line: a m:ss / h:mm:ss countdown for
 // timed holds, 「直到关闭」 for 一直.
 func (m *awakeModule) remainText(now time.Time) string {
 	if !m.active() {
@@ -245,34 +245,24 @@ func (m *awakeModule) releaseAssert(id mac.PowerAssertionID) {
 	mac.ReleasePowerAssertion(id)
 }
 
-// activity draws the strip row: the slashed-moon tile, 「保持唤醒」 with
-// the countdown (or 「直到关闭」), and × to stop. Sharing the strip
-// (compact) it keeps only the time text and the stop button.
+// awakeSymbol is the design's slashed-moon glyph.
 var awakeSymbol = symbol(`<path d="M20.2 14.5A8.5 8.5 0 0 1 9.5 3.8a8.5 8.5 0 1 0 10.7 10.7z"/><path d="m4.5 19.5 15-15"/>`)
 
-func (m *awakeModule) activity(c *ui.Context, compact bool) {
+// chip is the keep-awake capsule: a moon glyph whose tooltip carries the
+// remaining time. Tapping stops the hold.
+func (m *awakeModule) chip(c *ui.Context) ui.Element {
 	if !m.active() {
-		return
+		return ui.Box(c).Size(0, 0)
 	}
 	now := m.clock()
-	row := ui.Row(c.Key("awake")).Height(liveH).Grow(1).MinWidth(0).Radius(14).Background(fill1).
-		Padding(0, 10, 0, 10).Gap(10).AlignItems(ui.Center)
-	row.Children(func() {
-		if !compact {
-			ui.Row(c.Key("awake-tile")).Size(36, 36).Radius(8).Center().Background(fill1).Children(func() {
-				ui.Icon(c, awakeSymbol).Size(18, 18).TextColor(ink)
-			})
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
-				ui.Text(c.Key("awake-title"), "保持唤醒").SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-				ui.Text(c.Key("awake-remain"), m.remainText(now)).SingleLine().FontSize(11).TextColor(ink2)
-			})
-		} else {
-			ui.Text(c.Key("awake-remain"), m.remainText(now)).SingleLine().FontSize(13).TextColor(ink).Grow(1).MinWidth(0)
-		}
-		b := ui.ButtonBase(c.Key("awake-stop")).Size(24, 24).Radius(12).Center().Background(fill2).Label("关闭保持唤醒")
-		b.Children(func() { ui.Icon(c, closeSymbol).Size(10, 10).TextColor(ink2) })
-		if b.Clicked() {
-			m.stop(now)
-		}
+	remain := m.remainText(now)
+	chip := ui.Row(c.Key("awake-chip")).Size(chipH, chipH).Radius(chipH / 2).Background(fill1).
+		Center().Label("保持唤醒").Tooltip("保持唤醒 · " + remain)
+	chip.Children(func() {
+		ui.Icon(c, awakeSymbol).Size(13, 13).TextColor(ink)
 	})
+	if chip.Clicked() {
+		m.stop(now)
+	}
+	return chip
 }

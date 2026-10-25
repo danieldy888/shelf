@@ -388,7 +388,7 @@ func TestPinReturnPeekDrawsBulge(t *testing.T) {
 	a := motionWindow()
 	a.pinReturning, a.peeking = true, true
 	a.peekProgress, a.peekFrom = 1, 1
-	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	view := ui.NewTester(a.view, sheetW, sheetH)
 	view.Frame()
 	if _, ok := view.Find("松开放回"); !ok {
 		t.Fatal("the return pill is not up while a pin drag holds the notch")
@@ -419,7 +419,7 @@ func TestToolsDragOutPins(t *testing.T) {
 
 	// Panel at 400..760 x 0..600 on the test display.
 	placePanel := func() {
-		a.x, a.y, a.h = 400, 0, 600
+		a.x, a.y = 400, 0
 	}
 	placePanel()
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} } // far right of the panel

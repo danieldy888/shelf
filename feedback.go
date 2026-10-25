@@ -48,10 +48,11 @@ const (
 // livelier Bounce 0.28 it arrived with; collapsing is critically damped
 // and crisp; the hover shapes morph with a light bounce of their own.
 var (
-	panelOpenSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 380 * time.Millisecond, Bounce: 0.18}}
-	contentSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}, Delay: 30 * time.Millisecond}
+	panelOpenSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 360 * time.Millisecond, Bounce: 0.18}}
+	levelSpring     = ui.Animation{Spring: ui.SpringOptions{Duration: 360 * time.Millisecond, Bounce: 0.18}}
+	contentSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}, Delay: 40 * time.Millisecond}
 	openSpring      = ui.Animation{Spring: ui.SpringOptions{Duration: 380 * time.Millisecond, Bounce: 0.28}}
-	closeSpring     = ui.Animation{Spring: ui.SpringOptions{Duration: 240 * time.Millisecond, Bounce: 0}}
+	closeSpring     = ui.Animation{Spring: ui.SpringOptions{Duration: 220 * time.Millisecond, Bounce: 0}}
 	peekSpring      = ui.Animation{Spring: ui.SpringOptions{Duration: peekAnimation, Bounce: 0.15}}
 	retractSpring   = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
 	shakeSpring     = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0}}
@@ -92,6 +93,7 @@ type shellMotion struct {
 	w, h, peekW, peekH float32
 	shakeX             float32 // the error shake's current offset: the capsule's hit box follows it
 	openK              float32 // the drawn open interpolation: 0 = folded to the peek shape
+	levelK             float32 // the drawn level interpolation: 0 = island, 1 = sheet
 	peekK              float32 // the drawn peek interpolation, for the close clamp
 	peekKind           peekKind
 	openMoving         bool // the opening spring has not come to rest
@@ -375,20 +377,13 @@ func (f *feedback) clearExpired(now time.Time, folded bool) {
 	}
 }
 
-// openFrameRoom is the box the window needs for a panel of height expH
-// while the opening spring is still in flight: room for the overshoot, plus
-// a tick of slack so the frame never trails the shell. The width also holds
-// the two ear corners (earR) the shell's top edge draws past its flanks,
-// and keeps the parity of the settled width (panelWidth+2*earR). Both axes
-// use the panel's own spring overshoot (Bounce 0.18 peaks near 1.1%), not
-// the capsule's livelier 4.5% — in-flight margin still takes clicks, so it
-// must hug the shape that can actually be drawn.
-func openFrameRoom(expH float32) (w, h int) {
-	expW := float32(panelWidth - 16)
-	w = max(int(math.Ceil(float64(expW*(1+panelOpenOvershoot)))), panelWidth) + 2*earR
-	if w%(panelWidth+2*earR)%2 != 0 {
-		w++
-	}
+// openFrameRoom is the box the window needs for a shell of expW × expH
+// while the opening or level spring is still in flight: room for the
+// overshoot on both axes, plus a tick of slack so the frame never trails
+// the shell. The width also holds the two ear corners (earR) the shell's
+// top edge draws past its flanks.
+func openFrameRoom(expW, expH float32) (w, h int) {
+	w = int(math.Ceil(float64(expW*(1+panelOpenOvershoot)))) + 2*earR
 	return w, int(math.Ceil(float64(expH*(1+panelOpenOvershoot)))) + 2
 }
 

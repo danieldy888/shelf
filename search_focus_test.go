@@ -112,8 +112,15 @@ func TestSearchOpenFocusesWindow(t *testing.T) {
 	if os.Getenv("SHELF_CLIP_HOLD") != "" {
 		time.Sleep(8 * time.Second)
 	}
-	// Hide hands the keyboard back to where the user came from.
+	// Hide hands the keyboard back to where the user came from. The view
+	// state (focus mode) survives the 120 ms content fade, then clears.
 	onMain(func() { a.hide(hideExplicit) })
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if !a.focusMode {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if a.focusMode || a.prevAppPID != 0 {
 		t.Fatalf("hide kept keyboard state: focusMode=%v prevAppPID=%d", a.focusMode, a.prevAppPID)
 	}

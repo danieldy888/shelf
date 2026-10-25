@@ -37,15 +37,6 @@ const (
 	eqStillH    = 8 // 减少动态效果时的静止高度
 )
 
-// Activity geometry (DESIGN.md「活动条」).
-const (
-	npLiveArt  = 36
-	npLiveArtR = 8
-	npLiveCtl  = 28 // 上一首/下一首
-	npLivePlay = 32 // 播放/暂停
-	npLiveBar  = 2  // 活动底部的细进度线
-)
-
 // eqPeriods are the equalizer bars' loop periods, inside the design's
 // 0.9–1.4s band; spread phases keep them unrelated.
 var eqPeriods = []time.Duration{1300 * time.Millisecond, 940 * time.Millisecond, 1120 * time.Millisecond, 1380 * time.Millisecond}
@@ -72,7 +63,7 @@ func (m *nowPlayingModule) showsPlayer() bool {
 // the left wing, the equalizer in the right, both centered in the band the
 // hardware notch occupies. The middle stays empty — the camera housing
 // hides it. There are no controls: a press anywhere on the shell opens the
-// shelf, and the expanded panel's activity strip keeps the transport. The
+// shelf, and the sheet's left-ear chip keeps the transport. The
 // caller clips the layout to the growing shell and passes the peek
 // progress as k, so nothing squeezes while the notch opens. It reports
 // whether it drew anything.
@@ -124,47 +115,88 @@ func (m *nowPlayingModule) eqBars(c *ui.Context, playing bool) {
 	})
 }
 
-// live reports whether the activity strip shows the player: the setting is
+// live reports whether the sheet's left-ear chip shows the player: the setting is
 // on and the source names a track, playing or paused (the controls are
 // most useful while paused).
 func (m *nowPlayingModule) live() bool { return m.hasTrack() }
 
-// activity draws the player in the expanded panel's activity strip: cover,
-// title and 「artist · app」, the transport controls, and a hairline
-// progress track along the bottom edge. Sharing the strip (compact) it
-// keeps only play/pause.
-func (m *nowPlayingModule) activity(c *ui.Context, compact bool) {
+// miniPlayer is the first level's left half: 38pt cover, title, artist ·
+// app, the equalizer, and play/pause. It takes the island row's width
+// minus the separator and the page icons.
+func (m *nowPlayingModule) miniPlayer(c *ui.Context) {
 	st, ok := m.track()
 	if !ok {
 		return
 	}
-	row := ui.Row(c.Key("nowplaying")).Height(liveH).Grow(1).MinWidth(0).Radius(14).Background(fill1).
-		Padding(0, 8, 0, 10).Gap(10).AlignItems(ui.Center)
+	row := ui.Row(c.Key("np-mini")).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center)
+	row.Label(st.Title).Tooltip("正在播放：" + st.Title)
 	row.Children(func() {
-		m.coverArt(c, "np-art", npLiveArt, npLiveArtR)
-		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
-			ui.Text(c.Key("np-title"), st.Title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-			if meta := m.cardMeta(st); meta != "" {
-				ui.Text(c.Key("np-artist"), meta).SingleLine().FontSize(11).TextColor(ink2)
+		m.coverArt(c, "np-mini-art", islandArt, islandArtR)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Justify(ui.Center).Children(func() {
+			ui.Text(c.Key("np-mini-title"), st.Title).SingleLine().FontSize(12.5).FontWeight(600).TextColor(ink)
+			meta := st.Artist
+			if meta == "" {
+				meta = m.cardMeta(st)
+			}
+			if meta != "" {
+				ui.Text(c.Key("np-mini-artist"), meta).SingleLine().FontSize(10.5).TextColor(ink2)
 			}
 		})
-		ui.Row(c.Key("np-controls")).Gap(2).AlignItems(ui.Center).Children(func() {
-			if !compact {
-				m.controlButton(c, "np-prev", prevFill, "上一首", mac.NPPrevious, npLiveCtl, 15)
+		m.eqBars(c, st.Playing)
+		m.chipToggle(c, "np-mini-toggle", st.Playing, 22, 13)
+	})
+}
+
+// chip is the sheet's now-playing capsule: 16pt cover, equalizer and
+// play/pause. The track's name is its tooltip.
+func (m *nowPlayingModule) chip(c *ui.Context) ui.Element {
+	st, ok := m.track()
+	if !ok {
+		return ui.Box(c).Size(0, 0)
+	}
+	chip := ui.Row(c.Key("np-chip")).Height(chipH).Radius(chipH/2).Background(fill1).
+		Padding(0, 3, 0, 3).Gap(4).AlignItems(ui.Center).Label(st.Title).
+		Tooltip("正在播放：" + st.Title + " · " + playPauseLabel(st.Playing))
+	chip.Children(func() {
+		m.coverArt(c, "np-chip-art", 16, 4)
+		m.eqBarsCompact(c, st.Playing)
+		m.chipToggle(c, "np-chip-toggle", st.Playing, 18, 10)
+	})
+	return chip
+}
+
+// chipToggle is the play/pause button used by the mini player and the
+// chip; size is the hit box, glyph the icon's edge.
+func (m *nowPlayingModule) chipToggle(c *ui.Context, key string, playing bool, size, glyph float32) {
+	b := ui.ButtonBase(c.Key(key)).Size(size, size).Radius(size / 2).Center().Label(playPauseLabel(playing))
+	b.Children(func() {
+		ui.Icon(c, toggleSymbol(playing)).Size(glyph, glyph).TextColor(ink)
+	})
+	if b.Clicked() {
+		m.send(mac.NPPlayPause)
+	}
+}
+
+// eqBarsCompact is the chip's small equalizer: three 8pt bars, animated
+// only while playing and only without Reduce Motion.
+func (m *nowPlayingModule) eqBarsCompact(c *ui.Context, playing bool) {
+	col := ink3
+	if m.artColor.A > 0 {
+		col = m.artColor
+	}
+	ui.Row(c.Key("np-eq-s")).Gap(2).AlignItems(ui.Center).Height(10).Children(func() {
+		for i := range 3 {
+			bar := ui.Box(c.Key(i)).Width(2).Radius(1).Background(col).AlignSelf(ui.End)
+			h := float32(3)
+			if playing && !c.Preferences().ReduceMotion {
+				k := bar.Loop("eq", eqPeriods[i], ui.Bounce(ui.EaseInOut))
+				wave := math.Sin(float64(float32(i)*0.6+k) * math.Pi)
+				h = 3 + float32(wave*wave)*7
+			} else if playing {
+				h = 6
 			}
-			m.controlButton(c, "np-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, npLivePlay, 18)
-			if !compact {
-				m.controlButton(c, "np-next", nextFill, "下一首", mac.NPNext, npLiveCtl, 15)
-			}
-		})
-		frac := float32(0.34) // unknown length: a quiet static bar
-		if st.Duration > 0 {
-			frac = float32(min(max(st.Position(time.Now())/st.Duration, 0), 1))
+			bar.Height(h)
 		}
-		ui.Row(c.Key("np-line")).Absolute().Left(10).Right(10).Bottom(5).Height(npLiveBar).
-			Radius(1).Clip().Background(fill3).PassThrough().Children(func() {
-			ui.Box(c).WidthPercent(frac * 100).FillHeight().Radius(1).Background(progress)
-		})
 	})
 }
 

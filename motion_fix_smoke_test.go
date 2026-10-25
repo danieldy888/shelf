@@ -318,7 +318,7 @@ func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
 			onMain(func() {
 				a.dragging, a.pointerDrag, a.ownDrag = false, false, false
 				if tall {
-					a.registerPage(&fakePage{on: true, height: 320})
+					a.registerPage(&fakePage{on: true})
 					a.setTab("fake")
 				}
 				a.show(false)
@@ -401,7 +401,7 @@ func TestSmokeEdgeOpenedDropZoneFollowsPointer(t *testing.T) {
 			t.Errorf("incoming drag did not show its native drop zone")
 		}
 		withZone = a.win.Bounds().Height
-		point = mygo.Point{X: a.x + panelWidth + 80, Y: a.y + a.panelH() + 40}
+		point = mygo.Point{X: a.x + sheetW + 80, Y: a.y + a.panelH() + 40}
 		a.win.Invalidate()
 	})
 	time.Sleep(80 * time.Millisecond)

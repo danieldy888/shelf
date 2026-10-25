@@ -67,7 +67,7 @@ func TestPinReturnPillBeatsOtherContent(t *testing.T) {
 			if w != float32(max(180, a.notchW))+dropPillExtraW || h != float32(max(32, a.notchH))+dropPillBody {
 				t.Fatalf("wrong return shape: %.1fx%.1f", w, h)
 			}
-			view := ui.NewTester(a.view, panelWidth, panelHeight)
+			view := ui.NewTester(a.view, sheetW, sheetH)
 			view.Frame()
 			if !view.HasText("松开放回") || view.HasText("Review Track") || view.HasText("已复制") || a.fx.peekKind != peekReturn {
 				t.Fatalf("return invitation obscured: kind=%v texts=%v", a.fx.peekKind, view.Texts())
@@ -142,7 +142,7 @@ func TestPinDragOutKeepsGridSpan(t *testing.T) {
 	a := &shelf{dataDir: t.TempDir()}
 	a.mutateTools(func(l *layout.Layout) { l.Cards = []layout.Card{{ID: "awake", Span: 2}} })
 	p := &toolsPage{host: a, editing: true}
-	a.x, a.y, a.h = 400, 0, 600
+	a.x, a.y = 400, 0
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} }
 	p.toolCardDrop(&toolPress{id: "awake", dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}, cursorPoint())
 	if len(a.pins) != 1 || a.pins[0].span != 2 || a.pins[0].cardW != pinCardW2 {

@@ -23,27 +23,21 @@ const (
 	pageUsage     pageID = "usage"     // AI 用量（由 AI 用量切片实现并登记）
 )
 
-// earMaxPages is the most page icons the left ear shows (DESIGN.md: 左耳最
-// 多 5 个页面图标).
-const earMaxPages = 5
-
-// panelPage is one page of the expanded panel: its left-ear icon, its
-// stage body under the module bar, and its own module-bar row content.
-// live is false while the page is only the outgoing picture of a fade —
-// drawn, but never taking the pointer or the keyboard; over is true while
-// a drag hovers the panel. icon's active means the button is highlighted
-// (the current page or a hovered icon), the same states that paint an
-// ordinary page icon ink instead of ink2.
+// panelPage is one page of the expanded sheet. Every page draws into the
+// same fixed 396 × 174 content box and scrolls inside it when it has more
+// to show; the shell never changes size for a page. live is false while
+// the page is only the outgoing picture of a fade — drawn, but never
+// taking the pointer or the keyboard; over is true while a drag hovers the
+// panel. icon's active means the button is highlighted (the current page
+// or a hovered icon).
 type panelPage interface {
 	id() pageID
-	label() string // tooltip and accessible name of the ear icon; the module bar spells it out too
+	label() string // tooltip and accessible name of the page icon
 	icon(c *ui.Context, active bool) ui.Element
-	enabled() bool      // false keeps the icon off the ear and falls the current page back to the tray
-	stageH() int        // the stage height this page wants, before stageMinH/stageMaxH clamping
-	sharesHeight() bool // true pages size the stage to the group's tallest so switching keeps the panel's height
-	body(c *ui.Context, over bool, live bool) ui.Element
-	moduleTitle() (title, count string)                   // the module bar's left side; empty count shows nothing
-	moduleTrailing(c *ui.Context, live bool) []ui.Element // the module bar's right side, appended in order
+	enabled() bool                                       // false keeps the icon off the panel and falls the current page back to the tray
+	body(c *ui.Context, over bool, live bool) ui.Element // the fixed 396 × 174 content
+	title() (name, count string)                         // the back row's 「‹ 名称 数量」; empty count shows nothing
+	actions(c *ui.Context) []ui.Element                  // the back row's right side, appended in order
 }
 
 // ensurePages registers the built-in pages once; later pages are appended
@@ -151,8 +145,7 @@ func (p *trayPage) label() string { return "托盘" }
 func (p *trayPage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, trayNavSymbol)
 }
-func (p *trayPage) enabled() bool      { return true }
-func (p *trayPage) sharesHeight() bool { return true }
+func (p *trayPage) enabled() bool { return true }
 
 // items is the page's list: everything but captures hidden from the tray
 // (OffTray, or a drag-out removal still in its grace); pinned first.
@@ -182,14 +175,6 @@ func (p *trayPage) items() []store.Item {
 	return append(pinned, rest...)
 }
 
-func (p *trayPage) stageH() int {
-	if n := len(p.items()); n > 0 {
-		rows := (n + gridCols - 1) / gridCols
-		return rows*tileH + (rows-1)*gridGap
-	}
-	return 0
-}
-
 func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	a := p.host
 	list := p.items()
@@ -200,7 +185,7 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	rows := (len(list) + gridCols - 1) / gridCols
 	contentH := float32(rows*tileH + max(rows-1, 0)*gridGap)
 	reduce := c.Preferences().ReduceMotion
-	return ui.Column(c.Key("tray-stage")).Grow(1).MinHeight(0).Children(func() {
+	return ui.Column(c.Key("tray-stage")).FillWidth().FillHeight().Children(func() {
 		scroll := ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).TrackScroll(&p.scroll)
 		top, bottom, viewH := scrollEdges(&p.scroll, contentH)
 		scroll.Children(func() {
@@ -215,24 +200,27 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 				}
 			})
 		})
-		a.scrollMelt(c, "tray", top, bottom, 0)
 	})
 }
 
-func (p *trayPage) moduleTitle() (title, count string) {
+func (p *trayPage) title() (name, count string) {
 	return "托盘", fmt.Sprintf("%d 项", len(p.items()))
 }
 
-func (p *trayPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
+// overflows reports the grid's third row: two rows (10 tiles) fit the box.
+func (p *trayPage) overflows() bool { return len(p.items()) > 2*gridCols }
+
+func (p *trayPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
+	live := a.tab == pageTray
 	list := p.items()
 	var out []ui.Element
 	if len(list) > 0 {
-		hint := "⌘ / ⇧ 多选 · 空格预览"
+		hint := "⌘ / ⇧ 多选"
 		if n := a.selection.count(); n > 1 {
-			hint = fmt.Sprintf("已选 %d 项 · 一起拖出", n)
+			hint = fmt.Sprintf("已选 %d 项", n)
 		}
-		out = append(out, ui.Text(c, hint).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 6, 0, 0))
+		out = append(out, ui.Text(c.Key("multi-hint"), hint).SingleLine().FontSize(10.5).FontWeight(600).TextColor(ink3))
 	}
 	if gone := a.clearable(list, p.id()); len(gone) > 0 {
 		b := a.iconButton(c, "clear", trashSymbol, "清空")
@@ -244,8 +232,8 @@ func (p *trayPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
 	return out
 }
 
-// clipboardPage is the capture history: the 32pt search field over the
-// 46pt rows (source-app icon, text, 「应用 · 相对时间」). Only clipboard
+// clipboardPage is the capture history: 30pt rows (16pt source-app icon,
+// text, 「应用 · 时间」 on the right). Only clipboard
 // captures matching the search text are listed.
 type clipboardPage struct {
 	host   *shelf
@@ -257,8 +245,7 @@ func (p *clipboardPage) label() string { return "剪贴板" }
 func (p *clipboardPage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, clipNavSymbol)
 }
-func (p *clipboardPage) enabled() bool      { return true }
-func (p *clipboardPage) sharesHeight() bool { return true }
+func (p *clipboardPage) enabled() bool { return true }
 
 // items is the page's list: clipboard captures matching the (already
 // trimmed) search text; pinned first.
@@ -282,31 +269,20 @@ func (p *clipboardPage) items() []store.Item {
 	return append(pinned, rest...)
 }
 
-func (p *clipboardPage) stageH() int {
-	h := clipSearchH
-	if n := len(p.items()); n > 0 {
-		h += clipListTop + n*(clipRowH+clipRowGap) - clipRowGap
-	}
-	return h
-}
-
-func (p *clipboardPage) body(c *ui.Context, _ bool, live bool) ui.Element {
+func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	a := p.host
-	return ui.Column(c).Grow(1).MinHeight(0).Children(func() {
-		a.searchField(c, live)
-		list := p.items()
-		if len(list) == 0 {
-			icon, title, hint := textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
-			if a.search != "" {
-				icon, title, hint = searchSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
-			}
-			a.emptyState(c, icon, title, hint)
-			return
+	list := p.items()
+	if len(list) == 0 {
+		icon, title, hint := textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
+		if a.search != "" {
+			icon, title, hint = searchSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
 		}
-		contentH := float32(len(list)*(clipRowH+clipRowGap) - clipRowGap)
-		reduce := c.Preferences().ReduceMotion
-		scroll := ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).Margin(clipListTop, 0, 0, 0).
-			TrackScroll(&p.scroll)
+		return a.emptyState(c, icon, title, hint)
+	}
+	contentH := float32(len(list)*(clipRowH+clipRowGap) - clipRowGap)
+	reduce := c.Preferences().ReduceMotion
+	return ui.Column(c.Key("clip-stage")).FillWidth().FillHeight().Children(func() {
+		scroll := ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).TrackScroll(&p.scroll)
 		top, bottom, viewH := scrollEdges(&p.scroll, contentH)
 		scroll.Children(func() {
 			ui.Column(c.Key("clip-list")).Gap(clipRowGap).FillWidth().Children(func() {
@@ -318,24 +294,33 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 				}
 			})
 		})
-		a.scrollMelt(c, "clip", top, bottom, clipSearchH+clipListTop)
 	})
 }
 
-func (p *clipboardPage) moduleTitle() (title, count string) {
+func (p *clipboardPage) title() (name, count string) {
 	return "剪贴板", fmt.Sprintf("%d 条", len(p.items()))
 }
 
-func (p *clipboardPage) moduleTrailing(c *ui.Context, live bool) []ui.Element {
+// overflows reports more rows than the 174pt box holds: five 30pt rows plus
+// their 2pt gaps fit (158), a sixth does not.
+func (p *clipboardPage) overflows() bool {
+	return len(p.items())*(clipRowH+clipRowGap)-clipRowGap > contentH
+}
+
+// actions is the back row's right side: the compact search box and, when
+// there is something to clear, the trash button. While the page is the
+// outgoing picture the box is drawn without an input.
+func (p *clipboardPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
+	out := []ui.Element{p.host.searchField(c, p.host.tab == pageClipboard)}
 	if gone := a.clearable(p.items(), p.id()); len(gone) > 0 {
 		b := a.iconButton(c, "clear", trashSymbol, "清空")
-		if b.Clicked() && live {
+		if b.Clicked() && a.tab == pageClipboard {
 			a.removeFrom(gone, p.id())
 		}
-		return []ui.Element{b}
+		out = append(out, b)
 	}
-	return nil
+	return out
 }
 
 // Progressive blur: the stages' scrolling content does not stop at a hard

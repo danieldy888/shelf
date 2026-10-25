@@ -21,10 +21,10 @@ import (
 
 // Item rows come in two shapes: itemTile is the tray tab's 5-column grid
 // tile (thumbnail over the name), clipRow the clipboard tab's list row
-// (source-app icon, text, 「应用 · 相对时间」). Both keep the same
+// (16pt source-app icon, text, 「应用 · 时间」 on the right). Both keep the same
 // selection, click, context menu and drag-out behaviour.
 
-// itemTile is one cell of the tray grid: a 56pt thumbnail (the stored
+// itemTile is one cell of the tray grid: a 40pt thumbnail (the stored
 // image, or the file's Finder icon), the name under it, a pin badge top
 // right and the accent ring while selected. Moved files dim to 38% and
 // name 「· 已移动」.
@@ -35,7 +35,7 @@ func (a *shelf) itemTile(c *ui.Context, item store.Item) {
 		name += " · 已移动"
 	}
 	tile := ui.Column(c.Key(item.ID)).Height(tileH).Radius(12).AlignItems(ui.Center).
-		Padding(8, 0, 0, 0).Label(name)
+		Padding(6, 0, 0, 0).Label(name)
 	if a.reveal == item.ID {
 		// 键盘移动选中行后把它留在可见范围内。
 		tile.ScrollIntoView()
@@ -65,8 +65,8 @@ func (a *shelf) itemTile(c *ui.Context, item store.Item) {
 	tile.ContextMenu(func(m *ui.Menu) { a.itemMenu(m, item) })
 	tile.Children(func() {
 		a.tileThumb(c, item)
-		ui.Text(c, name).MaxLines(2).TextAlign(ui.Center).FontSize(11).
-			TextColor(ink.Alpha(0.86)).Margin(7, 4, 0, 4).MaxWidth(88)
+		ui.Text(c, name).SingleLine().TextAlign(ui.Center).FontSize(10.5).
+			TextColor(ink.Alpha(0.86)).Margin(5, 4, 0, 4).MaxWidth(70)
 		if item.Pinned {
 			// 右上 16pt 黑底图钉角标：作为 tile 的子元素定位，不能放到
 			// 网格层（否则所有角标叠在网格右上角并抢走点击）。
@@ -94,30 +94,30 @@ func (a *shelf) itemTile(c *ui.Context, item store.Item) {
 	}
 }
 
-// tileThumb draws the tile's 56pt thumbnail: the stored image (rounded,
+// tileThumb draws the tile's 40pt thumbnail: the stored image (rounded,
 // shadowed), the file's system icon, or for text a fill2 note card showing
 // the first lines of the text (DESIGN review: no bare glyph).
 func (a *shelf) tileThumb(c *ui.Context, item store.Item) {
-	box := ui.Row(c.Key("thumbnail")).Size(56, 56).Center()
+	box := ui.Row(c.Key("thumbnail")).Size(tileArt, tileArt).Center()
 	if item.Kind == store.KindText {
 		// itemTitle 给出有界预览（折叠空白、160 字截断），完整文字仍归
 		// 保存、复制与拖出用。
 		text := itemTitle(item)
 		if text == "" {
-			box.Radius(10).Background(fill2).Children(func() {
-				ui.Icon(c, textSymbol).Size(22, 22).TextColor(ink3)
+			box.Radius(8).Background(fill2).Children(func() {
+				ui.Icon(c, textSymbol).Size(18, 18).TextColor(ink3)
 			})
 			return
 		}
-		box.Radius(10).Background(fill2).AlignItems(ui.Start).Justify(ui.Start).Clip().Children(func() {
-			ui.Text(c, text).MaxLines(3).FontSize(8).TextColor(ink2).Padding(7, 7, 0, 7)
+		box.Radius(8).Background(fill2).AlignItems(ui.Start).Justify(ui.Start).Clip().Children(func() {
+			ui.Text(c, text).MaxLines(2).FontSize(7.5).TextColor(ink2).Padding(4, 4, 0, 4)
 		})
 		return
 	}
 	box.Children(func() {
 		defer formatBadge(c, item)
 		if thumb := a.thumbnail(item); thumb != nil {
-			im := ui.Image(c.Key("bmp"), thumb).Size(56, 56).Radius(10).Fit(ui.Cover)
+			im := ui.Image(c.Key("bmp"), thumb).Size(tileArt, tileArt).Radius(8).Fit(ui.Cover)
 			if item.Kind == store.KindImage {
 				// 图片缩略图：圆角 + 阴影，像 Finder 里的预览。
 				im.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.45))
@@ -128,10 +128,10 @@ func (a *shelf) tileThumb(c *ui.Context, item store.Item) {
 			return
 		}
 		if item.Kind == store.KindImage {
-			ui.Icon(c, fileSymbol).Size(34, 34).TextColor(ink3)
+			ui.Icon(c, fileSymbol).Size(26, 26).TextColor(ink3)
 			return
 		}
-		ui.Icon(c, fileSymbol).Size(40, 40).TextColor(ink3)
+		ui.Icon(c, fileSymbol).Size(30, 30).TextColor(ink3)
 	})
 }
 
@@ -154,13 +154,13 @@ func formatBadge(c *ui.Context, item store.Item) {
 	})
 }
 
-// clipRow is one clipboard-tab list row: 46pt, the source app's icon (or a
-// text glyph), the captured text single-line, 「应用名 · 相对时间」 under
-// it, the pin mark on pinned rows and 「↩ 复制」 on the selected one while
-// searching.
+// clipRow is one clipboard-tab list row: 30pt, the source app's icon (or
+// a text glyph), the captured text single-line, 「应用 · 相对时间」 on the
+// right, the pin mark on pinned rows and 「↩ 复制」 on the selected one
+// while searching.
 func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 	title := itemTitle(item)
-	row := ui.Row(c.Key(item.ID)).Height(clipRowH).Padding(0, 10, 0, 10).Gap(10).Radius(10).
+	row := ui.Row(c.Key(item.ID)).Height(clipRowH).Padding(0, 8, 0, 8).Gap(8).Radius(8).
 		AlignItems(ui.Center).Label(title)
 	if a.reveal == item.ID {
 		row.ScrollIntoView()
@@ -186,28 +186,18 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 	row.ContextMenu(func(m *ui.Menu) { a.itemMenu(m, item) })
 	row.Children(func() {
 		a.clipRowIcon(c, item)
-		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
-			text := title
-			if item.Kind == store.KindImage {
-				text = "截图 " + item.CreatedAt.Local().Format("01-02 15:04")
-			}
-			ui.Text(c, text).SingleLine().FontSize(13).TextColor(ink)
-			// An image the search matched through its recognized text
-			// shows the hit snippet instead of 「应用 · 时间」; when the
-			// snippet comes back empty the row keeps its ordinary meta.
-			if before, hit, after, ok := ocrSnippet(item.OCRText, a.search); ok &&
-				item.Kind == store.KindImage && item.OCRDone {
-				ocrSnippetLine(c, before, hit, after)
-			} else {
-				ui.Text(c, a.clipRowMeta(item)).SingleLine().FontSize(11).TextColor(ink3)
-			}
-		})
+		text := title
+		if item.Kind == store.KindImage {
+			text = "截图 " + item.CreatedAt.Local().Format("01-02 15:04")
+		}
+		ui.Text(c, text).SingleLine().FontSize(12).TextColor(ink).Grow(1).MinWidth(0)
 		if selected && a.focusMode {
-			ui.Text(c, "↩ 复制").SingleLine().FontSize(11).TextColor(ink3)
+			ui.Text(c, "↩ 复制").SingleLine().FontSize(10.5).TextColor(ink3)
 		}
 		if item.Pinned {
-			ui.Icon(c.Key("pin"), pinFill).Size(12, 12).TextColor(ink.Alpha(0.5)).Label("已置顶")
+			ui.Icon(c.Key("pin"), pinFill).Size(10, 10).TextColor(ink.Alpha(0.5)).Label("已置顶")
 		}
+		ui.Text(c, a.clipRowMeta(item)).SingleLine().FontSize(10.5).TextColor(ink3)
 	})
 	if row.Clicked() {
 		mods := row.ClickModifiers()
@@ -222,20 +212,20 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 	}
 }
 
-// clipRowIcon is the row's 22pt source-app icon, cached by bundle id, or
+// clipRowIcon is the row's 16pt source-app icon, cached by bundle id, or
 // the kind's glyph when no app is known.
 func (a *shelf) clipRowIcon(c *ui.Context, item store.Item) {
 	if item.SourceApp == clipSourceOCR {
 		// Shelf's own recognition has no app: the 框选文字 glyph says where
 		// the words came from, like the tools card that produced them.
-		ui.Box(c).Size(22, 22).Radius(6).Center().Background(fill2).Children(func() {
-			ui.Icon(c, ocrSymbol).Size(12, 12).TextColor(ink3)
+		ui.Box(c).Size(16, 16).Radius(4).Center().Background(fill2).Children(func() {
+			ui.Icon(c, ocrSymbol).Size(10, 10).TextColor(ink3)
 		})
 		return
 	}
 	if item.SourceApp != "" {
 		if icon := a.clipAppIcon(item.SourceApp); icon != nil {
-			ui.Image(c.Key("ai-"+item.SourceApp), icon).Size(22, 22)
+			ui.Image(c.Key("ai-"+item.SourceApp), icon).Size(16, 16)
 			return
 		}
 	}
@@ -243,8 +233,8 @@ func (a *shelf) clipRowIcon(c *ui.Context, item store.Item) {
 	if item.Kind == store.KindImage {
 		icon = fileSymbol
 	}
-	ui.Box(c).Size(22, 22).Radius(6).Center().Background(fill2).Children(func() {
-		ui.Icon(c, icon).Size(12, 12).TextColor(ink3)
+	ui.Box(c).Size(16, 16).Radius(4).Center().Background(fill2).Children(func() {
+		ui.Icon(c, icon).Size(10, 10).TextColor(ink3)
 	})
 }
 

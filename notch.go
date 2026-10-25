@@ -25,26 +25,17 @@ func (a *shelf) place(p mygo.Point) {
 	a.syncDragGuard()
 }
 
-// panelCap is the expanded panel's height bound on a display with this work
-// area: the design's panelMaxH, clamped so the panel always fits under the
-// menu bar with 24pt of slack above the Dock. panelHeight is not a bound —
-// it is the native window's initial height only. Pure; unit-tested.
-func panelCap(workAreaH int) int {
-	return min(panelMaxH, max(240, workAreaH-24))
-}
-
 func (a *shelf) placeAt(p mygo.Point) {
 	d := mygo.Screen.DisplayNearestPoint(p)
 	a.dispBounds = d.Bounds
 	nx, ny, nw, nh, hasNotch := mac.NotchRect(d.ID)
 	a.notchX, a.notchY, a.notchW, a.notchH, a.hasNotch = nx, ny, nw, nh, hasNotch
 	a.topInset = nh
-	a.h = panelCap(d.WorkArea.Height)
 	// The panel, the peek pill and the strip share one axis: the notch's
 	// centre. A different centre made the expansion jump sideways.
-	a.x = d.Bounds.X + (d.Bounds.Width-panelWidth)/2
+	a.x = d.Bounds.X + (d.Bounds.Width-sheetW)/2
 	if a.notchW > 0 {
-		a.x = a.notchX + a.notchW/2 - panelWidth/2
+		a.x = a.notchX + a.notchW/2 - sheetW/2
 	}
 	a.y = d.Bounds.Y
 }
@@ -68,16 +59,23 @@ func (a *shelf) overNotch(p mygo.Point) bool {
 func (a *shelf) desiredFrame() mygo.Rectangle {
 	closing := !a.visible && a.fx.openK > 0
 	if a.visible || closing {
-		// A shrinking panel keeps its frame until the drawn shell has
-		// eased down to the new height, so the bottom is never cut off.
-		w := panelWidth + 2*earR
-		h := max(a.panelH(), int(a.shownH+0.5))
-		switch {
-		case closing:
+		// The frame is the largest of the two levels' boxes while open. The
+		// island's frame shrinks only after the sheet has sprung back to
+		// it, so no frame clips the growing or folding shell.
+		top := a.sheetTop()
+		expW, expH := float32(sheetW), float32(sheetH+top)
+		if a.currentLevel() == 1 && a.fx.levelK <= 0.001 && !a.fx.openMoving {
+			expW, expH = islandW, float32(islandH+top)
+		}
+		// The room is constant per level: a frame that changed its box at
+		// the spring's peak would slide the window sideways under the
+		// shell, and the extra margin is a handful of transparent points.
+		w, h := openFrameRoom(expW, expH)
+		if closing {
 			// Follow the drawn shell through its fold, with room for the
 			// ears and two points below the bottom curve.
 			w = int(math.Ceil(float64(a.fx.w))) + 2*earR
-			h = int(a.fx.h+0.5) + 2
+			h = int(a.fx.h+0.5) + top + 2
 			if a.fb.up(time.Now()) {
 				// Folding into the capsule: the shell may grow wider or
 				// taller than the panel sliver it starts from. No glow
@@ -85,16 +83,6 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 				// its ears, shake and overshoot only.
 				w = max(w, capsuleFrameW())
 				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+2)
-			}
-		case a.fx.openMoving:
-			// Keep overshoot room only while the panel opens. Settled
-			// transparent margins must not swallow clicks below the panel.
-			ow, oh := openFrameRoom(float32(h - 8))
-			if oh > h {
-				h = oh
-			}
-			if ow > w {
-				w = ow
 			}
 		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
@@ -253,17 +241,18 @@ func (a *shelf) wingsSize() (w, h float32) {
 }
 
 // shellSize is the one interpolation the shell Path and the content layout
-// share: hardware notch → peek shape peekW×peekH (peekK) → expanded panel
-// of height panelH (openK). The caller passes the drawn values: view()
+// share: hardware notch → peek shape peekW×peekH (peekK) → island →
+// sheet (levelK, then openK). The caller passes the drawn values: view()
 // animates them per display frame and substitutes final ones in headless
 // tests.
-func (a *shelf) shellSize(openK, peekK, peekW, peekH, panelH float32) (w, h float32) {
+func (a *shelf) shellSize(openK, levelK, peekK, peekW, peekH float32) (w, h float32) {
 	baseW := float32(max(180, a.notchW))
 	baseH := float32(max(32, a.notchH))
-	expW, expH := float32(panelWidth-16), panelH-8
+	lvlW := float32(islandW) + (sheetW-islandW)*levelK
+	lvlH := float32(islandH) + (sheetH-islandH)*levelK
 	w0 := baseW + (peekW-baseW)*peekK
 	h0 := baseH + (peekH-baseH)*peekK
-	return w0 + (expW-w0)*openK, h0 + (expH-h0)*openK
+	return w0 + (lvlW-w0)*openK, h0 + (lvlH-h0)*openK
 }
 
 // capsuleFrameW is the window width the completion capsule needs once the
@@ -403,17 +392,9 @@ func (a *shelf) setPeek(peek bool) {
 	}
 }
 
-// panelH returns the expanded panel's height: the content's own measure
-// (panelTargetH) clamped to the cap place() computed from the display's
-// work area; before the first placement the cap is panelMaxH, the design
-// bound (panelHeight is only the window's initial size).
-func (a *shelf) panelH() int {
-	cap := a.h
-	if cap <= 0 {
-		cap = panelMaxH
-	}
-	return min(cap, a.panelTargetH())
-}
+// panelH is the sheet's fixed height; both levels' sizes come from the
+// layout constants, never from page content.
+func (a *shelf) panelH() int { return sheetH }
 
 func (a *shelf) show(edge bool) {
 	if a.visible {
@@ -425,14 +406,20 @@ func (a *shelf) show(edge bool) {
 	if a.store != nil {
 		a.store.Refresh()
 	}
+	// Opening after a close in flight keeps the old view until the fade is
+	// over; cancel that pending reset so the fresh opening cannot be
+	// clobbered a frame later.
+	a.closeAt = time.Time{}
+	// A drag or the clipboard hotkey opens straight on the sheet; a plain
+	// toggle opens the island.
+	level := 1
+	if edge || a.focusMode || (a.dragging && !a.ownDrag) || a.drop.on || a.ocrSheet {
+		level = 2
+	}
+	a.level = level
+	a.jumpLevel = true
 	a.visible, a.edgeOpened, a.received = true, edge, false
 	a.dropZoneSnap(edge)
-	// A fresh opening starts at its own height. Reversing an in-flight
-	// close keeps the height channel so the shell cannot jump.
-	if a.fx.openK == 0 {
-		a.openGen++
-		a.shownH = 0
-	}
 	a.fx.openMoving = true
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	prevFrame := a.frame
@@ -546,11 +533,17 @@ func (a *shelf) releaseKeys() {
 	}
 }
 
-// escape closes Quick Look first, like Finder, then clears the clipboard
-// search while it holds text, and finally collapses the shelf.
+// escape closes Quick Look first, like Finder, then dismisses the
+// screen-recording card or clears the clipboard
+// search while it holds text; a sheet backs out to the island and the
+// island folds away.
 func (a *shelf) escape() {
 	if mac.QuickLookVisible() {
 		mac.CloseQuickLook()
+		return
+	}
+	if a.ocrSheet {
+		a.hide(hideExplicit)
 		return
 	}
 	if a.tab == pageClipboard && a.search != "" {
@@ -577,12 +570,22 @@ func (a *shelf) escape() {
 			return
 		}
 	}
+	// A sheet backs out to the island first; the island's Esc collapses.
+	// The keyboard search flow (⌃⌥V) has no island state to return to, so
+	// it closes outright.
+	if a.currentLevel() == 2 && !a.focusMode {
+		a.setLevel(1)
+		return
+	}
 	a.hide(hideExplicit)
 }
 
 // hide collapses the shelf. exit decides whether the remembered app gets
 // the keyboard back (see shouldRestoreApp); the remembered pid is always
 // cleared so a later explicit hide cannot reactivate it a second time.
+// The view state (page, search, keyboard mode) survives until the 120 ms
+// content fade ends, so the closing panel fades the page it was showing
+// instead of flashing the default one; finishClose retires it.
 func (a *shelf) hide(exit hideExit) {
 	if !a.visible && !a.peeking {
 		return
@@ -594,21 +597,14 @@ func (a *shelf) hide(exit hideExit) {
 	restore := a.shouldRestoreApp(exit)
 	prev := a.prevAppPID
 	a.visible, a.edgeOpened, a.peeking = false, false, false
-	if a.usage != nil { // 隐藏即取消 AI 用量的在途取数和扫描
+	a.closeAt = time.Now()
+	if a.usage != nil { // 隐藏即取消 AI 用量在途取数和扫描
 		a.usage.stopWork()
 	}
 	a.animationFrom, a.animationStart = a.progress, time.Now()
 	a.peekFrom, a.peekAnimStart = a.peekProgress, time.Now()
-	// 收起后回到默认视图：下次打开（悬停、拖入、托盘）从托盘标签开始，
-	// 搜索框清空；键盘模式在用户明确的收起动作下交还焦点。
-	a.focusMode, a.tab, a.tabFrom, a.search, a.reveal = false, pageTray, pageTray, "", ""
-	// 收起即放弃权限说明卡：面板再开时它要么还在等授权（重新触发再出），
-	// 要么授权已完成（预检通过直接框选），都不该回到一张旧卡。
-	a.ocrSheet = false
 	a.prevAppPID = 0
-	a.resetToolsEdit() // 工具页的编辑与目录不跨收起保留
 	a.releaseKeys()
-	a.selection.clear()
 	// 当前拖拽不再次触发；松开鼠标或出现新会话后解除。
 	a.suppressed = true
 	a.dropHot = false
@@ -619,6 +615,19 @@ func (a *shelf) hide(exit hideExit) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+}
+
+// finishClose retires the view state after the content fade: the next
+// opening starts on the island's default face with no search or edit.
+func (a *shelf) finishClose() {
+	a.closeAt = time.Time{}
+	a.focusMode, a.tab, a.tabFrom, a.search, a.reveal = false, pageTray, pageTray, "", ""
+	a.level = 1
+	// 收起即放弃权限说明卡：面板再开时它要么还在等授权（重新触发再出），
+	// 要么授权已完成（预检通过直接框选），都不该回到一张旧卡。
+	a.ocrSheet = false
+	a.resetToolsEdit() // 工具页的编辑与目录不跨收起保留
+	a.selection.clear()
 }
 
 // animate updates the shell drawing; idle/peek retain one native surface.
@@ -665,7 +674,7 @@ func (a *shelf) animate(now time.Time) {
 // stripCenter is shared by the drop surface and its protected approach region.
 func (a *shelf) stripCenter() int {
 	if a.notchW <= 0 {
-		return a.x + panelWidth/2
+		return a.x + sheetW/2
 	}
 	return a.notchX + a.notchW/2
 }

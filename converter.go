@@ -105,7 +105,7 @@ func extFormat(ext string) mac.ImageFormat {
 }
 
 // convertShowAfter keeps instant conversions (a format change takes a few
-// milliseconds) from flashing an activity into the strip.
+// milliseconds) from flashing an activity chip into the band.
 const convertShowAfter = 250 * time.Millisecond
 
 // Seams: tests run jobs synchronously against fakes.
@@ -215,17 +215,18 @@ type convertJob struct {
 var errConvertCanceled = errors.New("canceled")
 
 // converter is the module that runs conversion jobs and shows the running
-// one in the activity strip. One job at a time.
+// one in the sheet's left ear. One job at a time.
 type converter struct {
 	host *shelf
 	job  *convertJob
-	seen bool // the running job has been drawn in the strip
+	// cancelOpen reveals 取消 beside the chip's ring after a tap.
+	cancelOpen bool
 }
 
 func (m *converter) busy() bool { return m.job != nil }
 
 // tick redraws once a job has run long enough to show, and keeps the
-// strip's progress moving while it does.
+// chip's progress moving while it does.
 func (m *converter) tick(time.Time) {
 	if m.live() && m.host.win != nil {
 		m.host.win.Invalidate()
@@ -236,15 +237,14 @@ func (m *converter) live() bool {
 	return m.job != nil && time.Since(m.job.started) >= convertShowAfter
 }
 
-// activity draws the running job: a progress ring around a document
-// glyph, 「正在转成 Word」 and its step, and × to cancel (finished outputs
-// are kept).
-func (m *converter) activity(c *ui.Context, compact bool) {
+// chip is the running job's capsule: a 16pt progress ring whose tooltip
+// carries 「正在转成 JPEG · 2/3」. Tapping the ring turns it into 取消;
+// finished outputs are kept.
+func (m *converter) chip(c *ui.Context) ui.Element {
 	j := m.job
 	if j == nil {
-		return
+		return ui.Box(c).Size(0, 0)
 	}
-	m.seen = true
 	done, total := int(j.done.Load()), max(int(j.total.Load()), 1)
 	frac := float32(done) / float32(total)
 	title := "正在转成 " + strings.ToUpper(convertExt(j.target))
@@ -264,40 +264,46 @@ func (m *converter) activity(c *ui.Context, compact bool) {
 	case toExtract:
 		title = "正在解压"
 	}
-	step := fmt.Sprintf("第 %d / %d %s", min(done+1, total), total, j.unit)
-	if j.ocr.Load() {
-		step = fmt.Sprintf("识别文字 %d / %d", min(done+1, total), total)
-	}
+	step := fmt.Sprintf("%d/%d", min(done+1, total), total)
 	if j.cancel.Load() {
 		step = "正在取消…"
 	}
-	row := ui.Row(c.Key("converting")).Height(liveH).Grow(1).MinWidth(0).Radius(14).Background(fill1).
-		Padding(0, 10, 0, 10).Gap(10).AlignItems(ui.Center)
-	row.Children(func() {
-		ring := ui.Row(c.Key("conv-ring")).Size(36, 36).Center()
+	chip := ui.Row(c.Key("conv-chip")).Height(chipH).Radius(chipH/2).Background(fill1).
+		Padding(0, 3, 0, 3).Gap(4).AlignItems(ui.Center).
+		Label(title).Tooltip(title + " · " + step)
+	chip.Children(func() {
+		if m.cancelOpen {
+			b := ui.ButtonBase(c.Key("conv-chip-cancel")).Height(16).Radius(8).
+				Padding(0, 5, 0, 5).Center().Label("取消转换")
+			if b.Hovered() {
+				b.Background(fill2)
+			}
+			b.Children(func() {
+				ui.Text(c, "取消").SingleLine().FontSize(9.5).TextColor(ink)
+			})
+			if b.Clicked() {
+				j.cancel.Store(true)
+				m.cancelOpen = false
+			}
+			return
+		}
+		ring := ui.ButtonBase(c.Key("conv-chip-ring")).Size(16, 16).Radius(8).Center().Label(title + " · " + step)
 		ring.Draw(func(p *ui.Painter, r ui.Rect) {
-			cx, cy, rad := r.X+r.W/2, r.Y+r.H/2, r.W/2-2
+			cx, cy, rad := r.X+r.W/2, r.Y+r.H/2, r.W/2-1.5
 			var track ui.Path
 			track.Circle(cx, cy, rad)
-			p.StrokePath(&track, 2.5, fill3)
+			p.StrokePath(&track, 2, fill3)
 			if frac > 0 {
 				var arc ui.Path
 				arc.Circle(cx, cy, rad).Trim(0, frac)
-				p.StrokePath(&arc, 2.5, ink)
+				p.StrokePath(&arc, 2, ink)
 			}
 		})
-		ring.Children(func() { ui.Icon(c, fileSymbol).Size(16, 16).TextColor(ink) })
-		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
-			ui.Text(c.Key("conv-title"), title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-			ui.Text(c.Key("conv-step"), step).SingleLine().FontSize(11).TextColor(ink2)
-		})
-		b := ui.ButtonBase(c.Key("conv-cancel")).Size(24, 24).Radius(12).Center().Background(fill2).Label("取消转换")
-		b.Children(func() { ui.Icon(c, closeSymbol).Size(10, 10).TextColor(ink2) })
-		if b.Clicked() {
-			j.cancel.Store(true)
+		if ring.Clicked() {
+			m.cancelOpen = true
 		}
 	})
-	_ = compact // the strip's two-up layout already fits: one control only
+	return chip
 }
 
 // convertOut is one finished output (or failure) of a job.
@@ -378,7 +384,8 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 	}
 	job := &convertJob{target: target, unit: unit, started: time.Now()}
 	job.total.Store(int32(len(items)))
-	a.conv.job, a.conv.seen = job, false
+	a.conv.job = job
+	a.conv.cancelOpen = false
 	convertWork(func() {
 		tasks := planConvert(dir, srcs, names, exts, pdf, target, job)
 		if target != toZip {

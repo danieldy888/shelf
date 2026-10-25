@@ -23,12 +23,13 @@ var (
 	// 图钉：置顶标记（网格角标与列表行尾），填充的竖向 pin。
 	pinSymbol = symbol(`<path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v3.76z"/>`)
 	pinFill   = fillSymbol(`<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v3.76z"/><path d="M12 17v5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>`)
-	// 耳栏：模块切换（托盘、剪贴板）与全局按钮（设置、收起）；清空在模块栏。
-	trayNavSymbol   = symbol(`<path d="M3 13.5 5.5 5h13l2.5 8.5V19H3z"/><path d="M3 13.5h5.5l1.5 2.5h4l1.5-2.5H21"/>`)
-	clipNavSymbol   = symbol(`<rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4V3h6v1M9 10h6M9 14h4"/>`)
+	// 页面图标在一级岛与二级返回行；全局按钮（设置、收起）在菜单栏行；清空在返回行。
+	trayNavSymbol   = symbol(`<path d="M4 13h4.5l1.5 2.5h4l1.5-2.5H20"/><path d="M5.5 6h13L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5z"/>`)
+	clipNavSymbol   = symbol(`<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5h5v2.5h-5zM9 11h6M9 14.5h6"/>`)
 	trashSymbol     = symbol(`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>`)
-	gearSymbol      = symbol(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>`)
+	gearSymbol      = symbol(`<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6"/>`)
 	chevronUpSymbol = symbol(`<path d="M6 15l6-6 6 6"/>`)
+	backSymbol      = symbolWidth(`<path d="M14.5 6 8.5 12l6 6"/>`, 2)
 	chevronDownSym  = symbolWidth(`<path d="M6 9l6 6 6-6"/>`, 2.2)
 	searchSymbol    = symbol(`<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>`)
 )
@@ -99,40 +100,53 @@ var panelTheme = func() *ui.Theme {
 	return t
 }()
 
-// 展开面板布局常量（对应 DESIGN.md「展开面板」）：耳栏 → 活动条 → 模块栏
-// → 舞台，提示浮在舞台底部。
+// 面板只有两种尺寸，与页面内容无关（原型 index.html?variant=B）：
+// 一级岛 340 × 104，二级面板 420 × 250。二级面板的 250 由 32 菜单栏行、
+// 26 返回行、6 间距、396 × 174 内容区和 12 底边拼成；一级岛的 104 由
+// 32 菜单栏行、56 播放器行和 16 底边拼成。页面内容永远画在 396 × 174 里。
 const (
-	panelPadX      = 16                      // 左右内边距
-	panelPadBottom = 16                      // 底部内边距
-	earMinH        = 32                      // 耳栏最低高度（无刘海屏按菜单栏留出）
-	earBtn         = 26                      // 耳栏图标按钮
-	earBtnGap      = 6                       // 耳栏按钮间距
-	earHousingPad  = 6                       // 摄像头壳体两侧各让出的空隙
-	menuBarMinH    = 24                      // 无刘海屏的菜单栏高
-	headerTopGap   = 8                       // 键盘搜索时：菜单栏下沿到耳栏
-	headerH        = 28                      // 键盘搜索时耳栏的行高
-	earBottomGap   = 8                       // 耳栏到活动条或模块栏
-	liveH          = 56                      // 活动条高
-	liveGap        = 12                      // 活动条到模块栏
-	liveMax        = 2                       // 活动条最多并排的活动数
-	moduleBarH     = 28                      // 模块栏高
-	stageGap       = 6                       // 模块栏到舞台
-	stageMinH      = 140                     // 舞台最矮（空状态）
-	stageMaxH      = 320                     // 舞台最高，超出在舞台内滚动
-	gridCols       = 5                       // 托盘网格列数
-	gridGap        = 4                       // 格子间距
-	tileH          = 100                     // 格子高
-	clipSearchH    = 32                      // 搜索框高
-	clipListTop    = 8                       // 列表上边距
-	clipRowH       = 46                      // 剪贴板行高
-	clipRowGap     = 2                       // 行间距
-	hintPillH      = 34                      // 提示胶囊：12 上距 + 22 高
-	panelMaxH      = 560                     // 面板最大高，受屏高钳制
-	toastLife      = 2500 * time.Millisecond // 状态胶囊的展示时长
-	toastFade      = 220 * time.Millisecond  // 淡出时长
+	islandW, islandH   = 340, 104
+	sheetW, sheetH     = 420, 250
+	contentW, contentH = 396, 174
+
+	bandH           = 32 // 菜单栏那一行
+	backRowH        = 26 // 二级的返回行
+	contentGap      = 6  // 返回行到内容区
+	sheetPadX       = 12 // 左右内边距
+	sheetPadBottom  = 12 // 二级底边
+	islandRowH      = 56 // 一级播报 / 图标行
+	islandPadBottom = 16
+	islandRadius    = 22
+	sheetRadius     = 24
+
+	islandArt       = 38 // 迷你播放器封面
+	islandArtR      = 9
+	islandIcon      = 28 // 一级页面图标
+	islandIconGap   = 2
+	islandIconGlyph = 15
+	bandBtn         = 22 // 菜单栏行的按钮
+	backIcon        = 22 // 返回行里其余页面的图标
+	chipH           = 22 // 活动小胶囊
+	chipMax         = 2  // 左耳最多两个
+
+	menuBarMinH  = 24 // 无刘海屏的菜单栏高
+	headerTopGap = 8  // 键盘搜索时：菜单栏下沿到面板顶边
+
+	gridCols    = 5  // 托盘网格列数
+	gridGap     = 4  // 格子间距
+	tileH       = 85 // 格子高（两行正好 10 项）
+	tileArt     = 40 // 缩略图边长
+	clipRowH    = 30 // 剪贴板行高
+	clipRowGap  = 0  // 行紧挨着，同原型 .cl
+	clipSearchW = 150
+	clipSearchH = 22
+	clipFadeH   = 20 // 内容区底部淡出高度
+
+	toastLife = 2500 * time.Millisecond // 状态胶囊的展示时长
+	toastFade = 220 * time.Millisecond  // 淡出时长
 	// earR 是壳顶边左右各伸出的耳角半径；窗口宽度必须包含两侧耳角，
 	// 任何一帧耳角都是完整圆弧（desiredFrame 据此加宽）。
-	earR = 10
+	earR = 12
 )
 
 // Page switch "fade through": the page being left fades out over the first
@@ -154,9 +168,34 @@ func (a *shelf) tabPhase(now time.Time) float32 {
 	return min(max(t, 0), 1)
 }
 
-// panelHeightKey keys the panel's height animation to one opening, so a
-// new opening starts at its own height instead of easing from the last.
-type panelHeightKey struct{ gen int }
+// closeFade is how long the panel's content fades out after a hide; the
+// shell folds on its own 220 ms spring at the same time.
+const closeFade = 120 * time.Millisecond
+
+// currentLevel is the panel's drawn level: 1 the island, 2 the sheet. A
+// zero value on a headless surface (unit tests) reads as the sheet, which
+// is the content those tests inspect; a live window always starts at the
+// island.
+func (a *shelf) currentLevel() int {
+	if a.level >= 2 {
+		return 2
+	}
+	if a.level == 0 && a.win == nil {
+		return 2
+	}
+	return 1
+}
+
+// sheetTop is where the drawn shell starts inside the window: flush with
+// the menu bar normally; while the clipboard search holds the keyboard the
+// window sits below the menu bar's level, so the shell drops below it by
+// the menu bar's height and keeps the sheet's 250 pt below that.
+func (a *shelf) sheetTop() int {
+	if a.focusMode {
+		return max(a.topInset, menuBarMinH) + headerTopGap
+	}
+	return 0
+}
 
 // view 画三种状态：空闲（完全不可见）、探头（悬停播放器、下拉箭头或拖拽
 // 提示）、展开（纯黑面板从刘海里长出来）。单元测试里 a.win 为 nil，
@@ -167,6 +206,11 @@ func (a *shelf) view(c *ui.Context) {
 	// A page that got switched off (or a stale id) must not stay current:
 	// fold back to the tray before anything reads a.tab.
 	a.normalizeTab()
+	// The close fade has run its course: retire the view state now so the
+	// next opening starts fresh.
+	if !a.visible && !a.closeAt.IsZero() && c.Now().Sub(a.closeAt) >= closeFade {
+		a.finishClose()
+	}
 	// Selection may change while building this frame.
 	defer a.syncCopyKey()
 	if c.Shortcut(0, ui.KeyEscape) {
@@ -339,32 +383,58 @@ func (a *shelf) view(c *ui.Context) {
 		return
 	}
 	peeked := a.peeking || peekK > 0.01
-	// Content shows only while the panel is open. A closing panel is just
-	// the shell retracting: hide() has already reset the tab and search,
-	// and drawing that reset state on the way out would flip the content.
-	expanded := a.win == nil && !a.peeking || a.visible
-	closing := !expanded && openK > 0
-	// The panel's height eases between contents (tab switch, rows coming
-	// and going); the content itself is laid out at the target height.
-	// While closing, the shell keeps the height it was showing.
-	// The drop zone's file snapshot runs before the height math so the
-	// panel already sizes for the zone on the frame it appears — no
-	// clipped first frame and no mid-drag resize.
-	if expanded {
-		a.dropZoneSnap(over)
-	} else {
-		a.drop.on, a.drop.need = false, 0
-	}
-	targetH := float32(a.panelH())
-	shownH := targetH
-	// Keep the closing height until the drawn spring reaches the notch.
-	if a.win != nil && (a.visible || openK > 0) {
-		if closing && a.shownH > 0 {
-			targetH = a.shownH
+	// A closing panel keeps the view it had for the content's 120 ms fade;
+	// finishClose retires that state once the fade is over. Headless test
+	// views always draw the expanded state.
+	closeK := float32(0)
+	switch {
+	case a.win == nil:
+		// Headless test surfaces draw the content unless a peek is being
+		// inspected.
+		if a.visible || !a.peeking {
+			closeK = 1
 		}
-		shownH = zone.AnimateTo(panelHeightKey{a.openGen}, targetH, ui.Animation{Duration: resizeAnimation, Ease: ui.EaseInOut})
+	case a.visible:
+		closeK = 1
+	case !a.closeAt.IsZero():
+		if e := now.Sub(a.closeAt); e < closeFade {
+			closeK = 1 - float32(e)/float32(closeFade)
+		}
 	}
-	a.shownH = shownH
+	expanded := closeK > 0
+	closing := !a.visible && openK > 0
+	// The drop zone's file snapshot runs before anything is laid out so
+	// the panel already shows the zone on the frame it appears.
+	if a.visible {
+		a.dropZoneSnap(over)
+		// A file drag over the island opens the sheet on the tray page: the
+		// drop zone lives there, and the island cannot show it.
+		if a.drop.on && len(a.drop.files) > 0 && a.currentLevel() == 1 {
+			a.tabFrom, a.tab = pageTray, pageTray
+			a.setLevel(2)
+		}
+	} else {
+		a.drop.on = false
+	}
+	// The two levels: levelK springs between the island (0) and the sheet
+	// (1). A fresh opening at the sheet is a jump — the open spring alone
+	// takes the notch to the sheet, so no island shape flashes on the way.
+	levelTarget := float32(0)
+	if a.currentLevel() == 2 {
+		levelTarget = 1
+	}
+	levelK := levelTarget
+	if a.win != nil {
+		freshOpen := a.fx.openK == 0 && a.fx.levelK == 0 && levelTarget == 1
+		if a.jumpLevel || freshOpen {
+			levelK = zone.Jump("level", levelTarget)
+			a.jumpLevel = false
+		} else {
+			levelK = zone.AnimateTo("level", levelTarget, levelSpring)
+		}
+	}
+	levelK = min(max(levelK, 0), 1)
+	a.fx.levelK = levelK
 	// The hover shape springs between its forms (chevron, drop pill,
 	// wings, capsule) when it changes while shown, e.g. a drag starting.
 	// A fold is subtract-only: while the peek closes (peekTarget 0), the
@@ -413,16 +483,16 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	a.fx.peekW, a.fx.peekH = peekW, peekH
 	a.fx.sizeMoving = a.win != nil && (!zone.Settled("peek-w") || !zone.Settled("peek-h"))
-	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 完整面板
+	// 刘海壳尺寸在三态间插值：硬件刘海 ←→ 探头胶囊 ←→ 一级岛 ←→ 二级面板
 	// （shellSize 是几何的唯一来源）。
-	shellW, shellH := a.shellSize(openK, peekK, peekW, peekH, shownH)
+	shellW, shellH := a.shellSize(openK, levelK, peekK, peekW, peekH)
 	shellW, shellH = max(shellW, 0), max(shellH, 0)
 	// The frame follows the drawn shell while the springs are in flight (see
 	// desiredFrame): the opening overshoots, and a shape morph can be larger
 	// than the shape it heads for.
 	a.fx.w, a.fx.h = shellW, shellH
 	a.fx.openK, a.fx.peekK = openK, peekK
-	a.fx.openMoving = a.win != nil && !zone.Settled("open")
+	a.fx.openMoving = a.win != nil && (!zone.Settled("open") || !zone.Settled("level"))
 	a.fx.peek = !expanded && peeked && !closing
 	a.syncMousePassThrough()
 	// A failed job shakes the capsule, and only the capsule; the drawn
@@ -436,23 +506,25 @@ func (a *shelf) view(c *ui.Context) {
 	// syncWindowFrame）：壳水平居中、顶端贴齐窗口顶边，探头才能从硬件
 	// 刘海里长出来，而不是浮在菜单栏下方。窗口宽度含两侧耳角（earR），
 	// 这里画出的耳角任何一帧都不会被裁。
+	top := float32(a.sheetTop())
+	corner := float32(islandRadius) + float32(sheetRadius-islandRadius)*levelK
 	zone.Draw(func(p *ui.Painter, r ui.Rect) {
 		x0 := (r.W - shellW) / 2
 		x1 := x0 + shellW
-		y1 := shellH
+		y0 := top
+		y1 := top + shellH
 		ear := float32(earR)
-		// 底部圆角：探头胶囊半圆 → 展开 30pt。The island reads rounded from
-		// the first frame, so the corner no longer tracks openK.
-		botR := min(shellH/2, 30)
+		// 底部圆角：探头胶囊半圆 → 一级 22 → 二级 24。
+		botR := min(shellH/2, corner)
 		var path ui.Path
-		path.MoveTo(x0-ear+shake, 0)
-		path.QuadTo(x0+shake, 0, x0+shake, earR)
+		path.MoveTo(x0-ear+shake, y0)
+		path.QuadTo(x0+shake, y0, x0+shake, y0+earR)
 		path.LineTo(x0+shake, y1-botR)
 		path.QuadTo(x0+shake, y1, x0+shake+botR, y1)
 		path.LineTo(x1-botR+shake, y1)
 		path.QuadTo(x1+shake, y1, x1+shake, y1-botR)
-		path.LineTo(x1+shake, earR)
-		path.QuadTo(x1+shake, 0, x1+ear+shake, 0)
+		path.LineTo(x1+shake, y0+earR)
+		path.QuadTo(x1+shake, y0, x1+ear+shake, y0)
 		path.Close()
 		p.FillPath(&path, ui.Hex("#000000"))
 	})
@@ -465,36 +537,53 @@ func (a *shelf) view(c *ui.Context) {
 			a.peekView(c, shellW, shellH, openK, peekK, shake, over, peekTarget == 0)
 			return
 		}
-		// The content is laid out once at the panel's final size and the
-		// growing shell uncovers it, so nothing inside moves or reflows
-		// while the panel opens, closes or changes height.
-		clip := ui.Column(c.Key("panel-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
-		clip.Children(func() {
-			content := ui.Column(c.Key("panel")).Width(panelWidth-16).Height(targetH-8).
-				Padding(0, panelPadX, panelPadBottom, panelPadX)
-			if a.win != nil {
-				// The content grows with the shell like an island: it
-				// springs in a beat later (contentK), scaling up from its
-				// top centre and shedding blur as it fades in. ReduceMotion
-				// keeps only the fade — the channel also settles at once
-				// there, so scale and blur are 1 and 0 anyway.
-				content.Opacity(min(max((contentK-0.1)/0.6, 0), 1))
-				if !c.Preferences().ReduceMotion {
-					s := 0.88 + 0.12*contentK
-					content.TransformOrigin(0.5, 0).Scale(s, s)
-					// 不可见的内容不值得一次离屏模糊：低于淡入起点
-					// (k ≤ 0.1 ⇒ opacity 0) 或残余模糊已不可辨 (< 0.25pt) 时跳过。
-					if blur := 6 * (1 - contentK); contentK > 0.1 && blur >= 0.25 {
-						content.Blur(blur)
-					}
-				}
+		// Both levels are laid out at their final size and uncovered by the
+		// growing shell, so nothing inside reflows while the panel opens or
+		// changes level. levelK crossfades the two layers while the shell
+		// springs between their sizes.
+		clip := ui.Column(c.Key("panel-clip")).Width(shellW).Height(shellH).Clip().
+			AlignItems(ui.Center).Margin(top, 0, 0, 0)
+		reduce := c.Preferences().ReduceMotion
+		reveal := contentK
+		if !a.visible && closeK > 0 {
+			reveal = closeK
+		}
+		scale := float32(1)
+		if a.visible && !reduce {
+			scale = 0.96 + 0.04*contentK
+		}
+		layer := func(level int, alpha float32) {
+			if alpha <= 0.001 && level != a.currentLevel() {
+				return
 			}
-			content.Children(func() {
-				a.earBar(c)
-				a.activityStrip(c)
-				a.dropBody(c, over)
-				a.toastLayer(c, over)
+			w, h := float32(islandW), float32(islandH)
+			if level == 2 {
+				w, h = sheetW, sheetH
+			}
+			outer := ui.Column(c.Key(fmt.Sprintf("panel-l%d", level))).Absolute().Top(0).Left(0).Right(0).
+				Height(h).AlignItems(ui.Center).Opacity(alpha)
+			if level != a.currentLevel() {
+				// The layer fading out is only a picture: it takes no
+				// pointer and never the keyboard.
+				outer.PassThrough()
+			}
+			outer.Children(func() {
+				inner := ui.Column(c.Key("panel")).Width(w).Height(h)
+				if !reduce && scale != 1 {
+					inner.TransformOrigin(0.5, 0).Scale(scale, scale)
+				}
+				inner.Children(func() {
+					if level == 2 {
+						a.sheetView(c, over)
+					} else {
+						a.islandView(c)
+					}
+				})
 			})
+		}
+		clip.Children(func() {
+			layer(1, reveal*(1-levelK))
+			layer(2, reveal*levelK)
 		})
 	})
 	// What this frame drew decides the next one's retraction spring and
@@ -514,11 +603,94 @@ func (a *shelf) view(c *ui.Context) {
 	}
 }
 
-// tabBody holds the current page's module bar and stage, fading through
-// from the page just left (see tabOutShare). This is driven per frame
-// rather than by an element Transition: a switch that changes the panel's
-// height resizes the window, and mygo does not animate a resized frame's
-// transitions.
+// sheetView is the 420 × 250 sheet: the menu-bar band with the activity
+// chips, then the page frame (back row, 396 × 174 content, bottom pad).
+func (a *shelf) sheetView(c *ui.Context, over bool) {
+	ui.Column(c.Key("sheet")).Width(sheetW).Height(sheetH).Children(func() {
+		a.bandRow(c, false)
+		a.tabBody(c, over)
+	})
+}
+
+// islandView is the 340 × 104 first level: the same band (left ear empty),
+// then the mini player and the page icons.
+func (a *shelf) islandView(c *ui.Context) {
+	ui.Column(c.Key("island")).Width(islandW).Height(islandH).Children(func() {
+		a.bandRow(c, true)
+		a.islandRow(c)
+	})
+}
+
+// bandRow is the 32pt menu-bar row shared by both levels: activity chips
+// in the left ear (sheet only), settings and collapse in the right ear,
+// split around the camera housing while the shell sits under the notch.
+// While the clipboard search holds the keyboard the window sits below the
+// menu bar, so no housing gap is cut.
+func (a *shelf) bandRow(c *ui.Context, island bool) {
+	row := ui.Row(c.Key("band")).Height(bandH).FillWidth().
+		Padding(0, sheetPadX, 0, sheetPadX).AlignItems(ui.Center)
+	row.Children(func() {
+		ui.Row(c.Key("band-left")).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
+			if island {
+				return
+			}
+			for _, act := range a.liveActivities() {
+				act.chip(c)
+			}
+		})
+		if a.notchW > 0 && !a.focusMode {
+			ui.Box(c.Key("band-housing")).Width(float32(a.notchW + 2*6)).Shrink(0)
+		}
+		ui.Row(c.Key("band-right")).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
+			if a.iconButton(c, "settings", gearSymbol, "设置").Clicked() {
+				a.openSettings()
+			}
+			if a.iconButton(c, "collapse", chevronUpSymbol, "收起").Clicked() {
+				a.hide(hideExplicit)
+			}
+		})
+	})
+}
+
+// islandRow is the 56pt row under the band: the mini player (or the two
+// counts when nothing is loaded), a hairline, then one 28pt icon per page.
+func (a *shelf) islandRow(c *ui.Context) {
+	ui.Row(c.Key("island-row")).Height(islandRowH).FillWidth().
+		Padding(0, sheetPadX, 0, sheetPadX).Gap(10).AlignItems(ui.Center).Children(func() {
+		left := ui.Row(c.Key("island-left")).Grow(1).MinWidth(0).AlignItems(ui.Center)
+		left.Children(func() {
+			if a.np != nil && a.np.showsPlayer() {
+				a.np.miniPlayer(c)
+				return
+			}
+			ui.Text(c.Key("island-counts"), a.countsText()).SingleLine().FontSize(11.5).TextColor(ink3)
+		})
+		ui.Box(c.Key("island-sep")).Width(1).Height(30).Background(fill2)
+		ui.Row(c.Key("island-pages")).Gap(islandIconGap).AlignItems(ui.Center).Children(func() {
+			for _, p := range a.enabledPages() {
+				if pageIcon := a.pageIconButton(c, p, islandIcon, islandIconGlyph, false); pageIcon.Clicked() {
+					a.openPage(p.id())
+				}
+			}
+		})
+	})
+}
+
+// countsText is the island's quiet line when no track is loaded.
+func (a *shelf) countsText() string {
+	tray, clip := 0, 0
+	if p, ok := a.page(pageTray).(*trayPage); ok {
+		tray = len(p.items())
+	}
+	if p, ok := a.page(pageClipboard).(*clipboardPage); ok {
+		clip = len(p.items())
+	}
+	return fmt.Sprintf("托盘 %d 项 · 剪贴板 %d 条", tray, clip)
+}
+
+// tabBody holds the page frame, fading through from the page just left
+// (see tabOutShare). A drag's drop zone and the screen-recording card
+// replace the page without a crossfade — they are live gestures.
 func (a *shelf) tabBody(c *ui.Context, over bool) {
 	t := float32(1)
 	if a.win != nil {
@@ -533,143 +705,168 @@ func (a *shelf) tabBody(c *ui.Context, over bool) {
 	if c.Preferences().ReduceMotion {
 		dir = 0
 	}
-	stage := ui.Column(c.Key("stage")).FillWidth().Grow(1).MinHeight(0)
-	stage.Children(func() {
-		body := ui.Column(c.Key("body")).FillWidth().Grow(1).MinHeight(0)
+	body := ui.Column(c.Key("sheet-body")).Width(sheetW).Height(sheetH-bandH).
+		Padding(0, sheetPadX, sheetPadBottom, sheetPadX)
+	body.Children(func() {
+		frame := ui.Column(c.Key("frame")).FillWidth().Grow(1).MinHeight(0)
 		if t < 1 {
 			in := ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
-			body.Opacity(in).Translate(tabShift*dir*(1-in), 0)
+			frame.Opacity(in).Translate(tabShift*dir*(1-in), 0)
 			c.AnimationFrame()
 		}
-		body.Children(func() { a.panelBody(c, over, a.currentPage(), true) })
+		frame.Children(func() { a.currentFrame(c, over, true) })
 		if t < tabOutShare && a.tabFrom != a.tab {
 			// The outgoing page is only a picture: it takes no pointer
 			// and never the keyboard. It may already be disabled; an
 			// unregistered one is skipped instead of drawn half-built.
 			if out := a.page(a.tabFrom); out != nil {
-				old := ui.Column(c.Key("body-out")).Absolute().Left(0).Right(0).Top(0).Bottom(0).
+				old := ui.Column(c.Key("frame-out")).Absolute().Left(0).Right(0).Top(0).Bottom(0).
 					PassThrough().Opacity(1 - ui.EaseIn(t/tabOutShare))
-				old.Children(func() { a.panelBody(c, false, out, false) })
+				old.Children(func() { a.pageFrame(c, out, false, over) })
 			}
 		}
+		a.toastLayer(c, over)
 	})
 }
 
-// earLayout places the ear bar. Normally it sits in the notch band itself,
-// split around the camera housing; there is nothing else in that band
-// while the panel is open. While the clipboard search holds the keyboard
-// the window drops below the menu bar's level (see windowLevel), so the
-// band is covered: the bar then moves below the menu bar as an ordinary
-// row, without the housing gap.
-func (a *shelf) earLayout() (spacer, rowH int, inBand bool) {
-	if a.focusMode {
-		return max(a.topInset, menuBarMinH) + headerTopGap, headerH, false
+// currentFrame draws what the sheet shows under the band: the drop zone
+// while a file drag is over the panel, the screen-recording card while it
+// is armed, otherwise the current page.
+func (a *shelf) currentFrame(c *ui.Context, over bool, live bool) {
+	switch {
+	case a.drop.on && len(a.drop.files) > 0:
+		a.dropFrame(c, a.drop.files, a.drop.class)
+	case a.ocrSheet:
+		a.sheetFrame(c, func() { a.dropBar(c, "框选文字", "", "") },
+			func() { a.ocrSheetStage(c) }, false)
+	default:
+		a.pageFrame(c, a.currentPage(), live, over)
 	}
-	return 0, max(earMinH, a.topInset), true
 }
 
-// earBar is the panel's top row: page icons in the left ear, settings and
-// collapse in the right one, the camera housing between them. The active
-// page's capsule is drawn by the bar and glides to the other icon on a
-// switch instead of jumping.
-func (a *shelf) earBar(c *ui.Context) {
-	spacer, rowH, inBand := a.earLayout()
-	if spacer > 0 {
-		ui.Box(c.Key("ear-spacer")).Height(float32(spacer))
+// pageOverflows reports whether a page scrolls inside the fixed content
+// box; only then does the bottom fade appear.
+func pageOverflows(p panelPage) bool {
+	if s, ok := p.(interface{ overflows() bool }); ok {
+		return s.overflows()
 	}
-	bar := ui.Row(c.Key("ears")).Height(float32(rowH)).AlignItems(ui.Center).FillWidth()
-	var navs map[pageID]ui.Element
-	bar.Children(func() {
-		// Both ears grow from a zero basis, so they split the width evenly
-		// and the housing gap stays centred on the notch.
-		ui.Row(c.Key("ear-left")).Grow(1).MinWidth(0).Gap(earBtnGap).AlignItems(ui.Center).Children(func() {
-			navs = map[pageID]ui.Element{}
-			for i, p := range a.enabledPages() {
-				if i >= earMaxPages {
-					// 左耳最多 5 个页面图标（DESIGN.md）；多出的页面仍能
-					// 通过 setTab 打开，只是没有耳栏图标。
-					break
+	return true
+}
+
+// pageFrame is one page's back row and its 396 × 174 body.
+func (a *shelf) pageFrame(c *ui.Context, p panelPage, live bool, over bool) {
+	name, count := p.title()
+	a.sheetFrame(c, func() {
+		a.backRow(c, p, name, count, live)
+	}, func() {
+		p.body(c, over, live)
+	}, pageOverflows(p))
+}
+
+// sheetFrame stacks a back row, the 6pt gap and the fixed content box with
+// its 20pt bottom fade while the page scrolls.
+func (a *shelf) sheetFrame(c *ui.Context, back, body func(), fade bool) {
+	ui.Column(c.Key("page-frame")).FillWidth().Grow(1).MinHeight(0).Children(func() {
+		back()
+		ui.Box(c.Key("page-gap")).Height(contentGap)
+		ui.Column(c.Key("page-content")).Width(contentW).Height(contentH).Clip().Children(func() {
+			body()
+			if fade {
+				ui.Column(c.Key("page-fade")).Absolute().Left(0).Right(0).Bottom(0).Height(clipFadeH).PassThrough().
+					LinearGradient(ui.LinearGradient{Angle: 0, Stops: []ui.GradientStop{
+						{Color: ui.Hex("#000000"), At: 0},
+						{Color: ui.RGBA(0, 0, 0, 0.6), At: 0.35},
+						{Color: ui.RGBA(0, 0, 0, 0), At: 1},
+					}})
+			}
+		})
+	})
+}
+
+// backRow is the sheet's 26pt row: 「‹ 页面名 数量」, the other pages'
+// icons, then the current page's own buttons.
+func (a *shelf) backRow(c *ui.Context, p panelPage, name, count string, live bool) {
+	ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		label := name
+		if count != "" {
+			label += " " + count
+		}
+		back := ui.ButtonBase(c.Key("back")).Height(22).Radius(11).Padding(0, 6, 0, 4).
+			Label("返回一级岛 · " + label).Tooltip("返回")
+		if back.Hovered() {
+			back.Background(fill1)
+		}
+		back.Children(func() {
+			ui.Row(c.Key("back-in")).AlignItems(ui.Center).Gap(2).Children(func() {
+				ui.Icon(c, backSymbol).Size(14, 14).TextColor(ink2)
+				ui.Text(c, name).SingleLine().FontSize(11.5).FontWeight(600).TextColor(ink2)
+				if count != "" {
+					ui.Text(c, count).SingleLine().FontSize(10).FontWeight(600).TextColor(ink3)
 				}
-				navs[p.id()] = a.navButton(c, p)
+			})
+		})
+		if live && back.Clicked() {
+			a.setLevel(1)
+		}
+		ui.Row(c.Key("other-pages")).Gap(2).AlignItems(ui.Center).Children(func() {
+			for _, q := range a.enabledPages() {
+				if q.id() == p.id() {
+					continue
+				}
+				b := a.pageIconButton(c, q, backIcon, 14, false)
+				if live && b.Clicked() {
+					a.setTab(q.id())
+				}
 			}
 		})
-		if inBand && a.notchW > 0 {
-			ui.Box(c.Key("ear-housing")).Width(float32(a.notchW + 2*earHousingPad)).Shrink(0)
+		ui.Box(c).Grow(1)
+		if live {
+			ui.Row(c.Key("page-actions")).Gap(4).AlignItems(ui.Center).Children(func() {
+				for _, e := range p.actions(c) {
+					_ = e
+					// Elements add themselves to the current parent when
+					// created; nothing to do here.
+				}
+			})
 		}
-		ui.Row(c.Key("ear-right")).Grow(1).MinWidth(0).Gap(earBtnGap).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-			if a.iconButton(c, "settings", gearSymbol, "设置").Clicked() {
-				a.openSettings()
-			}
-			if a.iconButton(c, "collapse", chevronUpSymbol, "收起").Clicked() {
-				a.hide(hideExplicit)
-			}
-		})
-	})
-	// The capsule follows the active icon's box from the last frame; the
-	// icon paints its own capsule until that box is known (first frame).
-	cur, ok := navs[a.currentPage().id()]
-	r := cur.LayoutBounds()
-	if !ok || r.W <= 0 {
-		cur.Background(fill2)
-		return
-	}
-	x := r.X
-	if a.win != nil {
-		if a.tabPhase(c.Now()) < 1 {
-			// A page switch glides the capsule to the other icon.
-			x = bar.AnimateTo("tab-x", r.X, ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut})
-		} else {
-			// Every other move (opening, the window shrink once the spring
-			// rests, a new height) keeps the capsule on the icon instead of
-			// easing behind it.
-			x = bar.Jump("tab-x", r.X)
-		}
-	}
-	prev := bar.LayoutBounds()
-	bar.Draw(func(p *ui.Painter, box ui.Rect) {
-		// The capsule rect comes from last frame's boxes; anchor it to the
-		// bar's current box so a frame that moved the bar (window shrink
-		// after the open spring rests, the blur pass) cannot unglue it.
-		dx, dy := float32(0), float32(0)
-		if prev.W > 0 {
-			dx, dy = box.X-prev.X, box.Y-prev.Y
-		}
-		p.Fill(ui.Rect{X: x + dx, Y: r.Y + dy, W: r.W, H: r.H}, fill2, r.H/2)
 	})
 }
 
-// navButton is one page icon of the left ear: ink when active (its capsule
-// is earBar's), ink2 with a fill1 hover otherwise. The page's name is its
-// tooltip and accessible label; the module bar spells it out below.
-func (a *shelf) navButton(c *ui.Context, p panelPage) ui.Element {
-	on := p.id() == a.currentPage().id()
-	b := ui.ButtonBase(c.Key("page-"+string(p.id()))).Size(earBtn, earBtn).Radius(earBtn / 2).Center().Label(p.label()).Tooltip(p.label())
+// dropFrame is the page frame during a file drag: 投放 and its count in
+// the back row, the release hint on the right, the zone in the content.
+func (a *shelf) dropFrame(c *ui.Context, paths []string, class dropClass) {
+	a.sheetFrame(c, func() {
+		a.dropBar(c, "投放", dropCountTextFor(len(paths), class), "松开放入托盘")
+	}, func() {
+		a.dropStage(c, paths, class)
+	}, false)
+}
+
+// dropBar is a plain back row for the transient drop zone and OCR card.
+func (a *shelf) dropBar(c *ui.Context, name, count, hint string) {
+	ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, name).SingleLine().FontSize(11.5).FontWeight(600).TextColor(ink)
+		if count != "" {
+			ui.Text(c, count).SingleLine().FontSize(10).FontWeight(600).TextColor(ink3)
+		}
+		ui.Box(c).Grow(1)
+		if hint != "" {
+			ui.Text(c, hint).SingleLine().FontSize(10.5).FontWeight(600).TextColor(ink3)
+		}
+	})
+}
+
+// pageIconButton is one page icon: ink when active, ink2 with a fill1
+// hover otherwise; the page's name is its tooltip and accessible label.
+func (a *shelf) pageIconButton(c *ui.Context, p panelPage, size, glyph float32, on bool) ui.Element {
+	b := ui.ButtonBase(c.Key("page-"+string(p.id()))).Size(size, size).Radius(size / 2).Center().
+		Label(p.label()).Tooltip(p.label())
 	if !on && b.Hovered() {
 		b.Background(fill1)
 	}
 	b.Children(func() {
-		g := p.icon(c, on || b.Hovered()).Size(15, 15)
+		g := p.icon(c, on || b.Hovered()).Size(glyph, glyph)
 		if on || b.Hovered() {
-			g.TextColor(ink)
-		} else {
-			g.TextColor(ink2)
-		}
-	})
-	if b.Clicked() {
-		a.setTab(p.id())
-	}
-	return b
-}
-
-// iconButton is one 26×26 circular icon button (ears and module bar).
-func (a *shelf) iconButton(c *ui.Context, key string, icon *ui.SVG, label string) ui.Element {
-	b := ui.ButtonBase(c.Key(key)).Size(earBtn, earBtn).Radius(earBtn / 2).Center().Label(label).Tooltip(label)
-	if b.Hovered() {
-		b.Background(fill2)
-	}
-	b.Children(func() {
-		g := ui.Icon(c, icon).Size(15, 15)
-		if b.Hovered() {
 			g.TextColor(ink)
 		} else {
 			g.TextColor(ink2)
@@ -679,13 +876,13 @@ func (a *shelf) iconButton(c *ui.Context, key string, icon *ui.SVG, label string
 }
 
 // liveActivities are the modules with something under way, in module
-// order, at most liveMax: the strip has room for two side by side.
+// order, at most chipMax: the band's left ear has room for two chips.
 func (a *shelf) liveActivities() []liveActivity {
 	var acts []liveActivity
 	for _, m := range a.modules {
 		if act, ok := m.(liveActivity); ok && act.live() {
 			acts = append(acts, act)
-			if len(acts) == liveMax {
+			if len(acts) == chipMax {
 				break
 			}
 		}
@@ -693,43 +890,21 @@ func (a *shelf) liveActivities() []liveActivity {
 	return acts
 }
 
-// activityStrip is the row under the ears that shows what is under way,
-// on every page. With no activity it takes no space at all.
-func (a *shelf) activityStrip(c *ui.Context) {
-	acts := a.liveActivities()
-	gap := float32(earBottomGap)
-	if len(acts) == 0 {
-		ui.Box(c.Key("live-none")).Height(gap)
-		return
+// iconButton is one 22pt circular icon button in the band.
+func (a *shelf) iconButton(c *ui.Context, key string, icon *ui.SVG, label string) ui.Element {
+	b := ui.ButtonBase(c.Key(key)).Size(bandBtn, bandBtn).Radius(bandBtn / 2).Center().Label(label).Tooltip(label)
+	if b.Hovered() {
+		b.Background(fill2)
 	}
-	ui.Row(c.Key("live")).Height(liveH).FillWidth().Gap(6).Margin(gap, 0, liveGap, 0).Children(func() {
-		for _, act := range acts {
-			act.activity(c, len(acts) > 1)
+	b.Children(func() {
+		g := ui.Icon(c, icon).Size(13, 13)
+		if b.Hovered() {
+			g.TextColor(ink)
+		} else {
+			g.TextColor(ink2)
 		}
 	})
-}
-
-// panelBody renders a page under the activity strip: its module bar, then
-// its stage body from the page itself. live is false for the page fading
-// out after a switch, which is drawn only.
-func (a *shelf) panelBody(c *ui.Context, over bool, p panelPage, live bool) {
-	a.moduleBar(c, p, live)
-	p.body(c, over, live)
-}
-
-// moduleBar is the page's own 28pt row: its name and count on the left,
-// the page's own controls on the right.
-func (a *shelf) moduleBar(c *ui.Context, p panelPage, live bool) {
-	title, count := p.moduleTitle()
-	ui.Row(c.Key("module-bar")).Height(moduleBarH).AlignItems(ui.Center).FillWidth().
-		Padding(0, 0, 0, 2).Margin(0, 0, stageGap, 0).Children(func() {
-		ui.Text(c, title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-		if count != "" {
-			ui.Text(c, count).SingleLine().FontSize(11).FontWeight(600).TextColor(ink3).Margin(0, 0, 0, 8)
-		}
-		ui.Box(c).Grow(1)
-		p.moduleTrailing(c, live)
-	})
+	return b
 }
 
 // clearable is what a page's 清空 removes: the unpinned rows the page
@@ -749,31 +924,32 @@ func (a *shelf) clearable(list []store.Item, id pageID) []store.Item {
 	return gone
 }
 
-// searchField is the clipboard tab's search box: 32pt fill1 capsule with a
-// magnifier, ink text and an accent caret. Typing filters the list as it
-// goes; while the shelf was opened for search the box keeps the keyboard
-// focus, so ↑/↓ walk the list and ⏎ copies and collapses without reaching
-// for the mouse. Esc clears the search first, then collapses.
-func (a *shelf) searchField(c *ui.Context, live bool) {
-	wrap := ui.Row(c.Key("clip-search")).Height(clipSearchH).Padding(0, 10, 0, 10).Gap(7).
-		AlignItems(ui.Center).Radius(10).Background(fill1)
+// searchField is the clipboard page's search box in the back row: a 150 ×
+// 22 fill1 capsule with a magnifier, ink text and an accent caret. Typing
+// filters the list as it goes; while the shelf was opened for search the
+// box keeps the keyboard focus, so ↑/↓ walk the list and ⏎ copies and
+// collapses without reaching for the mouse. Esc clears the search first,
+// then returns to the island.
+func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
+	wrap := ui.Row(c.Key("clip-search")).Width(clipSearchW).Height(clipSearchH).Padding(0, 8, 0, 8).Gap(5).
+		AlignItems(ui.Center).Radius(7).Background(fill1)
 	if !live {
 		// The outgoing page's box is a picture of the field: an input here
 		// would compete for the keyboard and the global keys.
 		wrap.Children(func() {
-			ui.Icon(c, searchSymbol).Size(14, 14).TextColor(ink3)
+			ui.Icon(c, searchSymbol).Size(11, 11).TextColor(ink3)
 			if a.search != "" {
-				ui.Text(c, a.search).SingleLine().FontSize(13).TextColor(ink)
+				ui.Text(c, a.search).SingleLine().FontSize(11).TextColor(ink)
 			} else {
-				ui.Text(c, "搜索剪贴板").SingleLine().FontSize(13).TextColor(ink3)
+				ui.Text(c, "搜索剪贴板").SingleLine().FontSize(11).TextColor(ink3)
 			}
 		})
-		return
+		return wrap
 	}
 	wrap.Children(func() {
-		ui.Icon(c, searchSymbol).Size(14, 14).TextColor(ink3)
+		ui.Icon(c, searchSymbol).Size(11, 11).TextColor(ink3)
 		in := ui.TextInputBase(c.Key("clip-query"), &a.search).Grow(1).MinWidth(0).
-			Placeholder("搜索剪贴板").Label(searchLabel).FontSize(13).TextColor(ink)
+			Placeholder("搜索剪贴板").Label(searchLabel).FontSize(11).TextColor(ink)
 		if a.focusMode {
 			in.Focus()
 		}
@@ -803,6 +979,7 @@ func (a *shelf) searchField(c *ui.Context, live bool) {
 			return true
 		})
 	})
+	return wrap
 }
 
 // emptyState is what a page shows when it has no rows: a centered ink3
@@ -834,7 +1011,7 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 			a.updatePill(c, note)
 		}
 		a.renameUndoPill(c)
-		// The drop zone carries its own release hint in the module bar;
+		// The drop zone carries its own release hint in the back row;
 		// the 松开放入 capsule stays hidden while it is up.
 		if (over || (a.dragging && !a.ownDrag)) && !a.drop.on {
 			a.pill(c, "drop", "松开放入", false)
@@ -1073,59 +1250,32 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, _ /* openK */, peekK,
 	}
 }
 
-// panelContentH is the expanded panel's desired content height (excluding
-// the window frame margin): the ears, the activity strip when something
-// is under way, the module bar, then the stage. Pages whose sharesHeight
-// is true size the stage to the group's tallest, so switching between
-// them never resizes the panel; any other page sizes it to its own
-// stageH. While the drop zone is up its full height wins over the stage
-// floor — the panel always contains the whole zone plus the bottom
-// padding, so nothing is ever clipped mid-drag. Pages scroll past
-// stageMaxH. Pure; unit-tested.
-func (a *shelf) panelContentH() int {
-	spacer, rowH, _ := a.earLayout()
-	h := spacer + rowH + earBottomGap + moduleBarH + stageGap + panelPadBottom
-	if len(a.liveActivities()) > 0 {
-		h += liveH + liveGap
+// openPage is an island page icon's click: the sheet opens on that page.
+func (a *shelf) openPage(id pageID) {
+	p := a.page(id)
+	if p == nil || !p.enabled() {
+		return
 	}
-	stage := min(max(a.currentStageH(), stageMinH), stageMaxH)
-	if a.drop.on && a.drop.need > stage {
-		stage = a.drop.need
-	}
-	h += stage
-	if a.focusMode || a.search != "" {
-		// The keyboard hint pill floats over the clipboard stage's foot.
-		h += hintPillH
-	}
-	return h
+	a.tabFrom, a.tab = id, id
+	a.setLevel(2)
 }
 
-// currentStageH is the stage height the panel sizes to now: the tallest
-// stage of the height-sharing group while the current page is in it
-// (switching pages inside the group keeps the height), otherwise the
-// current page's own stageH — switching to or from such a page eases the
-// panel to its own height over resizeAnimation.
-func (a *shelf) currentStageH() int {
-	if cur := a.currentPage(); cur.sharesHeight() {
-		tallest := 0
-		for _, p := range a.enabledPages() {
-			if p.sharesHeight() {
-				tallest = max(tallest, p.stageH())
-			}
-		}
-		return tallest
-	} else {
-		return cur.stageH()
+// setLevel moves between the island (1) and the sheet (2). The shell's
+// size springs to the new level; the content crossfades through levelK.
+func (a *shelf) setLevel(level int) {
+	level = min(max(level, 1), 2)
+	if a.level == level {
+		return
 	}
-}
-
-// panelTargetH is panelContentH plus the 8pt the window keeps below the
-// shell (shellSize's expH is panelH-8), clamped to the panel's size
-// bound; the caller clamps it to the work area. Without the +8 the
-// content column is 8pt short and the last stage row is clipped — an
-// exact-fit page (the tools grid) shows it as a hard cut.
-func (a *shelf) panelTargetH() int {
-	return min(panelMaxH, a.panelContentH()+8)
+	a.level = level
+	a.tabFrom = a.tab
+	a.reveal = ""
+	a.selection.keepExisting(a.visibleItems())
+	a.syncWindowFrame()
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+	a.syncCopyKey()
 }
 
 // visibleItems is the item list the expanded panel shows and acts on: the

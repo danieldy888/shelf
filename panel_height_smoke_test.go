@@ -21,7 +21,7 @@ import (
 	"shelf/internal/settings"
 )
 
-const panelHeightShotDir = "/tmp/shelf-fix-height"
+const sheetHShotDir = "/tmp/shelf-fix-height"
 
 // smokeUsageScanner is a local scanner with a fixed week of usage, so the
 // page draws its chart instead of the scan card.
@@ -64,11 +64,11 @@ func shotPanelHeight(t *testing.T, a *shelf, name string) string {
 	if num == 0 {
 		t.Fatalf("%s: window has no CGWindowID", name)
 	}
-	if err := os.MkdirAll(panelHeightShotDir, 0o755); err != nil {
+	if err := os.MkdirAll(sheetHShotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(500 * time.Millisecond) // settle the height animation
-	shot := filepath.Join(panelHeightShotDir, name+".png")
+	shot := filepath.Join(sheetHShotDir, name+".png")
 	out, err := exec.Command("screencapture", "-x", "-o", fmt.Sprintf("-l%d", num), shot).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s: screencapture failed (%v): %s", name, err, out)
@@ -78,9 +78,8 @@ func shotPanelHeight(t *testing.T, a *shelf, name string) string {
 }
 
 // TestSmokePanelHeightFitsMusicAndUsage opens the real panel on a playing
-// track with the AI 用量 page's tallest content and proves the window is
-// tall enough for all of it (panelH >= panelContentH+8, at most panelMaxH,
-// the native frame following), then screenshots it.
+// track with the AI 用量 page's full content and proves the native window
+// is exactly the sheet's box (420 × 250 plus ears), then screenshots it.
 func TestSmokePanelHeightFitsMusicAndUsage(t *testing.T) {
 	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
 		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native window smoke test")
@@ -102,31 +101,35 @@ func TestSmokePanelHeightFitsMusicAndUsage(t *testing.T) {
 		a.settings.AIUsage = settings.AIUsageSettings{Enabled: true, QuotaCodex: true, QuotaClaude: true,
 			LocalOmp: true, LocalClaude: true, LocalCodex: true}
 		a.registerPage(f)
-		a.setTab(pageUsage)
 	})
 	expandShelf(t, a)
+	onMain(func() {
+		a.setLevel(2)
+		a.focusMode = true // put the window below the menu bar for a clean shot
+		a.progress, a.animationFrom = 1, 1
+		a.animationStart = time.Time{}
+		a.syncWindowFrame()
+	})
 	onMain(func() { f.tick(now) }) // quota answers + the local summary, inline fakes
 	time.Sleep(700 * time.Millisecond)
 
-	var h, content, frameH int
+	var h, w, frameH int
 	onMain(func() {
-		h, content = a.panelH(), a.panelContentH()
+		h, w = a.panelH(), sheetW
 		frameH = a.win.Bounds().Height
 	})
-	t.Logf("panelH=%d panelContentH=%d(+8) frame=%d designMax=%d", h, content, frameH, panelMaxH)
-	if h < content+8 {
-		t.Errorf("panel %d cuts its content (%d+8): the AI 用量 stage would scroll", h, content)
+	t.Logf("panel=%d×%d frame=%d design=%d×%d", w, h, frameH, sheetW, sheetH)
+	if h != sheetH || w != sheetW {
+		t.Errorf("panel %d×%d, want the fixed sheet %d×%d", w, h, sheetW, sheetH)
 	}
-	if h > panelMaxH {
-		t.Errorf("panel %d past the design bound %d", h, panelMaxH)
-	}
-	if frameH != h {
-		t.Errorf("native frame %d does not follow the panel %d", frameH, h)
+	if frameH != sheetH+a.sheetTop() {
+		t.Errorf("native frame %d does not follow the sheet %d", frameH, sheetH+a.sheetTop())
 	}
 	shotPanelHeight(t, a, "music-usage")
 
 	onMain(func() {
 		f.stopWork()
+		a.focusMode = false
 		a.hide(hidePassive)
 		a.usage = nil
 		a.modules = nil
