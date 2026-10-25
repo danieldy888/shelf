@@ -230,18 +230,12 @@ func (a *shelf) newNotchWindow() {
 }
 
 // trayMenu is rebuilt on every right-click so it reflects the current
-// Accessibility state, which the user changes in System Settings, and the
-// current settings.
+// system-permission state, which the user changes in System Settings, and
+// the current settings.
 func (a *shelf) trayMenu() *mygo.Menu {
-	guard := &mygo.MenuItem{Label: "刘海拖放保护已开启", Disabled: true}
-	if !mac.AccessibilityTrusted() {
-		guard = &mygo.MenuItem{Label: "开启刘海拖放保护…", Click: func(*mygo.MenuItem, *mygo.Window) {
-			mac.RequestAccessibility()
-		}}
-	}
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "显示 / 收起 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
-		guard,
+		a.permissionMenuItem(),
 		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
 		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
 		{Label: "正在播放", Type: mygo.MenuItemCheckbox, Checked: a.settings.IslandNowPlaying, Disabled: a.settingsBroken,

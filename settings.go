@@ -155,6 +155,7 @@ func (a *shelf) settingsTakeKeyboard() {
 // goes back to whoever had it before the window opened. A quit closes the
 // window too; nothing may be re-registered or re-activated then.
 func (a *shelf) settingsClosed() {
+	a.stopPermissionFlow()
 	a.settingsWin = nil
 	if a.quitting {
 		return
@@ -260,6 +261,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 							FontSize(11).TextColor(setInk3)
 					})
 				}
+				a.settingsPermissionsSection(c)
 				a.settingsGeneralSection(c)
 				a.settingsAIUsageSection(c)
 				a.settingsClipboardSection(c)
@@ -356,9 +358,9 @@ func choiceSegments(current int, choices []int, format func(int) string) (labels
 	return labels, values, selected
 }
 
-// settingsGeneralSection: 开机时自动启动, 自动检查更新 and 刘海拖放保护.
-// Only 自动检查更新 lives in settings.json; the login item and the drag
-// guard stay editable while the file is broken.
+// settingsGeneralSection: 开机时自动启动 and 自动检查更新. Only 自动检查更新
+// lives in settings.json; the login item stays editable while the file is
+// broken.
 func (a *shelf) settingsGeneralSection(c *ui.Context) {
 	settingsSection(c, "通用", "", false, func() {
 		loginCap, capColor := "", setInk3
@@ -368,21 +370,10 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 		settingsToggleCap(c, "login", "开机时自动启动", loginCap, capColor, a.loginOn, a.applyOpenAtLogin)
 		settingsSep(c, "login")
 		// 自动检查更新存 settings.json，文件损坏时随其余偏好一起锁定；
-		// 登录项与拖放保护不依赖该文件，保持可用。
+		// 登录项不依赖该文件，保持可用。
 		ui.Column(c.Key("autocheck")).Disabled(a.settingsBroken).FillWidth().Children(func() {
 			settingsToggleCap(c, "autocheck", "自动检查更新", "只连接 GitHub，安装前会先问你", setInk3,
 				a.settings.AutoCheckUpdates, a.setAutoCheckUpdates)
-		})
-		settingsSep(c, "autocheck")
-		settingsRowCap(c, "guard", "刘海拖放保护", "需要辅助功能权限，每次更新后重新开启", func() {
-			if mac.AccessibilityTrusted() {
-				ui.Text(c, "已开启").SingleLine().FontSize(12).TextColor(settingsTheme.Success)
-				return
-			}
-			if ui.Button(c, "开启…").FontSize(12).Label("开启刘海拖放保护").Clicked() {
-				accessibilityRequest()
-				a.repaintSettings()
-			}
 		})
 	})
 }
