@@ -54,8 +54,8 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Pin what matters. Exclude apps you never want recorded. Passwords that password managers mark as private are skipped.
 
 **Now playing**
-- Hover the notch while music plays and it becomes a small player: cover, progress, previous / play-pause / next.
-- The open shelf shows the same controls at the top.
+- Hover the notch while music plays and it grows two small wings: the cover on the left, a moving equalizer on the right. Nothing drops down over your windows.
+- Click the notch to open the shelf; the card at the top has previous / play-pause / next and the progress.
 
 **AI usage** (optional, off by default)
 - Enable it in Settings → AI 用量 and the shelf gains one more page: subscription quota for Codex and Claude Code — a double ring per card, outer weekly, inner 5-hour — plus this Mac's token usage for omp, Claude Code and Codex, as a stacked chart over 今天 / 7 天 / 30 天 / 全部.
@@ -134,7 +134,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Copy image data | Select one picture and press `⌘C`, or right-click it → 复制图片 (Copy Image) — the clipboard gets PNG data, not the path |
 | Search what you copied | Press `⌃⌥V`, type, pick with ↑/↓, press ⏎ |
 | Switch lists | Click 托盘 (Tray), 剪贴板 (Clipboard), 工具 (Tools) — or AI 用量 when enabled — at the top of the shelf |
-| Control music | Hover the notch while music plays, or use the card at the top of the open shelf |
+| Control music | Open the shelf and use the card at the top; hovering the notch only shows what is playing |
 | Pin, remove, Quick Look, AirDrop | Right-click an item (Space also opens Quick Look) |
 | Copy text from the screen | Press `⌃⌥O` and drag over the text |
 | Run a tool card | Open 工具 (Tools), then tap a card for the selected shelf items or drop files on it |
@@ -196,8 +196,8 @@ MIT — see [LICENSE](LICENSE).
 - 重要的内容可以置顶；不想被记录的应用可以排除；密码管理器标记为隐私的密码不会被记录。
 
 **正在播放**
-- 放音乐时把鼠标移到刘海上，它会变成一个小播放器：封面、进度、上一首 / 播放暂停 / 下一首。
-- 打开托盘后，上方也有一条播放条，托盘和剪贴板两页都能看到。
+- 放音乐时把鼠标移到刘海上，刘海只向左右各长出一小截：左边是封面，右边是跳动的音频条，不会向下盖住窗口。
+- 点一下刘海展开托盘，上方的播放条有上一首 / 播放暂停 / 下一首和进度，托盘和剪贴板两页都能看到。
 
 **AI 用量**（可选，默认关闭）
 - 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，刘海会多出一页：Codex、Claude Code 的套餐剩余额度（每张卡内外双圈：外圈每周、内圈 5 小时），以及这台电脑上 omp、Claude Code、Codex 的 token 用量（堆叠柱图，按 今天 / 7 天 / 30 天 / 全部 切换；额度卡和本机来源都可以在设置里单独关掉）。
@@ -276,7 +276,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | 复制图片数据 | 选中一张图片后按 `⌘C`，或右键图片 →「复制图片」，再在目标应用 `⌘V` 粘贴（复制的是图片，不是路径） |
 | 搜索复制过的内容 | 按 `⌃⌥V`，输入关键词，`↑`/`↓` 选择，回车 |
 | 切换列表 | 点刘海左侧的托盘、剪贴板、工具图标——开了 AI 用量时还有第四个 |
-| 控制音乐 | 放音乐时把鼠标移到刘海上，或用打开后上方的播放条 |
+| 控制音乐 | 打开托盘，用上方的播放条；鼠标移到刘海上只显示正在播放 |
 | 置顶、移除、快速查看、隔空投送 | 右键项目（快速查看也可以直接按空格） |
 | 框选屏幕文字 | 按 `⌃⌥O`，框住要复制的文字 |
 | 用工具卡 | 打开「工具」页，点按卡片处理托盘里选中的项目，或把文件拖到卡片上 |
