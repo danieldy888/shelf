@@ -151,10 +151,6 @@ func (p *homePage) actions(c *ui.Context) []ui.Element {
 	}
 }
 
-// overflows reports whether the page scrolls under the shell's bottom
-// fade. The canvas never scrolls; its widget catalogue fits the box.
-func (p *homePage) overflows() bool { return false }
-
 // homeDoneButton is the 完成 pill that leaves the canvas's edit mode (or
 // backs out of the picker first).
 func (a *shelf) homeDoneButton(c *ui.Context, live bool) ui.Element {

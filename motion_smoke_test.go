@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -325,11 +326,13 @@ func TestSmokeCapsuleRunning(t *testing.T) {
 	motionClosed(a)
 }
 
-// TestSmokeClipListBottomFade scrolls a long clipboard list in the real
-// window and shoots the list at the top and in the middle: the content box's
-// bottom fade sits over the shell, and rows run under it only once there is
-// more below.
-func TestSmokeClipListBottomFade(t *testing.T) {
+// TestSmokeClipListEdgeBlur scrolls a long clipboard list in the real
+// window and shoots the list at the top and in the middle: rows melt into
+// the edge band only where more content lies beyond it, while rows in the
+// open stay sharp. The shot is read back to prove the blur reached the
+// screen: a sharp strip has several times the horizontal contrast of an
+// edge strip.
+func TestSmokeClipListEdgeBlur(t *testing.T) {
 	a := redesignShelf(t)
 	onMain(func() {
 		for i := range 24 {
@@ -352,7 +355,6 @@ func TestSmokeClipListBottomFade(t *testing.T) {
 	if maxY <= 0 {
 		t.Fatalf("the 24-row list does not scroll: MaxY=%.0f", maxY)
 	}
-	motionShot(t, a, "fade-top", 200*time.Millisecond)
 	// A real wheel over the list: one event already runs to the end of a
 	// 24-row list, the reverse one returns to the top, which proves the
 	// gesture reaches this scroll view. The settled middle position the
@@ -366,22 +368,93 @@ func TestSmokeClipListBottomFade(t *testing.T) {
 		time.Sleep(40 * time.Millisecond)
 	}
 	onMain(func() {
+		page.scroll.Y = 0
+		a.win.Invalidate()
+	})
+	time.Sleep(200 * time.Millisecond)
+	top, bottom, _ := scrollEdges(&page.scroll, float32(len(page.items()))*(clipRowH+clipRowGap)-clipRowGap)
+	if top || !bottom {
+		t.Fatalf("at the top the bands are top=%v bottom=%v, want only the bottom", top, bottom)
+	}
+	sharpShot := motionShot(t, a, "edge-top", 200*time.Millisecond)
+	assertEdgeStripsBlurrier(t, sharpShot, a, "top", false, true)
+
+	onMain(func() {
 		page.scroll.Y = maxY / 2
 		a.win.Invalidate()
 	})
 	time.Sleep(200 * time.Millisecond)
 	var y float32
 	onMain(func() { y = page.scroll.Y })
-	motionShot(t, a, "fade-scrolled", 200*time.Millisecond)
+	midShot := motionShot(t, a, "edge-scrolled", 200*time.Millisecond)
 	if y <= 0 || y >= maxY {
 		t.Fatalf("the wheel left the list at Y=%.1f of %.1f, neither band visible", y, maxY)
 	}
 	t.Logf("scrolled to %.1f of %.1f", y, maxY)
+	assertEdgeStripsBlurrier(t, midShot, a, "middle", true, true)
 	onMain(func() {
 		a.tab = pageTray
 		a.store.Clear()
 	})
 	motionClosed(a)
+}
+
+// assertEdgeStripsBlurrier checks a shot of the clipboard page: the 20pt
+// strip at each active edge must have clearly less horizontal contrast
+// than the same strip in the open, which is what the row blur does.
+func assertEdgeStripsBlurrier(t *testing.T, path string, a *shelf, where string, top, bottom bool) {
+	t.Helper()
+	img, err := pngDecode(path)
+	if err != nil {
+		t.Fatalf("%s: %v", where, err)
+	}
+	b := img.Bounds()
+	scale := float64(b.Dx()) / float64(a.frame.Width)
+	contentTop := int(math.Round(float64(a.sheetTop()+bandH+backRowH+contentGap) * scale))
+	x0 := int(math.Round(float64((a.frame.Width-contentW)/2+20) * scale))
+	x1 := x0 + int(math.Round(float64(contentW-40)*scale))
+	strip := int(math.Round(20 * scale))
+	mid := bandSharpness(img, x0, x1, contentTop+int(math.Round(60*scale)), contentTop+int(math.Round(80*scale)))
+	if top {
+		edge := bandSharpness(img, x0, x1, contentTop, contentTop+strip)
+		if mid < 2*edge {
+			t.Fatalf("%s: the top edge strip is not blurred (edge %d, middle %d)", where, edge, mid)
+		}
+		t.Logf("%s: top edge contrast %d, middle %d", where, edge, mid)
+	}
+	if bottom {
+		edge := bandSharpness(img, x0, x1, contentTop+int(math.Round(174*scale))-strip,
+			contentTop+int(math.Round(174*scale)))
+		if mid < 2*edge {
+			t.Fatalf("%s: the bottom edge strip is not blurred (edge %d, middle %d)", where, edge, mid)
+		}
+		t.Logf("%s: bottom edge contrast %d, middle %d", where, edge, mid)
+	}
+}
+
+// bandSharpness sums the horizontal luminance steps inside a pixel band: a
+// sharp row of text and icons has many, a blurred one few.
+func bandSharpness(img image.Image, x0, x1, y0, y1 int) int {
+	b := img.Bounds()
+	x0, x1 = max(x0, b.Min.X), min(x1, b.Max.X)
+	y0, y1 = max(y0, b.Min.Y), min(y1, b.Max.Y)
+	var sum int
+	for y := y0; y < y1; y++ {
+		var prev int32
+		for x := x0; x < x1; x++ {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			lum := int32((299*r + 587*g + 114*bl) / 1000)
+			if x > x0 {
+				d := lum - prev
+				if d < 0 {
+					d = -d
+				}
+				sum += int(d)
+			}
+			prev = lum
+		}
+	}
+	return sum
 }
 
 // TestSmokePeekMorphNeverClipped grows the chevron pill into the now-playing

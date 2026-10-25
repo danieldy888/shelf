@@ -193,18 +193,6 @@ func (p *toolsPage) title() (name, count string) {
 
 // overflows reports a third row of cards (or the catalogue, which is
 // always taller than the box).
-func (p *toolsPage) overflows() bool {
-	if p.picking {
-		return true
-	}
-	cells := packToolCards(p.host.toolsLayout().Cards, p.editing)
-	rows := 0
-	for _, cell := range cells {
-		rows = max(rows, int((cell.y+toolCellH)/toolCellH))
-	}
-	return rows > 2
-}
-
 func (p *toolsPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
 	live := a.tab == pageTools
@@ -280,6 +268,9 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 	for _, cell := range cells {
 		contentH = max(contentH, cell.y+toolCellH)
 	}
+	top, bottom, viewH := scrollEdges(&p.scroll, contentH)
+	band := edgeBandFor(toolCellH)
+	blur := a.win == nil || a.tabPhase(c.Now()) >= 1
 	return ui.Column(c.Key("tools-stage")).Grow(1).MinHeight(0).Children(func() {
 		scroll := ui.Scroll(c.Key("cards")).Grow(1).MinHeight(0).TrackScroll(&p.scroll)
 		p.viewport = scroll.Bounds()
@@ -297,7 +288,11 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 			// absolute-position inside the box, which scrolls with them.
 			ui.Box(c.Key("cards-stack")).Width(toolStageW).Height(contentH).Children(func() {
 				for _, cell := range cells {
-					p.toolCell(c, cell, editing, live)
+					w := float32(0)
+					if blur {
+						w = rowFade(cell.y-p.scroll.Y, toolCellH, viewH, top, bottom, band)
+					}
+					p.toolCell(c, cell, editing, live, band*edgeBlurPerPT*w)
 				}
 				if d != nil && d.dragging && p.preview == nil {
 					p.toolLiftedCard(c, *d)
@@ -309,7 +304,7 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 
 // toolCell draws one packed cell: the + tile, a parked card (in-flow,
 // possibly mid-reorder), or the placeholder the dragged card left.
-func (p *toolsPage) toolCell(c *ui.Context, cell toolCell, editing, live bool) {
+func (p *toolsPage) toolCell(c *ui.Context, cell toolCell, editing, live bool, blur float32) {
 	a := p.host
 	if cell.plus {
 		plus := ui.Column(c.Key("tc-plus")).Absolute().Left(cell.x).Top(cell.y).
@@ -364,6 +359,9 @@ func (p *toolsPage) toolCell(c *ui.Context, cell toolCell, editing, live bool) {
 		p.toolEditChrome(c, card, cell, live)
 	default:
 		card.Absolute().Left(cell.x).Top(cell.y).Width(cell.w).Height(toolCellH)
+		if blur > 0 {
+			card.Blur(blur)
+		}
 	}
 	if live {
 		p.toolCardInput(c, card, cell, editing, live)

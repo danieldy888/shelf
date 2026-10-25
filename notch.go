@@ -865,6 +865,9 @@ func (a *shelf) hide(exit hideExit) {
 func (a *shelf) finishClose() {
 	a.closeAt = time.Time{}
 	a.focusMode, a.tab, a.tabFrom, a.search, a.reveal = false, pageTray, pageTray, "", ""
+	a.tabAt = time.Time{}
+	a.tabOutK, a.tabOutShift = 1, 0
+	a.warming = ""
 	a.level = 1
 	// 收起即放弃权限说明卡：面板再开时它要么还在等授权（重新触发再出），
 	// 要么授权已完成（预检通过直接框选），都不该回到一张旧卡。

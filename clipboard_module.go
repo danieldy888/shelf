@@ -67,12 +67,26 @@ func (m *clipboardModule) tick(_ time.Time) {
 	case clipText:
 		if text := m.board.text(); text != "" {
 			a.changed(a.store.AddClipText(text, bundleID))
+			a.warmClipApp(bundleID)
 		}
 	case clipImage:
 		if png := m.board.image(); len(png) > 0 {
 			a.changed(a.store.AddClipImage(png, bundleID))
+			a.warmClipApp(bundleID)
 		}
 	}
+}
+
+// warmClipApp resolves the new row's app name and icon now, on the tick
+// that recorded the copy, instead of on the frame that first draws the
+// clipboard page: the name lookup is a several-millisecond workspace call
+// (measured ~8ms cold) and would otherwise land inside a page switch.
+func (a *shelf) warmClipApp(bundle string) {
+	if bundle == "" || bundle == clipSourceOCR || a.store == nil {
+		return
+	}
+	a.appName(bundle)
+	a.clipAppIcon(bundle)
 }
 
 // skipCurrent marks the clipboard's current contents as handled; used after

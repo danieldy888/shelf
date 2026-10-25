@@ -198,6 +198,12 @@ func (f *usageFeature) tick(now time.Time) {
 		return
 	}
 	f.wasVisible = true
+	// A page switch is still running: start no fetch or scan until it has
+	// settled. Reading credentials and walking the local usage logs would
+	// otherwise contend with the 240ms transition the user is watching.
+	if f.host.win != nil && f.host.tabPhase(now) < 1 {
+		return
+	}
 	f.ensureFresh(now)
 	// Keep repainting while the first scan's progress bar moves.
 	if f.localBusy && !f.hasSummary {

@@ -182,13 +182,20 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 		hint := "文件、文件夹、文字和图片\n复制的文字与截图也会自动收好"
 		return a.emptyState(c, shelfSymbol, "把文件拖到这里", hint)
 	}
+	rows := (len(list) + gridCols - 1) / gridCols
+	listH := float32(rows*(tileH+gridGap) - gridGap)
+	top, bottom, viewH := scrollEdges(&p.scroll, listH)
+	band := edgeBandFor(tileH)
 	return ui.Column(c.Key("tray-stage")).FillWidth().FillHeight().Children(func() {
 		ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).TrackScroll(&p.scroll).Children(func() {
 			ui.Grid(c.Key("grid")).ColumnTracks(ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1), ui.Fr(1)).
 				Gap(gridGap).FillWidth().Children(func() {
 				// 快照：右键菜单或拖入回调可改变原切片。
-				for _, item := range list {
-					a.itemTile(c, item)
+				for i, item := range list {
+					rowTop := float32(i/gridCols*(tileH+gridGap)) - p.scroll.Y
+					a.fadedRow(c, item.ID, rowTop, tileH, viewH, top, bottom, band, func() {
+						a.itemTile(c, item)
+					})
 				}
 			})
 		})
@@ -198,9 +205,6 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 func (p *trayPage) title() (name, count string) {
 	return "托盘", fmt.Sprintf("%d 项", len(p.items()))
 }
-
-// overflows reports the grid's third row: two rows (10 tiles) fit the box.
-func (p *trayPage) overflows() bool { return len(p.items()) > 2*gridCols }
 
 func (p *trayPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
@@ -271,11 +275,17 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 		}
 		return a.emptyState(c, icon, title, hint)
 	}
+	listH := float32(len(list)*(clipRowH+clipRowGap) - clipRowGap)
+	top, bottom, viewH := scrollEdges(&p.scroll, listH)
+	band := edgeBandFor(clipRowH)
 	return ui.Column(c.Key("clip-stage")).FillWidth().FillHeight().Children(func() {
 		ui.Scroll(c.Key("items")).Grow(1).MinHeight(0).TrackScroll(&p.scroll).Children(func() {
 			ui.Column(c.Key("clip-list")).Gap(clipRowGap).FillWidth().Children(func() {
-				for _, item := range list {
-					a.clipRow(c, item)
+				for i, item := range list {
+					rowTop := float32(i*(clipRowH+clipRowGap)) - p.scroll.Y
+					a.fadedRow(c, item.ID, rowTop, clipRowH, viewH, top, bottom, band, func() {
+						a.clipRow(c, item)
+					})
 				}
 			})
 		})
@@ -284,12 +294,6 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 
 func (p *clipboardPage) title() (name, count string) {
 	return "剪贴板", fmt.Sprintf("%d 条", len(p.items()))
-}
-
-// overflows reports more rows than the 174pt box holds: five 30pt rows fit
-// (150), a sixth does not.
-func (p *clipboardPage) overflows() bool {
-	return len(p.items())*(clipRowH+clipRowGap)-clipRowGap > contentH
 }
 
 // actions is the back row's right side: the compact search box and, when
@@ -306,4 +310,80 @@ func (p *clipboardPage) actions(c *ui.Context) []ui.Element {
 		out = append(out, b)
 	}
 	return out
+}
+
+// Progressive edge blur: a scrolling page does not cut its rows off at a
+// hard line. The last edgeBand points toward an edge that still has
+// content beyond it blur, most at the edge itself and less the further in
+// a row sits, so rows melt into the shell as they scroll out. There is no
+// overlay and no dimming: a row fully in the open stays exactly as it is.
+const (
+	// edgeBandMax caps the band at 24pt, and no band is deeper than half
+	// a row: the 174pt content box is short, and the old 34pt band could
+	// swallow a whole 30pt clipboard row at once.
+	edgeBandMax = 24
+	// edgeBlurPerPT is the blur sigma at the very edge per point of band:
+	// 2.88 at a 24pt band, 1.8 at the clipboard's 15pt.
+	edgeBlurPerPT = 0.12
+)
+
+// edgeBandFor is how deep the melt reaches for rows rowH tall.
+func edgeBandFor(rowH float32) float32 { return min(edgeBandMax, rowH/2) }
+
+// scrollEdges reports which melts a scroll container shows now — the top
+// while its content has scrolled down, the bottom while more is below —
+// and the viewport height both are measured in. MaxY is what the last
+// layout made scrollable, so a list that fits shows neither. contentH is
+// the list's full height, not the viewport's.
+func scrollEdges(st *ui.ScrollState, contentH float32) (top, bottom bool, viewH float32) {
+	viewH = contentH - st.MaxY
+	if viewH <= 0 {
+		viewH = contentH
+	}
+	return st.Y > 0.5, st.MaxY > 0.5 && st.Y < st.MaxY-0.5, viewH
+}
+
+// edgeFade is how strong the blur is d points into the band: 1 at the
+// edge itself, 0 at its inner end, smooth in between (and 1 outside the
+// viewport, for a row that is only partly visible).
+func edgeFade(d, band float32) float32 {
+	if d <= 0 {
+		return 1
+	}
+	if band <= 0 || d >= band {
+		return 0
+	}
+	t := 1 - d/band
+	return t * t * (3 - 2*t)
+}
+
+// rowFade is the blur weight of one row: 0 unless it is inside the
+// viewport and reaches into an edge that still has content beyond it.
+func rowFade(rowTop, rowH, viewH float32, top, bottom bool, band float32) float32 {
+	if rowTop+rowH <= 0 || rowTop >= viewH {
+		return 0
+	}
+	var t float32
+	if top {
+		t = max(t, edgeFade(rowTop, band))
+	}
+	if bottom {
+		t = max(t, edgeFade(viewH-(rowTop+rowH), band))
+	}
+	return t
+}
+
+// fadedRow wraps one scrolling row (a tile's cell, a clipboard row) so the
+// edge blur follows it as it scrolls; the row itself keeps its key and
+// behaviour. A page switch pauses the blur: both pages are moving and
+// re-rasterising blurred rows for 240ms would cost more than the fade
+// shows.
+func (a *shelf) fadedRow(c *ui.Context, id string, rowTop, rowH, viewH float32, top, bottom bool, band float32, children func()) {
+	row := ui.Column(c.Key(id + "-fade")).Height(rowH)
+	if a.win == nil || a.tabPhase(c.Now()) >= 1 {
+		if t := rowFade(rowTop, rowH, viewH, top, bottom, band); t > 0 {
+			row.Blur(band * edgeBlurPerPT * t)
+		}
+	}
+	row.Children(children)
 }

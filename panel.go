@@ -244,15 +244,17 @@ const (
 	menuBarMinH  = 24 // 无刘海屏的菜单栏高
 	headerTopGap = 8  // 键盘搜索时：菜单栏下沿到面板顶边
 
-	gridCols    = 5  // 托盘网格列数
-	gridGap     = 4  // 格子间距
-	tileH       = 85 // 格子高（两行正好 10 项）
-	tileArt     = 40 // 缩略图边长
-	clipRowH    = 30 // 剪贴板行高
-	clipRowGap  = 0  // 行紧挨着，同原型 .cl
-	clipSearchW = 150
+	gridCols    = 5   // 托盘网格列数
+	gridGap     = 4   // 格子间距
+	tileH       = 85  // 格子高（两行正好 10 项）
+	tileArt     = 40  // 缩略图边长
+	clipRowH    = 30  // 剪贴板行高
+	clipRowGap  = 0   // 行紧挨着，同原型 .cl
+	clipSearchW = 140 // 收窄 10pt：返回行要放下「‹ 名字 数量」、5 个页面图标、搜索框与清空
 	clipSearchH = 22
-	clipFadeH   = 20 // 内容区底部淡出高度
+	// earMaxPages is how many page icons the back row (and the island)
+	// carries: one per page of the design.
+	earMaxPages = 5
 
 	toastLife = 2500 * time.Millisecond // 状态胶囊的展示时长
 	toastFade = 220 * time.Millisecond  // 淡出时长
@@ -263,12 +265,33 @@ const (
 
 // Page switch "fade through": the page being left fades out over the first
 // tabOutShare of the switch, then the new page fades in, drifting tabShift
-// points from its icon's side. The two never overlap, so their different
-// rows (a grid, a list) don't show through each other.
+// points from its icon's side, all in tabAnimation (240ms). The two never
+// overlap, so their different rows (a grid, a list) don't show through each
+// other.
 const (
 	tabShift    = 8
 	tabOutShare = 0.35
+	// pageWarmOpacity is above the painter's 0.001 cull and far below what
+	// an eye can see: the incoming page (and a page being warmed) is drawn
+	// this faintly so its glyph atlas, pictures and text layouts are ready
+	// before it shows at full strength.
+	pageWarmOpacity = 0.006
 )
+
+// pageMotion is how far the current page switch has run and which side the
+// new page arrives from: the pages sit left to right as their icons do, so
+// going right the new page comes from the right.
+func (a *shelf) pageMotion(now time.Time) (t, dir float32) {
+	t = 1
+	if a.win != nil {
+		t = a.tabPhase(now)
+	}
+	dir = 1
+	if a.pageIndex(a.tab) < a.pageIndex(a.tabFrom) {
+		dir = -1
+	}
+	return t, dir
+}
 
 // tabPhase is how far a page switch has run, 0→1 over tabAnimation; 1 when
 // no switch is under way.
@@ -801,105 +824,178 @@ func (a *shelf) countsText() string {
 	return fmt.Sprintf("托盘 %d 项 · 剪贴板 %d 条", tray, clip)
 }
 
-// tabBody holds the page frame, fading through from the page just left
-// (see tabOutShare). A drag's drop zone and the screen-recording card
-// replace the page without a crossfade — they are live gestures.
+// tabBody holds the sheet under the band. A drag's drop zone and the
+// screen-recording card replace the page whole — they are live gestures;
+// everything else switches through the page transition (see pageBody).
 func (a *shelf) tabBody(c *ui.Context, over bool) {
-	t := float32(1)
-	if a.win != nil {
-		t = a.tabPhase(c.Now())
-	}
-	// The pages sit left to right as their icons do: going right, the new
-	// page arrives from the right.
-	dir := float32(1)
-	if a.pageIndex(a.tab) < a.pageIndex(a.tabFrom) {
-		dir = -1
-	}
-	if c.Preferences().ReduceMotion {
-		dir = 0
-	}
-	body := ui.Column(c.Key("sheet-body")).Width(sheetW).Height(sheetH-bandH).
-		Padding(0, sheetPadX, sheetPadBottom, sheetPadX)
-	body.Children(func() {
-		frame := ui.Column(c.Key("frame")).FillWidth().Grow(1).MinHeight(0)
-		if t < 1 {
-			in := ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
-			frame.Opacity(in).Translate(tabShift*dir*(1-in), 0)
-			c.AnimationFrame()
-		}
-		frame.Children(func() { a.currentFrame(c, over, true) })
-		if t < tabOutShare && a.tabFrom != a.tab {
-			// The outgoing page is only a picture: it takes no pointer
-			// and never the keyboard. It may already be disabled; an
-			// unregistered one is skipped instead of drawn half-built.
-			if out := a.page(a.tabFrom); out != nil {
-				old := ui.Column(c.Key("frame-out")).Absolute().Left(0).Right(0).Top(0).Bottom(0).
-					PassThrough().Opacity(1 - ui.EaseIn(t/tabOutShare))
-				old.Children(func() { a.pageFrame(c, out, false, over) })
-			}
+	ui.Column(c.Key("sheet-body")).Width(sheetW).Height(sheetH-bandH).
+		Padding(0, sheetPadX, sheetPadBottom, sheetPadX).Children(func() {
+		switch {
+		case a.drop.on && len(a.drop.files) > 0:
+			a.dropFrame(c, a.drop.files, a.drop.class)
+		case a.ocrSheet:
+			a.sheetFrame(c, func() { a.dropBar(c, "框选文字", "", "") },
+				func() { a.ocrSheetStage(c) })
+		default:
+			a.pageBody(c, over)
 		}
 		a.toastLayer(c, over)
 	})
 }
 
-// currentFrame draws what the sheet shows under the band: the drop zone
-// while a file drag is over the panel, the screen-recording card while it
-// is armed, otherwise the current page.
-func (a *shelf) currentFrame(c *ui.Context, over bool, live bool) {
-	switch {
-	case a.drop.on && len(a.drop.files) > 0:
-		a.dropFrame(c, a.drop.files, a.drop.class)
-	case a.ocrSheet:
-		a.sheetFrame(c, func() { a.dropBar(c, "框选文字", "", "") },
-			func() { a.ocrSheetStage(c) }, false)
-	default:
-		a.pageFrame(c, a.currentPage(), live, over)
+// pageBody is the shared back row and the 396 × 174 content box: the page
+// being left fades out over the first tabOutShare, then the new page eases
+// in and settles from its icon's side (see pageMotion). Only the content
+// box crosses over; the five page icons stay put, so a switch never
+// reflows them.
+func (a *shelf) pageBody(c *ui.Context, over bool) {
+	t, dir := a.pageMotion(c.Now())
+	if c.Preferences().ReduceMotion {
+		dir = 0 // 减少动态效果：只淡入淡出，不位移
 	}
-}
-
-// pageOverflows reports whether a page scrolls inside the fixed content
-// box; only then does the bottom fade appear.
-func pageOverflows(p panelPage) bool {
-	if s, ok := p.(interface{ overflows() bool }); ok {
-		return s.overflows()
-	}
-	return true
-}
-
-// pageFrame is one page's back row and its 396 × 174 body.
-func (a *shelf) pageFrame(c *ui.Context, p panelPage, live bool, over bool) {
-	name, count := p.title()
-	a.sheetFrame(c, func() {
-		a.backRow(c, p, name, count, live)
-	}, func() {
-		p.body(c, over, live)
-	}, pageOverflows(p))
-}
-
-// sheetFrame stacks a back row, the 6pt gap and the fixed content box with
-// its 20pt bottom fade while the page scrolls.
-func (a *shelf) sheetFrame(c *ui.Context, back, body func(), fade bool) {
-	ui.Column(c.Key("page-frame")).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		back()
-		ui.Box(c.Key("page-gap")).Height(contentGap)
-		ui.Column(c.Key("page-content")).Width(contentW).Height(contentH).Clip().Children(func() {
-			body()
-			if fade {
-				ui.Column(c.Key("page-fade")).Absolute().Left(0).Right(0).Bottom(0).Height(clipFadeH).PassThrough().
-					LinearGradient(ui.LinearGradient{Angle: 0, Stops: []ui.GradientStop{
-						{Color: ui.Hex("#000000"), At: 0},
-						{Color: ui.RGBA(0, 0, 0, 0.6), At: 0.35},
-						{Color: ui.RGBA(0, 0, 0, 0), At: 1},
-					}})
+	a.backRow(c, t)
+	ui.Box(c.Key("page-gap")).Height(contentGap)
+	ui.Column(c.Key("page-content")).Width(contentW).Height(contentH).Clip().Children(func() {
+		if t < tabOutShare && a.tabFrom != a.tab {
+			// The outgoing page is only a picture: it takes no pointer and
+			// never the keyboard. It may already be disabled; an
+			// unregistered one is skipped instead of drawn half-built.
+			if out := a.page(a.tabFrom); out != nil && out.enabled() {
+				k := a.tabOutK * (1 - ui.EaseIn(t/tabOutShare))
+				// Same layout offset as the arriving page, for the same
+				// reason: a paint transform here would put clip masks back
+				// in the transition's way.
+				old := ui.Column(c.Key("frame-out")).Absolute().Top(0).
+					Left(a.tabOutShift * (1 - t/tabOutShare)).
+					Width(contentW).Height(contentH).PassThrough().Opacity(k)
+				old.Children(func() { out.body(c, over, false) })
 			}
-		})
+		}
+		// The arrival offset is a layout offset, not a paint transform: a
+		// transformed subtree marks every clip inside it as moving, and the
+		// GPU builder then rasterises a fresh clip mask for each scrolled
+		// box every frame — the whole transition missed frames on this
+		// machine (measured 30-48ms frames). Positioned by layout, the same
+		// 8pt settle costs nothing: the clips stay shader rectangles.
+		frame := ui.Column(c.Key("frame")).Absolute().Top(0).Left(0).
+			Width(contentW).Height(contentH)
+		if t < 1 {
+			in := ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
+			op := in
+			if t < tabOutShare {
+				// The page still hidden behind the fade is drawn, very
+				// faintly, so its glyphs and pictures reach the GPU while
+				// the frames are cheap instead of all at once on the
+				// frame it becomes visible — that first frame used to
+				// wait a full refresh or two on the glyph atlas upload.
+				op = max(op, pageWarmOpacity*(1-t/tabOutShare))
+			}
+			frame.Opacity(op).Left(tabShift * dir * (1 - in))
+			c.AnimationFrame()
+		}
+		frame.Children(func() { a.currentPage().body(c, over, true) })
+		a.warmPage(c)
 	})
 }
 
-// backRow is the sheet's 26pt row: 「‹ 页面名 数量」, the other pages'
-// icons, then the current page's own buttons.
-func (a *shelf) backRow(c *ui.Context, p panelPage, name, count string, live bool) {
-	ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+// warmPage draws the page queued for warming (see shelf.warmPage) at an
+// opacity nobody can see: building it here, while the panel rests, pays
+// its first text layout, thumbnail texture and glyph atlas upload before
+// the user switches to it.
+func (a *shelf) warmPage(c *ui.Context) {
+	id := a.warming
+	if id == "" || a.win == nil || a.tabPhase(c.Now()) < 1 {
+		return
+	}
+	if a.warmed == nil {
+		a.warmed = map[pageID]bool{}
+	}
+	if id == a.tab {
+		// The user switched to it first: drawing it for real warms it.
+		a.warmed[id], a.warming = true, ""
+		return
+	}
+	p := a.page(id)
+	if p == nil || !p.enabled() {
+		a.warming = ""
+		return
+	}
+	hidden := ui.Column(c.Key("warm-" + string(id))).Absolute().Left(0).Right(0).Top(0).Bottom(0).
+		PassThrough().Opacity(pageWarmOpacity)
+	hidden.Children(func() { p.body(c, false, false) })
+	a.warmed[id] = true
+	a.warming = ""
+}
+
+// nextWarmPage queues one page that was never drawn, for the next frame's
+// warmPage. It runs from the monitor tick while the sheet rests, so the
+// first switch to every page is as cheap as the ones after it.
+func (a *shelf) nextWarmPage(now time.Time) {
+	if a.win == nil || a.warming != "" || !a.visible || a.currentLevel() != 2 || a.tabPhase(now) < 1 {
+		return
+	}
+	// Never warm while the shell itself is moving: the hidden page's first
+	// layout would land in the middle of the open spring.
+	if !a.animationStart.IsZero() || !a.closeAt.IsZero() || a.fx.openMoving || a.fx.sizeMoving {
+		return
+	}
+	if a.warmed == nil {
+		a.warmed = map[pageID]bool{}
+	}
+	for _, p := range a.enabledPages() {
+		if a.warmed[p.id()] {
+			continue
+		}
+		if p.id() == a.tab {
+			// What the user is looking at is warm already.
+			a.warmed[p.id()] = true
+			continue
+		}
+		a.warming = p.id()
+		a.win.Invalidate()
+		return
+	}
+}
+
+// sheetFrame stacks a back row, the 6pt gap and the fixed content box.
+func (a *shelf) sheetFrame(c *ui.Context, back, body func()) {
+	ui.Column(c.Key("page-frame")).FillWidth().Grow(1).MinHeight(0).Children(func() {
+		back()
+		ui.Box(c.Key("page-gap")).Height(contentGap)
+		ui.Column(c.Key("page-content")).Width(contentW).Height(contentH).Clip().Children(body)
+	})
+}
+
+// backPages are the page icons the back row draws: five at most, in the
+// registry's order, with the current page always among them (production
+// has exactly five; a sixth page registered by an experiment takes the
+// last seat while it is current).
+func (a *shelf) backPages() []panelPage {
+	pages := a.enabledPages()
+	if len(pages) <= earMaxPages {
+		return pages
+	}
+	out := pages[:earMaxPages]
+	cur := a.currentPage()
+	for _, p := range out {
+		if p.id() == cur.id() {
+			return out
+		}
+	}
+	out[earMaxPages-1] = cur
+	return out
+}
+
+// backRow is the sheet's 26pt row: 「‹ 页面名 数量」, the five page icons
+// with the active page's capsule, then the current page's own buttons.
+// t is the page switch's progress: the name crossfades and the capsule
+// glides over tabAnimation (the value is 1 at rest).
+func (a *shelf) backRow(c *ui.Context, t float32) {
+	cur := a.currentPage()
+	name, count := cur.title()
+	row := ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(4).AlignItems(ui.Center)
+	var navs map[pageID]ui.Element
+	row.Children(func() {
 		label := name
 		if count != "" {
 			label += " " + count
@@ -912,36 +1008,92 @@ func (a *shelf) backRow(c *ui.Context, p panelPage, name, count string, live boo
 		back.Children(func() {
 			ui.Row(c.Key("back-in")).AlignItems(ui.Center).Gap(2).Children(func() {
 				ui.Icon(c, backSymbol).Size(14, 14).TextColor(ink2)
-				panelLabel(c, nil, name, 11.5, 600).TextColor(ink2)
-				if count != "" {
-					panelLabel(c, nil, count, 10, 600).TextColor(ink3)
-				}
+				slot := ui.Row(c.Key("back-name")).Height(22).AlignItems(ui.Center).Clip()
+				slot.Children(func() {
+					// The labels share one slot: the outgoing name leaves
+					// over the first share, the incoming one arrives after
+					// it. The slot is as wide as the incoming name, so the
+					// page icons never move during a switch.
+					if t < tabOutShare && a.tabFrom != a.tab {
+						if from := a.page(a.tabFrom); from != nil && from.enabled() {
+							oldName, oldCount := from.title()
+							old := ui.Row(c.Key("back-name-out")).Absolute().Left(0).Top(0).Height(22).
+								AlignItems(ui.Center).Gap(2).Opacity(1 - ui.EaseIn(t/tabOutShare))
+							old.Children(func() {
+								panelLabel(c, nil, oldName, 11.5, 600).TextColor(ink2)
+								if oldCount != "" {
+									panelLabel(c, nil, oldCount, 10, 600).TextColor(ink3)
+								}
+							})
+						}
+					}
+					in := float32(1)
+					if t < 1 {
+						in = ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
+					}
+					now := ui.Row(c.Key("back-name-in")).Height(22).AlignItems(ui.Center).Gap(2).Opacity(in)
+					now.Children(func() {
+						panelLabel(c, nil, name, 11.5, 600).TextColor(ink2)
+						if count != "" {
+							panelLabel(c, nil, count, 10, 600).TextColor(ink3)
+						}
+					})
+					if t < 1 {
+						c.AnimationFrame()
+					}
+				})
 			})
 		})
-		if live && back.Clicked() {
+		if back.Clicked() {
 			a.setLevel(1)
 		}
-		ui.Row(c.Key("other-pages")).Gap(2).AlignItems(ui.Center).Children(func() {
-			for _, q := range a.enabledPages() {
-				if q.id() == p.id() {
-					continue
-				}
-				b := a.pageIconButton(c, q, backIcon, 14, false)
-				if live && b.Clicked() {
+		navs = map[pageID]ui.Element{}
+		ui.Row(c.Key("page-strip")).Gap(2).AlignItems(ui.Center).Children(func() {
+			for _, q := range a.backPages() {
+				b := a.pageIconButton(c, q, backIcon, 14, q.id() == cur.id())
+				navs[q.id()] = b
+				if b.Clicked() && q.id() != cur.id() {
 					a.setTab(q.id())
 				}
 			}
 		})
 		ui.Box(c).Grow(1)
-		if live {
-			ui.Row(c.Key("page-actions")).Gap(4).AlignItems(ui.Center).Children(func() {
-				for _, e := range p.actions(c) {
-					_ = e
-					// Elements add themselves to the current parent when
-					// created; nothing to do here.
-				}
-			})
+		ui.Row(c.Key("page-actions")).Gap(4).AlignItems(ui.Center).Children(func() {
+			for _, e := range cur.actions(c) {
+				_ = e
+				// Elements add themselves to the current parent when
+				// created; nothing to do here.
+			}
+		})
+	})
+	// The active icon's capsule glides to the icon on a switch and stays
+	// glued to it on every other move (the first frame paints it under
+	// the icon itself, before any box is known).
+	curIcon, ok := navs[cur.id()]
+	if !ok {
+		return
+	}
+	r := curIcon.LayoutBounds()
+	if r.W <= 0 {
+		curIcon.Background(fill2)
+		return
+	}
+	x := r.X
+	if t < 1 {
+		x = row.AnimateTo("tab-x", r.X, ui.Animation{Duration: tabAnimation, Ease: ui.EaseInOut})
+	} else {
+		x = row.Jump("tab-x", r.X)
+	}
+	prev := row.LayoutBounds()
+	row.Draw(func(p *ui.Painter, box ui.Rect) {
+		// The capsule rect comes from the last frame's boxes; anchor it to
+		// the row's current box so a frame that moved the row cannot
+		// unglue it.
+		dx, dy := float32(0), float32(0)
+		if prev.W > 0 {
+			dx, dy = box.X-prev.X, box.Y-prev.Y
 		}
+		p.Fill(ui.Rect{X: x + dx, Y: r.Y + dy, W: r.W, H: r.H}, fill2, r.H/2)
 	})
 }
 
@@ -952,7 +1104,7 @@ func (a *shelf) dropFrame(c *ui.Context, paths []string, class dropClass) {
 		a.dropBar(c, "投放", dropCountTextFor(len(paths), class), "松开放入托盘")
 	}, func() {
 		a.dropStage(c, paths, class)
-	}, false)
+	})
 }
 
 // dropBar is a plain back row for the transient drop zone and OCR card.
@@ -1371,6 +1523,8 @@ func (a *shelf) openPage(id pageID) {
 		return
 	}
 	a.tabFrom, a.tab = id, id
+	a.tabAt = time.Time{}
+	a.tabOutK, a.tabOutShift = 1, 0
 	a.setLevel(2)
 }
 
@@ -1383,6 +1537,12 @@ func (a *shelf) setLevel(level int) {
 	}
 	a.level = level
 	a.tabFrom = a.tab
+	a.tabOutK, a.tabOutShift = 1, 0
+	if level == 2 {
+		// A fresh opening warms every page again: textures and the glyph
+		// atlas may have been trimmed while the panel was closed.
+		a.warmed, a.warming = nil, ""
+	}
 	a.reveal = ""
 	a.selection.keepExisting(a.visibleItems())
 	a.syncWindowFrame()
@@ -1455,7 +1615,32 @@ func (a *shelf) setTab(id pageID) {
 		a.tab = id // a.tab was stale; nothing to fade from
 		return
 	}
-	a.tabFrom, a.tab = cur, id
+	now := time.Now()
+	outK, outShift, from := float32(1), float32(0), cur
+	if a.win != nil && !a.tabAt.IsZero() {
+		// A switch is still running: carry the picture on screen into this
+		// one, so rapid switching continues instead of flashing the page
+		// that was arriving.
+		if ph := a.tabPhase(now); ph < 1 {
+			if ph < tabOutShare && a.tabFrom != cur {
+				// The switch that is running is still fading a page out
+				// (its incoming one has not started): carry that page and
+				// the opacity it has reached, so the fade continues where
+				// it is instead of rising again.
+				from = a.tabFrom
+				outK = a.tabOutK * (1 - ui.EaseIn(ph/tabOutShare))
+			} else {
+				in := ui.EaseOut((ph - tabOutShare) / (1 - tabOutShare))
+				outK = in
+				dir := float32(1)
+				if a.pageIndex(cur) < a.pageIndex(a.tabFrom) {
+					dir = -1
+				}
+				outShift = tabShift * dir * (1 - in)
+			}
+		}
+	}
+	a.tabFrom, a.tab, a.tabOutK, a.tabOutShift = from, id, outK, outShift
 	if cur == pageUsage && a.usage != nil { // 离开用量页即取消其后台工作
 		a.usage.stopWork()
 	}
@@ -1466,7 +1651,7 @@ func (a *shelf) setTab(id pageID) {
 		a.resetHomeEdit()
 	}
 	if a.visible {
-		a.tabAt = time.Now()
+		a.tabAt = now
 	}
 	a.reveal = ""
 	a.selection.keepExisting(a.visibleItems())

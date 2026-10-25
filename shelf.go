@@ -57,6 +57,10 @@ type shelf struct {
 	tab                                                         pageID                // current page of the expanded panel (registry in pages.go)
 	tabAt                                                       time.Time             // when the tab last switched; drives the pages' crossfade
 	tabFrom                                                     pageID                // the page being left by the last switch, drawn fading out
+	tabOutK                                                     float32               // opacity the outgoing picture starts at (1, or where an interrupted switch left it)
+	tabOutShift                                                 float32               // offset the outgoing picture starts at when a switch interrupted another
+	warmed                                                      map[pageID]bool       // pages already drawn once while the panel rested
+	warming                                                     pageID                // page queued for that warm draw
 	search                                                      string                // clipboard page's search text
 	reveal                                                      string                // row to keep in view after a keyboard move
 	focusMode                                                   bool                  // the window took the keyboard for clipboard search
@@ -161,6 +165,7 @@ func (a *shelf) startMonitoring() {
 					// move event and a shape that changed under a still
 					// pointer, so a press never waits for the next move.
 					a.syncPointerGate()
+					a.nextWarmPage(now)
 					a.tickUpdates(now)
 					// The status's clock runs only while it is actually on
 					// screen: the open panel's pill counts, a drawn capsule
@@ -503,7 +508,9 @@ func (a *shelf) switchTab(id pageID) {
 	if a.tab == pageHome && id != pageHome {
 		a.resetHomeEdit()
 	}
-	a.tab = id
+	a.tab, a.tabFrom = id, id
+	a.tabAt = time.Time{}
+	a.tabOutK, a.tabOutShift = 1, 0
 }
 
 // Keyboard handback seams: tests stub these (mac's own calls need the app

@@ -377,9 +377,14 @@ func TestSmokeUsageRefreshAnswers(t *testing.T) {
 	expandShelf(t, a)
 	onMain(func() {
 		a.setTab(pageUsage)
-		a.openSettings()   // the user's settings and panel were open together
-		f.tick(time.Now()) // must look again, not sit out the interval
+		a.openSettings() // the user's settings and panel were open together
 	})
+	// The AI 用量 page starts no fetch or scan until its 240ms transition
+	// has settled (a switch must not pay for credential reads and local
+	// log walks), so the fresh look happens after it, not on its first
+	// frame.
+	time.Sleep(300 * time.Millisecond)
+	onMain(func() { f.tick(time.Now()) }) // must look again, not sit out the interval
 	time.Sleep(700 * time.Millisecond)
 	mu.Lock()
 	ran := calls
@@ -389,6 +394,17 @@ func TestSmokeUsageRefreshAnswers(t *testing.T) {
 	if ran < 2 {
 		t.Errorf("reopening did not ask again: %d Codex fetches", ran)
 	}
+
+	// The settings window is out of the way again before the pointer test
+	// below: it was only here to prove a panel and the settings can be open
+	// together, and it would take the synthetic click.
+	onMain(func() {
+		if a.settingsWin != nil {
+			a.settingsWin.Close()
+			a.settingsWin = nil
+		}
+	})
+	time.Sleep(150 * time.Millisecond)
 
 	// The button itself: a real pointer click on the refresh glyph answers
 	// with the wait instead of silence (「刚查过，N 秒后可再刷新」). The glyph

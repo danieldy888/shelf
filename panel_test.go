@@ -960,3 +960,222 @@ func TestTrayMenuRemoveHidesClipboardCapture(t *testing.T) {
 		t.Fatal("re-capture did not bring the item back to the tray")
 	}
 }
+
+// TestScrollEdgesOnlyWhereThereIsMore: the edge bands appear only on an
+// edge that still has content beyond it, and never for content that fits.
+func TestScrollEdgesOnlyWhereThereIsMore(t *testing.T) {
+	cases := []struct {
+		name          string
+		y, maxY, size float32
+		top, bottom   bool
+	}{
+		{"fits", 0, 0, 200, false, false},
+		{"start with more below", 0, 500, 200, false, true},
+		{"scrolled", 120, 500, 200, true, true},
+		{"at the end", 500, 500, 200, true, false},
+		{"moved by a pixel", 0.2, 500, 200, false, true},
+	}
+	for _, c := range cases {
+		st := &ui.ScrollState{Y: c.y, MaxY: c.maxY}
+		top, bottom, viewH := scrollEdges(st, c.size)
+		if top != c.top || bottom != c.bottom {
+			t.Fatalf("%s: bands top=%v bottom=%v, want %v/%v", c.name, top, bottom, c.top, c.bottom)
+		}
+		if viewH <= 0 || viewH > c.size {
+			t.Fatalf("%s: viewport height %.1f out of %.1f", c.name, viewH, c.size)
+		}
+	}
+}
+
+// TestEdgeBandIsAtMostHalfARow: the 174pt box is short, so the melt never
+// reaches deeper than half a row and never past edgeBandMax.
+func TestEdgeBandIsAtMostHalfARow(t *testing.T) {
+	cases := []struct {
+		rowH, want float32
+	}{
+		{clipRowH, clipRowH / 2}, // 30pt rows: a 15pt band
+		{toolCellH, edgeBandMax}, // 84pt cards: capped at 24
+		{tileH, edgeBandMax},     // 85pt tiles: capped at 24
+		{20, 10},
+	}
+	for _, c := range cases {
+		if got := edgeBandFor(c.rowH); got != c.want {
+			t.Fatalf("edgeBandFor(%g) = %g, want %g", c.rowH, got, c.want)
+		}
+		if got := edgeBandFor(c.rowH); got > c.rowH/2+0.001 {
+			t.Fatalf("edgeBandFor(%g) = %g is deeper than half a row", c.rowH, got)
+		}
+	}
+}
+
+// TestEdgeFadeIsProgressive: the blur weight rises smoothly to the edge,
+// is full at it, and is gone past the band.
+func TestEdgeFadeIsProgressive(t *testing.T) {
+	band := edgeBandFor(clipRowH)
+	if got := edgeFade(0, band); got != 1 {
+		t.Fatalf("at the edge the fade is %.2f, want 1", got)
+	}
+	if got := edgeFade(band, band); got != 0 {
+		t.Fatalf("at the band's end the fade is %.2f, want 0", got)
+	}
+	if got := edgeFade(band+10, band); got != 0 {
+		t.Fatalf("past the band the fade is %.2f, want 0", got)
+	}
+	prev := float32(1)
+	for d := float32(0); d <= band; d += 2 {
+		got := edgeFade(d, band)
+		if got > prev+1e-6 {
+			t.Fatalf("the fade rose from %.3f to %.3f at %.0fpt", prev, got, d)
+		}
+		if got < 0 || got > 1 {
+			t.Fatalf("fade %.2f out of range at %.0fpt", got, d)
+		}
+		prev = got
+	}
+	if mid := edgeFade(band/2, band); mid < 0.3 || mid > 0.7 {
+		t.Fatalf("halfway into the band the fade is %.2f, want about half", mid)
+	}
+}
+
+// TestRowsFadeOnlyInTheBand: only rows inside the viewport and reaching
+// into an active band get a blur weight; a row in the open, or scrolled
+// out, is left alone.
+func TestRowsFadeOnlyInTheBand(t *testing.T) {
+	const viewH = 174
+	band := edgeBandFor(clipRowH)
+	cases := []struct {
+		name       string
+		top        float32
+		topBand    bool
+		bottomBand bool
+		want       float32
+	}{
+		{"first row under the top band", 0, true, false, 1},
+		{"row inside the band", 6, true, false, 0.5},
+		{"row past the band", 40, true, false, 0},
+		{"row scrolled fully out", -40, true, true, 0},
+		{"row straddling the top edge", -12, true, false, 1},
+		{"last row at the bottom edge", viewH - clipRowH, false, true, 1},
+		{"row above the bottom band", viewH - clipRowH - 40, false, true, 0},
+		{"bands off", 0, false, false, 0},
+	}
+	for _, c := range cases {
+		got := rowFade(c.top, clipRowH, viewH, c.topBand, c.bottomBand, band)
+		switch {
+		case c.want == 1 && got < 0.99:
+			t.Fatalf("%s: weight %.2f, want the edge weight", c.name, got)
+		case c.want == 0 && got != 0:
+			t.Fatalf("%s: weight %.2f, want 0", c.name, got)
+		case c.want > 0 && c.want < 1 && (got <= 0 || got >= 1):
+			t.Fatalf("%s: weight %.2f, want a partial edge weight", c.name, got)
+		}
+	}
+	// Progressive, not a step: a row further into the band is sharper than
+	// one at its edge and blurrier than one past it.
+	edge := rowFade(1, clipRowH, viewH, true, false, band)
+	inner := rowFade(band-2, clipRowH, viewH, true, false, band)
+	if !(inner < edge && edge < 1) {
+		t.Fatalf("weights edge %.2f inner %.2f do not progress toward the edge", edge, inner)
+	}
+}
+
+// TestBackRowKeepsTheSamePageIcons: every page keeps its icon in the back
+// row, in registry order, including the current one — a switch never
+// removes an icon and reflows the rest.
+func TestBackRowKeepsTheSamePageIcons(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	a := fx.a
+	a.level, a.visible = 2, true
+	a.setTab(pageTray)
+	view := fx.view
+	view.Frame()
+	view.Frame()
+	pages := a.backPages()
+	if len(pages) != 5 {
+		t.Fatalf("the back row has %d icons, want the design's 5", len(pages))
+	}
+	want := []pageID{pageHome, pageTray, pageClipboard, pageTools, pageUsage}
+	for i, p := range pages {
+		if p.id() != want[i] {
+			t.Fatalf("back row icon %d is %s, want %s (registry order)", i, p.id(), want[i])
+		}
+	}
+	// Every other page is reachable from its icon, and the current page
+	// keeps its own icon (it is simply not removed).
+	for _, id := range []pageID{pageHome, pageClipboard, pageTools, pageUsage} {
+		if err := view.Click(a.page(id).label()); err != nil {
+			t.Fatalf("the %s icon is missing while on %s: %v", id, a.tab, err)
+		}
+		view.Frame()
+		if a.tab != id {
+			t.Fatalf("clicking the %s icon left the panel on %s", id, a.tab)
+		}
+		if got := a.backPages(); len(got) != 5 {
+			t.Fatalf("on %s the back row has %d icons, want 5", id, len(got))
+		}
+		// Back to the tray for the next icon, through its own icon.
+		if err := view.Click("托盘"); err != nil {
+			t.Fatalf("the tray icon is missing while on %s: %v", id, err)
+		}
+		view.Frame()
+		if a.tab != pageTray {
+			t.Fatalf("clicking 托盘 left the panel on %s", a.tab)
+		}
+	}
+}
+
+// TestClipboardBackRowFitsFiveIconsAndSearch: the back row's tightest
+// case — a three-digit clipboard count, five page icons, the search box
+// and 清空 — must fit the 396pt row without the icons running into the
+// count or the field.
+func TestClipboardBackRowFitsFiveIconsAndSearch(t *testing.T) {
+	a, view := levelShelf(t)
+	a.store.SetTextLimit(300) // the widest setting: the count is three digits
+	a.settings.ClipboardLimit = 300
+	for i := range 108 {
+		if err := a.store.AddClipText(fmt.Sprintf("剪贴板内容 %d · 一段足够长的文字用于检查省略", i), "com.example.Source"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.registerPage(&fakePage{on: true}) // the fifth icon
+	a.visible, a.level = true, 2
+	a.setTab(pageClipboard)
+	view.Frame()
+	view.Frame()
+	if got := len(a.backPages()); got != 5 {
+		t.Fatalf("the back row has %d icons, want 5", got)
+	}
+	name, count := a.page(pageClipboard).title()
+	if count != "120 条" {
+		t.Fatalf("clipboard count reads %q, want 120 条: the audit needs the widest case", count)
+	}
+	countBox, ok := view.Find(count)
+	if !ok {
+		t.Fatalf("the count %q is not drawn; texts %v", count, view.Texts())
+	}
+	home, ok := view.Find("主页")
+	if !ok {
+		t.Fatal("the first page icon is missing")
+	}
+	if countBox.X+countBox.W > home.X-1 {
+		t.Fatalf("the count %q (%.1f..%.1f) runs into the first icon %.1f", count,
+			countBox.X, countBox.X+countBox.W, home.X)
+	}
+	fifth, ok := view.Find("假页面")
+	if !ok {
+		t.Fatal("the fifth page icon is missing")
+	}
+	search, ok := view.Find(searchLabel)
+	if !ok {
+		t.Fatal("the clipboard search field is missing")
+	}
+	// The field's wrap starts 8pt padding + 11pt glyph + 5pt gap before
+	// the input's own box.
+	wrapLeft := search.X - 24
+	if fifth.X+fifth.W > wrapLeft-1 {
+		t.Fatalf("the fifth icon ends at %.1f, into the search field at %.1f", fifth.X+fifth.W, wrapLeft)
+	}
+	if name != "剪贴板" {
+		t.Fatalf("back-row name = %q", name)
+	}
+}

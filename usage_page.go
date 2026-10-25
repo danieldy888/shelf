@@ -117,9 +117,6 @@ func (f *usageFeature) id() pageID    { return pageUsage }
 func (f *usageFeature) label() string { return "AI 用量" }
 func (f *usageFeature) enabled() bool { return f.host.settings.AIUsage.Enabled }
 
-// overflows is always false: the whole page is laid out to fit 396 × 174.
-func (f *usageFeature) overflows() bool { return false }
-
 // icon is the left-ear's third icon: a miniature of the quota card's
 // double ring showing the tool with the least 5-hour remaining (outer
 // weekly, inner 5h); without any window data it falls back to a plain
