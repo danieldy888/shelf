@@ -22,13 +22,17 @@
 // never folded into the play verdict, because publishers like NetEase
 // leave rate 0 in a minutes-stale dict while playback continues.
 // Commands, one per line on stdin:
-//   play | pause | toggle | next | prev | stop | quit
+//   play | pause | toggle | next | prev | stop | seek <seconds> | quit
+// seek moves the playing app's position; it answers {"error":"seek
+// unsupported"} when this macOS build has no setter, and {"error":"bad
+// seek"} for a negative, non-numeric or trailing-junk argument.
 // An unknown command gets {"error":"bad command"} back. EOF on stdin is
 // the shutdown request: the process exits after the current read.
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
+#include <math.h>
 #include <objc/message.h>
 #include <objc/objc.h>
 #include <pthread.h>
@@ -49,6 +53,7 @@ typedef void (*GetStateFn)(dispatch_queue_t, void (^)(int));
 typedef void (*RegFn)(dispatch_queue_t);
 typedef void (*SendCommandFn)(uint32_t, CFDictionaryRef);
 typedef void (*GetClientFn)(dispatch_queue_t, void (^)(id));
+typedef void (*SetElapsedFn)(double);
 
 static void *MR;
 static GetInfoFn MRGetInfo;
@@ -57,6 +62,9 @@ static GetStateFn MRGetAppState;
 static RegFn MRRegister;
 static SendCommandFn MRSendCommand;
 static GetClientFn MRGetClient;
+// Optional: some macOS builds do not export the elapsed-time setter.
+// Its absence only disables seek, never the rest of the helper.
+static SetElapsedFn MRSetElapsed;
 
 // MediaRemote command numbers, as in MPRemoteCommand (kMRMediaRemoteCommand).
 enum {
@@ -550,7 +558,28 @@ static void handleCommand(const char *line, int *quit) {
   else if (!strcmp(line, "next")) cmd = CMD_NEXT;
   else if (!strcmp(line, "prev")) cmd = CMD_PREV;
   else if (!strcmp(line, "quit")) { *quit = 1; return; }
-  else { emitError("bad command"); return; }
+  else if (!strncmp(line, "seek ", 5)) {
+    // seek <seconds>: a plain decimal, nothing after it. strtod also
+    // accepts "inf"; a non-finite value is rejected so the app never
+    // hands MediaRemote a nonsense position.
+    const char *arg = line + 5;
+    char *end = NULL;
+    double seconds = strtod(arg, &end);
+    if (end == arg || *end != '\0' || !isfinite(seconds) || seconds < 0) {
+      emitError("bad seek");
+      return;
+    }
+    if (!MRSetElapsed) {
+      emitError("seek unsupported");
+      return;
+    }
+    MRSetElapsed(seconds);
+    // Same hot-poll window as a transport command: the new position must
+    // reach the reader quickly, or the progress bar snaps back.
+    gotNotify = 1;
+    atomic_store(&cmdPollUntil, nowUnix() + 1.5);
+    return;
+  } else { emitError("bad command"); return; }
   MRSendCommand(cmd, NULL);
   // The system will tell us the new state; poll soon so it lands fast.
   // The notification usually follows within a frame, but some apps are
@@ -579,6 +608,8 @@ static void loadMediaRemote(void) {
   MRSendCommand = (SendCommandFn)dlsym(MR, "MRMediaRemoteSendCommand");
   MRGetClient =
       (GetClientFn)dlsym(MR, "MRMediaRemoteGetNowPlayingClient");
+  // Optional: a missing setter leaves seek unsupported, nothing else.
+  MRSetElapsed = (SetElapsedFn)dlsym(MR, "MRMediaRemoteSetElapsedTime");
   KeyTitle = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoTitle");
   KeyArtist = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoArtist");
   KeyAlbum = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoAlbum");

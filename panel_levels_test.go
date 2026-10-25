@@ -195,7 +195,7 @@ func assertPageFits(t *testing.T, view *ui.Tester, page string, containers map[s
 		if count[text] > 1 || containers[text] {
 			continue
 		}
-		limit := float32(20) // one line of the largest page font (13pt)
+		limit := float32(26) // one line of the largest page font (19pt: the home canvas' countdown)
 		if strings.Contains(text, "\n") {
 			limit = 36 // up to two explicit lines (empty states, quota messages)
 		}
@@ -209,7 +209,7 @@ func assertPageFits(t *testing.T, view *ui.Tester, page string, containers map[s
 func TestEveryPageFitsTheContentBox(t *testing.T) {
 	a, view := levelShelf(t)
 	a.visible, a.level = true, 2
-	for _, id := range []pageID{pageTray, pageClipboard, pageTools} {
+	for _, id := range []pageID{pageHome, pageTray, pageClipboard, pageTools} {
 		a.setTab(id)
 		view.Frame()
 		ignore := map[string]bool{}
@@ -218,6 +218,16 @@ func TestEveryPageFitsTheContentBox(t *testing.T) {
 		}
 		for _, card := range a.toolsLayout().Cards {
 			ignore[card.ID] = true
+		}
+		if id == pageHome {
+			// A widget's card carries its title as a label; the same
+			// words may be a text or not, so the container is skipped by
+			// name.
+			for _, w := range a.toolsLayout().Home {
+				if def := toolCardDefFor(w.ID); def != nil {
+					ignore[def.title] = true
+				}
+			}
 		}
 		assertPageFits(t, view, string(id), ignore)
 	}

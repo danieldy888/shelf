@@ -156,7 +156,7 @@ func TestToolsLayoutPersistence(t *testing.T) {
 	defer s.Close()
 	a := &shelf{store: s, dataDir: dir}
 	a.mutateTools(func(l *layout.Layout) {
-		l.RemoveCard("airdrop")
+		l.RemoveCard("resize")
 		l.MoveCard("zip", 0)
 	})
 	got := a.toolsLayout()
@@ -173,7 +173,7 @@ func TestToolsLayoutPersistence(t *testing.T) {
 		t.Fatal("layout.json did not persist the order")
 	}
 	for _, card := range got.Cards {
-		if card.ID == "airdrop" {
+		if card.ID == "resize" {
 			t.Fatal("removed card came back")
 		}
 	}
@@ -247,39 +247,6 @@ func TestToolsWriteFailureKeepsLayout(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "layout.json"))
 	if err != nil || string(data) != string(saved) {
 		t.Fatalf("the file changed under a failed write: %v", err)
-	}
-}
-
-// The card-level press handler must not eat the child controls' downs:
-// a tap on a 保持唤醒 duration pill picks that duration, not the card's
-// one-hour toggle — the press belongs to the chip, so p.press stays empty.
-func TestToolsAwakeChipGetsItsOwnPress(t *testing.T) {
-	s, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	power := newFakePower()
-	l := layout.Default()
-	a := &shelf{store: s, tab: pageTools, visible: true}
-	a.awake = &awakeModule{host: a, create: power.create, release: power.release}
-	a.toolsLay = &l
-	a.mutateTools(func(l *layout.Layout) { l.SetSpan("awake", 2) }) // dataDir empty: memory only
-	view := ui.NewTester(a.view, sheetW, sheetH)
-	r, ok := view.Find("30 分钟")
-	if !ok {
-		t.Fatal("awake chip missing")
-	}
-	p := a.toolsPage()
-	view.Press(r.X+r.W/2, r.Y+r.H/2)
-	view.Advance(50 * time.Millisecond)
-	if p.press != nil {
-		t.Fatalf("a chip press became a card press: %+v", p.press)
-	}
-	view.Release(r.X+r.W/2, r.Y+r.H/2)
-	view.Advance(50 * time.Millisecond)
-	if a.awake.duration != 30*time.Minute {
-		t.Fatalf("chip tap set %v, want 30m", a.awake.duration)
 	}
 }
 
@@ -399,22 +366,21 @@ func TestToolsSettleEndsWhenFlightNeverMoves(t *testing.T) {
 	view.Release(next.X+40, next.Y+20)
 }
 
-// toolsOverflowLayout is a 4-row grid (13 cards): the fourth row is
-// beyond the three the stage shows, so the grid scrolls.
+// toolsOverflowLayout is a 3-row grid (9 action cards): the third row is
+// beyond the two the fixed stage shows, so the grid scrolls.
 func toolsOverflowLayout() layout.Layout {
 	return layout.Layout{Version: layout.Version, Cards: []layout.Card{
 		{ID: "ocr"}, {ID: "fit1m"}, {ID: "topdf"}, {ID: "zip"},
 		{ID: "tojpeg"}, {ID: "toword"}, {ID: "extract"}, {ID: "resize"},
-		{ID: "airdrop"}, {ID: "awake"}, {ID: "playing", Span: 2},
-		{ID: "recent", Span: 2}, {ID: "clip", Span: 2},
+		{ID: "airdrop"},
 	}}
 }
 
-// The grid past three rows must scroll: the cards are absolute, and an
-// absolute child of the scroll itself counts toward neither the
-// scrollable content nor the offset, so the fourth row stayed clipped
-// out of reach. A content box in flow carries the height; the cards
-// scroll inside it and take their presses.
+// The grid past the two visible rows must scroll: the cards are
+// absolute, and an absolute child of the scroll itself counts toward
+// neither the scrollable content nor the offset, so the third row stayed
+// clipped out of reach. A content box in flow carries the height; the
+// cards scroll inside it and take their presses.
 func TestToolsGridScrollsPastThreeRows(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -440,16 +406,16 @@ func TestToolsGridScrollsPastThreeRows(t *testing.T) {
 	if after.Y == first.Y {
 		t.Fatalf("scrolling moved no cards: before=%+v after=%+v scroll=%+v", first, after, p.scroll)
 	}
-	// The fourth row is on screen now: its cards take a press.
-	clip, ok := view.Find("剪贴板最新")
+	// The third row is on screen now: its card takes a press.
+	last, ok := view.Find("隔空投送")
 	if !ok {
-		t.Fatal("clip card missing after the scroll")
+		t.Fatal("third-row card missing after the scroll")
 	}
-	view.Press(clip.X+10, clip.Y+10)
-	if p.press == nil || p.press.id != "clip" {
-		t.Fatalf("a card of the fourth row could not be pressed: %+v", p.press)
+	view.Press(last.X+10, last.Y+10)
+	if p.press == nil || p.press.id != "airdrop" {
+		t.Fatalf("a card of the third row could not be pressed: %+v", p.press)
 	}
-	view.Release(clip.X+10, clip.Y+10)
+	view.Release(last.X+10, last.Y+10)
 }
 
 // A release inside the visible grid commits the reorder: the drop
@@ -484,7 +450,7 @@ func TestToolsDropInVisibleGridCommits(t *testing.T) {
 	last := l.Cards[len(l.Cards)-1].ID
 	oldCursor := cursorPoint
 	t.Cleanup(func() { cursorPoint = oldCursor })
-	cursorPoint = func() mygo.Point { return mygo.Point{X: 680, Y: 200} } // inside the panel
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 200, Y: 200} } // inside the panel
 	d := &toolPress{id: last, dragging: true, px: 20, py: py, index: 0,
 		origCell: toolCell{id: last, x: 0, y: 400}}
 	p.toolCardDrop(d, cursorPoint())

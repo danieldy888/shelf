@@ -103,9 +103,9 @@ func (a *shelf) toolsPage() *toolsPage {
 // layout.json, defaults first so the page never waits on the file.
 func (a *shelf) toolsLayout() layout.Layout {
 	if a.toolsLay == nil {
-		l := layout.Default()
+		l := layout.DefaultWith(a.settings.AIUsage.Enabled)
 		if a.dataDir != "" {
-			got, err := layout.Load(a.dataDir)
+			got, err := layout.LoadWith(a.dataDir, a.settings.AIUsage.Enabled)
 			if err != nil {
 				// Like settingsBroken: the page still draws, but the file
 				// the user could repair stays untouched until restart.
@@ -129,6 +129,7 @@ func (a *shelf) toolsLayout() layout.Layout {
 func (a *shelf) mutateTools(fn func(*layout.Layout)) bool {
 	l := a.toolsLayout()
 	l.Cards = slices.Clone(l.Cards)
+	l.Home = slices.Clone(l.Home)
 	l.Pins = slices.Clone(l.Pins)
 	fn(&l)
 	if a.dataDir != "" && !a.toolsLayBroken {
@@ -215,25 +216,17 @@ func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element 
 	return b
 }
 
-// pickerGroups is the catalogue split into 动作 and 小组件 rows in
-// picker order.
+// pickerGroups is the tool page's catalogue: actions only. Widgets live
+// on the 主页 canvas; their catalogue rows live there.
 func (p *toolsPage) pickerGroups() (groups [][]toolCardDef) {
-	var actions, widgets []toolCardDef
+	var actions []toolCardDef
 	for _, def := range toolCatalog() {
-		if !def.available(p.host) {
-			continue
-		}
-		if def.kind == cardAction {
+		if def.kind == cardAction && def.available(p.host) {
 			actions = append(actions, def)
-		} else {
-			widgets = append(widgets, def)
 		}
 	}
 	if len(actions) > 0 {
 		groups = append(groups, actions)
-	}
-	if len(widgets) > 0 {
-		groups = append(groups, widgets)
 	}
 	return
 }
@@ -724,7 +717,7 @@ func (p *toolsPage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui
 			iconCol, textCol = ink3, ink3
 		}
 		ui.Icon(c, def.icon).Size(15, 15).TextColor(iconCol)
-		ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(500).TextColor(textCol)
+		fitText(c, def.title, 12, 500, 88).TextColor(textCol)
 		ui.Box(c).Grow(1)
 		size := "1 列"
 		if def.variableSpan {
@@ -735,7 +728,7 @@ func (p *toolsPage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui
 		if added {
 			size += " · 已添加"
 		}
-		ui.Text(c, size).SingleLine().FontSize(10).TextColor(ink3)
+		fitText(c, size, 10, 0, 60).TextColor(ink3)
 	})
 	return row
 }

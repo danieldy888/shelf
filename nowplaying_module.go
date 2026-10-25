@@ -355,6 +355,29 @@ func (m *nowPlayingModule) playing() bool {
 	return m.have && m.last.Playing
 }
 
+// seekTo jumps to seconds in the current track. The widget shows the
+// dragged position at once; the helper's next reported position is the
+// truth (the plan: 松手发一次命令，之后以助手回报为准).
+func (m *nowPlayingModule) seekTo(seconds float64) {
+	if m.np == nil {
+		return
+	}
+	if seconds < 0 || seconds != seconds {
+		seconds = 0
+	}
+	if m.have && m.last.Duration > 0 {
+		seconds = min(seconds, m.last.Duration)
+	}
+	m.np.Seek(seconds)
+	now := time.Now()
+	m.last.Elapsed = seconds
+	m.last.Received = now
+	m.last.InfoAt = time.Time{}
+	next := npSnapOf(m.last, m.have, m.host.visible, now)
+	next.art = m.artState()
+	m.invalidate(next)
+}
+
 // send forwards a transport command to the playing app. Play/pause flips
 // the shown state at once — the next helper line (the helper samples hot
 // for a moment after a command) reconciles it with the truth, so a slow or

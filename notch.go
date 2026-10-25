@@ -558,6 +558,19 @@ func (a *shelf) escape() {
 		}
 		return
 	}
+	if a.tab == pageHome {
+		if p := a.homePageOf(); p != nil && (p.editing || p.picking) {
+			if p.picking {
+				p.picking = false
+			} else {
+				p.editing, p.press = false, nil
+			}
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+			return
+		}
+	}
 	if a.tab == pageTools {
 		if p := a.toolsPage(); p != nil && (p.editing || p.picking) {
 			// Esc in the 「+」 catalogue only backs out to the edit grid —
@@ -632,6 +645,10 @@ func (a *shelf) finishClose() {
 	// 要么授权已完成（预检通过直接框选），都不该回到一张旧卡。
 	a.ocrSheet = false
 	a.resetToolsEdit() // 工具页的编辑与目录不跨收起保留
+	a.resetHomeEdit()  // 主页的编辑与目录不跨收起保留
+	if p := a.homePageOf(); p != nil {
+		p.volLoaded = false // the output device may have changed while closed
+	}
 	a.selection.clear()
 }
 

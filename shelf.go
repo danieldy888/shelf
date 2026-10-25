@@ -51,6 +51,7 @@ type shelf struct {
 	usage                                                       *usageFeature         // nil until the AI usage page registers itself
 	clip                                                        *clipboardModule      // nil until monitoring starts
 	awake                                                       *awakeModule          // nil until the app starts
+	vol                                                         volumeControl         // system output volume; nil = CoreAudio
 	pages                                                       []panelPage           // registered pages in ear order (built-ins first)
 	pagesReady                                                  bool                  // built-in pages have been registered
 	tab                                                         pageID                // current page of the expanded panel (registry in pages.go)
@@ -491,6 +492,9 @@ func (a *shelf) switchTab(id pageID) {
 	}
 	if a.tab == pageTools && id != pageTools {
 		a.resetToolsEdit()
+	}
+	if a.tab == pageHome && id != pageHome {
+		a.resetHomeEdit()
 	}
 	a.tab = id
 }

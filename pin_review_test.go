@@ -140,17 +140,17 @@ func TestPinDragOutKeepsGridSpan(t *testing.T) {
 	pinOpenWindow = func(*pinItem) {}
 	t.Cleanup(func() { pinOpenWindow, cursorPoint = oldOpen, oldCursor })
 	a := &shelf{dataDir: t.TempDir()}
-	a.mutateTools(func(l *layout.Layout) { l.Cards = []layout.Card{{ID: "awake", Span: 2}} })
+	a.mutateTools(func(l *layout.Layout) { l.Cards = []layout.Card{{ID: "topdf", Span: 2}} })
 	p := &toolsPage{host: a, editing: true}
 	a.x, a.y = 400, 0
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 1400, Y: 500} }
-	p.toolCardDrop(&toolPress{id: "awake", dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}, cursorPoint())
+	p.toolCardDrop(&toolPress{id: "topdf", dragging: true, grabDX: 10, grabDY: 10, px: 200, py: 1200}, cursorPoint())
 	if len(a.pins) != 1 || a.pins[0].span != 2 || a.pins[0].cardW != pinCardW2 {
 		t.Fatalf("grid width lost: %+v", a.pins)
 	}
 	a.unpin(a.pins[0], true)
 	cards := a.toolsLayout().Cards
-	if len(cards) != 1 || cards[0].ID != "awake" || cards[0].Span != 2 {
+	if len(cards) != 1 || cards[0].ID != "topdf" || cards[0].Span != 2 {
 		t.Fatalf("return lost width: %+v", cards)
 	}
 }

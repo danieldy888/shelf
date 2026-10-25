@@ -89,7 +89,7 @@ func toolCatalog() []toolCardDef {
 		{id: "resize", kind: cardAction, title: "缩小图片", icon: shrinkSymbol, span: 1, accepts: imagesOnly, available: always},
 		{id: "zip", kind: cardAction, title: "打成 zip", icon: zipSymbol, span: 1, accepts: anyClass, available: always},
 		{id: "airdrop", kind: cardAction, title: "隔空投送", icon: airDropSymbol, span: 1, accepts: anyClass, available: always},
-		{id: "playing", kind: cardWidget, title: "正在播放", icon: musicSymbol, span: 2, accepts: never, available: always},
+		{id: "playing", kind: cardWidget, title: "音乐", icon: musicSymbol, span: 2, accepts: never, available: always},
 		{id: "awake", kind: cardWidget, title: "保持唤醒", icon: cupSymbol, span: 1, variableSpan: true, accepts: never, available: always},
 		{id: "recent", kind: cardWidget, title: "最近文件", icon: docSymbol, span: 2, accepts: never, available: always},
 		{id: "clip", kind: cardWidget, title: "剪贴板最新", icon: clipNavSymbol, span: 2, accepts: never, available: always},
@@ -214,7 +214,7 @@ func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface, 
 func (a *shelf) toolCardEditBody(c *ui.Context, card ui.Element, def *toolCardDef) {
 	card.Center().Gap(5).Children(func() {
 		ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-		ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+		fitText(c, def.title, 12, 600, toolColW(def.span)-8).TextColor(ink)
 		if def.span == 2 && def.kind == cardWidget {
 			ui.Text(c, "小组件").SingleLine().FontSize(10).TextColor(ink3)
 		}
@@ -229,9 +229,9 @@ func (a *shelf) toolCardBody(c *ui.Context, card ui.Element, def *toolCardDef, s
 	if def.kind == cardAction {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-			ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+			fitText(c, def.title, 12, 600, toolColW(span)-8).TextColor(ink)
 			if sub != "" {
-				ui.Text(c, sub).SingleLine().FontSize(10).TextColor(ink3)
+				fitText(c, sub, 10, 0, toolColW(span)-8).TextColor(ink3)
 			}
 		})
 		return
@@ -604,7 +604,13 @@ func (a *shelf) toolRecentBody(c *ui.Context, card ui.Element) {
 // untouched); 拖出后从托盘移除 does not apply — the card is not the tray
 // page.
 func (a *shelf) recentThumb(c *ui.Context, item store.Item) {
-	thumb := ui.Row(c.Key("recent-"+item.ID)).Size(40, 40).Radius(8).Center().Clip().
+	a.recentThumbAt(c, item, 40)
+}
+
+// recentThumbAt is recentThumb for a widget-driven size (the home canvas
+// uses 24/26pt thumbs).
+func (a *shelf) recentThumbAt(c *ui.Context, item store.Item, size float32) {
+	thumb := ui.Row(c.Key(fmt.Sprintf("recent-%s-%g", item.ID, size))).Size(size, size).Radius(8).Center().Clip().
 		Label(itemTitle(item))
 	if !item.Missing {
 		thumb.HandleInput(func(ev ui.InputEvent) bool {
@@ -625,11 +631,11 @@ func (a *shelf) recentThumb(c *ui.Context, item store.Item) {
 	}
 	if b := a.thumbnail(item); b != nil {
 		thumb.Children(func() {
-			ui.Image(c.Key("bmp"), b).Size(40, 40).Fit(ui.Cover)
+			ui.Image(c.Key("bmp"), b).Size(size, size).Fit(ui.Cover)
 		})
 	} else {
 		thumb.Background(fill2).Children(func() {
-			ui.Icon(c, fileSymbol).Size(18, 18).TextColor(ink3)
+			ui.Icon(c, fileSymbol).Size(size*0.45, size*0.45).TextColor(ink3)
 		})
 	}
 }

@@ -3,9 +3,11 @@
 package mac
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,6 +197,72 @@ func TestNowPlayingHostReadsAndSends(t *testing.T) {
 	if h.Dead() {
 		t.Fatal("host died after commands")
 	}
+}
+
+// TestNowPlayingHostSeek: Seek writes the helper's seek command and a
+// negative or NaN position clamps to 0. A pipe pair stands in for the
+// helper's stdin, so the exact bytes the host wrote are read back.
+func TestNowPlayingHostSeek(t *testing.T) {
+	cmdsR, cmdsW := io.Pipe()   // host writes commands, the test reads them
+	stateR, stateW := io.Pipe() // stub stdout: never yields a line
+	h := NewNowPlayingHostWithSource(func(context.Context) (io.WriteCloser, io.ReadCloser, func() error, error) {
+		return cmdsW, stateR, nil, nil
+	})
+	if err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stateW.Close() // end the reader loop, so Stop returns at once
+		h.Stop()
+		cmdsR.Close()
+		stateR.Close()
+	}()
+	// The loop is up once Start has handed the host its pipes.
+	deadline := time.Now().Add(2 * time.Second)
+	for h.cmd == nil || h.done == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("host loop never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	lines := make(chan string, 4)
+	go func() {
+		br := bufio.NewReader(cmdsR)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return
+			}
+			lines <- line
+		}
+	}()
+	next := func() string {
+		t.Helper()
+		select {
+		case line := <-lines:
+			return line
+		case <-time.After(2 * time.Second):
+			t.Fatal("no seek command arrived")
+			return ""
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		sec  float64
+		want string
+	}{
+		{"fractional", 73.25, "seek 73.25\n"},
+		{"negative clamps to zero", -1, "seek 0\n"},
+		{"nan clamps to zero", math.NaN(), "seek 0\n"},
+	} {
+		h.Seek(tc.sec)
+		if got := next(); got != tc.want {
+			t.Errorf("%s: wrote %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// A host that never started must ignore Seek instead of panicking.
+	var idle NowPlayingHost
+	idle.Seek(12)
 }
 
 func TestNowPlayingHostDeadAfterHelperExit(t *testing.T) {

@@ -1,0 +1,618 @@
+//go:build darwin
+
+package main
+
+// The 主页 page: a fixed 4×2 canvas of widgets (music, keep-awake, AI
+// usage, recent files, clipboard). Widgets come from layout.json's Home
+// list with their own rect, so they can sit in any free cells and leave
+// gaps. Editing reuses the tools page's gestures — long press or pencil,
+// wobble, ⊖ to remove, the corner handle to change size, drag to another
+// cell, the catalogue to add, drag out of the panel to pin to the
+// desktop.
+
+import (
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/layout"
+	"shelf/internal/mac"
+)
+
+const (
+	pageHome pageID = "home"
+
+	homeGridCols = layout.GridCols
+	homeGridRows = layout.GridRows
+	homeGridGap  = 6
+
+	homeLongPress    = 500 * time.Millisecond
+	homeDragSlop     = 6
+	homeSettleAnim   = 240 * time.Millisecond
+	homeWobblePeriod = 520 * time.Millisecond
+	homeWobbleDeg    = 0.7
+)
+
+// homeCellW/homeCellH are one grid cell; spans add the 6pt gap between
+// cells so a 2×1 widget is 195 × 84 in the 396 × 174 area.
+func homeCellW() float32 { return (contentW - (homeGridCols-1)*homeGridGap) / homeGridCols }
+func homeCellH() float32 { return (contentH - (homeGridRows-1)*homeGridGap) / homeGridRows }
+
+// homeSpanW/homeSpanH are a widget's size for n cells.
+func homeSpanW(n int) float32 { return float32(n)*homeCellW() + float32(n-1)*homeGridGap }
+func homeSpanH(n int) float32 { return float32(n)*homeCellH() + float32(n-1)*homeGridGap }
+
+// homeX/homeY are a cell's top-left in content coordinates.
+func homeX(col int) float32 { return float32(col) * (homeCellW() + homeGridGap) }
+func homeY(row int) float32 { return float32(row) * (homeCellH() + homeGridGap) }
+
+// homePress is one pointer session on a widget: the down, a possible
+// long press or drag, and the settle flight after the release. All
+// coordinates are canvas content space.
+type homePress struct {
+	id       string
+	downAt   time.Time
+	downX    float32
+	downY    float32
+	px, py   float32
+	grabDX   float32
+	grabDY   float32
+	cardX    float32
+	cardY    float32
+	orig     layout.Widget
+	dragging bool
+	suppress bool
+	settling bool
+
+	settleJump bool
+	settleX    float32
+	settleY    float32
+}
+
+// homePage is the canvas page.
+type homePage struct {
+	host *shelf
+
+	editing  bool
+	picking  bool
+	editAt   time.Time
+	press    *homePress
+	jiggle   string
+	jiggleAt time.Time
+
+	// System output volume, read once and after each write. The row
+	// greys out when the device has no settable volume.
+	volLoaded bool
+	volOK     bool
+	vol       float32
+
+	// Progress/volume drag state: while dragging, the bar shows the
+	// pointer's value; the command (seek / volume write) goes out once,
+	// on release.
+	dragPos bool
+	posFrac float32
+	dragVol bool
+	volFrac float32
+}
+
+func (p *homePage) id() pageID    { return pageHome }
+func (p *homePage) label() string { return "主页" }
+func (p *homePage) icon(c *ui.Context, _ bool) ui.Element {
+	return ui.Icon(c, homeNavSymbol)
+}
+func (p *homePage) enabled() bool { return true }
+
+// title is the back row's page name/count (the P interface).
+func (p *homePage) title() (name, count string) {
+	if p.picking {
+		return "小组件目录", ""
+	}
+	return "主页", ""
+}
+
+// actions is the back row's right side: the pencil, or 完成 while
+// editing/picking.
+func (p *homePage) actions(c *ui.Context) []ui.Element {
+	a := p.host
+	live := a.tab == pageHome
+	switch {
+	case p.picking, p.editing:
+		return []ui.Element{a.homeDoneButton(c, live)}
+	default:
+		b := a.iconButton(c, "home-edit", pencilSymbol, "编辑主页")
+		if live && b.Clicked() {
+			p.editing, p.editAt = true, time.Now()
+		}
+		return []ui.Element{b}
+	}
+}
+
+// overflows reports whether the page scrolls under the shell's bottom
+// fade. The canvas never scrolls; its widget catalogue fits the box.
+func (p *homePage) overflows() bool { return false }
+
+// homeDoneButton is the 完成 pill that leaves the canvas's edit mode (or
+// backs out of the picker first).
+func (a *shelf) homeDoneButton(c *ui.Context, live bool) ui.Element {
+	b := ui.Row(c.Key("home-done")).Height(24).Padding(0, 12, 0, 12).Radius(12).
+		Background(accent).Center().Label("完成")
+	if live && b.Clicked() {
+		if p := a.homePageOf(); p != nil {
+			if p.picking {
+				p.picking = false
+			} else {
+				p.editing, p.press = false, nil
+			}
+		}
+	}
+	b.Children(func() {
+		ui.Text(c, "完成").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+	})
+	return b
+}
+
+// homePageOf is the shelf's home page, or nil for test shelves that never
+// registered one.
+func (a *shelf) homePageOf() *homePage {
+	if p, ok := a.page(pageHome).(*homePage); ok {
+		return p
+	}
+	return nil
+}
+
+// resetHomeEdit ends editing and the picker; called on hide and on
+// leaving the page so re-entry starts clean.
+func (a *shelf) resetHomeEdit() {
+	if p := a.homePageOf(); p != nil && (p.editing || p.picking || p.press != nil) {
+		p.editing, p.picking, p.press = false, false, nil
+		p.jiggle = ""
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
+}
+
+// homeWidgetDef is a widget's catalogue entry, nil when the widget is off
+// or unknown.
+func (p *homePage) homeWidgetDef(id string) *toolCardDef {
+	def := toolCardDefFor(id)
+	if def == nil || def.kind != cardWidget || !def.available(p.host) {
+		return nil
+	}
+	return def
+}
+
+// homeDefaultSize is a widget's catalogue size.
+func homeDefaultSize(id string) (w, h int) {
+	switch id {
+	case "playing":
+		return 2, 2
+	case "recent", "clip":
+		return 2, 1
+	default:
+		return 1, 1
+	}
+}
+
+// homeSizes are the sizes the corner handle can cycle through, the
+// widget's current size first.
+func homeSizes(id string) [][2]int {
+	switch id {
+	case "playing":
+		return [][2]int{{2, 2}, {2, 1}, {1, 1}}
+	case "awake":
+		return [][2]int{{1, 1}, {2, 1}, {2, 2}}
+	case "usage":
+		return [][2]int{{1, 1}, {2, 1}}
+	case "recent", "clip":
+		return [][2]int{{2, 1}, {2, 2}, {1, 1}}
+	}
+	return [][2]int{{1, 1}}
+}
+
+// homeWidgets is the canvas's widget list in draw order, skipping widgets
+// that are switched off (the AI usage page closed) so a disabled feature
+// never draws a stale card.
+func (p *homePage) homeWidgets() []layout.Widget {
+	var out []layout.Widget
+	for _, w := range p.host.toolsLayout().Home {
+		if p.homeWidgetDef(w.ID) != nil {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// body draws the canvas into the sheet's fixed 396 × 174 content box.
+func (p *homePage) body(c *ui.Context, _ bool, live bool) ui.Element {
+	if p.picking {
+		return p.pickerBody(c, live)
+	}
+	canvas := ui.Column(c.Key("home-canvas")).Width(contentW).Height(contentH)
+	canvas.Children(func() {
+		for _, w := range p.homeWidgets() {
+			p.homeWidget(c, w, live)
+		}
+		if d := p.press; d != nil && d.dragging {
+			p.homeLifted(c, *d)
+		}
+	})
+	return canvas
+}
+
+// homeWidget draws one widget at its cell and wires its pointer session.
+func (p *homePage) homeWidget(c *ui.Context, w layout.Widget, live bool) {
+	def := p.homeWidgetDef(w.ID)
+	if def == nil {
+		return
+	}
+	card := ui.Column(c.Key("hw-" + w.ID)).Radius(14).Background(fill1).MinWidth(0).MinHeight(0).
+		Label(def.title).Clip()
+	p.homeWidgetBody(c, card, w, p.editing)
+	d := p.press
+	parked := d != nil && d.id == w.ID && (d.dragging || d.settling)
+	switch {
+	case parked && d.settling:
+		p.homeSettle(card, d)
+		card.Absolute().Width(homeSpanW(w.W)).Height(homeSpanH(w.H))
+	case parked:
+		cx := card.AnimateTo("hx", homeX(w.X), ui.Snappy)
+		cy := card.AnimateTo("hy", homeY(w.Y), ui.Snappy)
+		d.cardX, d.cardY = cx, cy
+		card.Absolute().Left(cx).Top(cy).Width(homeSpanW(w.W)).Height(homeSpanH(w.H)).Opacity(0)
+	default:
+		card.Absolute().Left(homeX(w.X)).Top(homeY(w.Y)).
+			Width(homeSpanW(w.W)).Height(homeSpanH(w.H))
+	}
+	if live {
+		p.homeInput(c, card, w, p.editing, live)
+	}
+	if !parked {
+		p.homeWobble(c, card, w, p.editing)
+	}
+	if p.editing && !parked {
+		p.homeEditChrome(c, card, w, live)
+	}
+}
+
+// homeLifted draws the dragged copy at the pointer.
+func (p *homePage) homeLifted(c *ui.Context, d homePress) {
+	def := p.homeWidgetDef(d.id)
+	if def == nil {
+		return
+	}
+	card := ui.Column(c.Key("hw-lift-" + d.id)).Radius(14).Background(fill1).MinWidth(0).MinHeight(0).
+		Label(def.title).Clip()
+	p.homeWidgetBody(c, card, d.orig, true)
+	card.Absolute().Left(d.px-d.grabDX).Top(d.py-d.grabDY).
+		Width(homeSpanW(d.orig.W)).Height(homeSpanH(d.orig.H)).
+		Scale(1.06, 1.06).TransformOrigin(0.5, 0.5).PassThrough()
+}
+
+// homeInput wires the widget's press: long press to edit, drag to a free
+// cell, release outside the panel to pin, tap to run.
+func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, editing, live bool) {
+	card.PointerPosition()
+	card.HandleInput(func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			if p.press != nil {
+				return false
+			}
+			p.press = &homePress{
+				id: w.ID, downAt: ev.Time,
+				downX: homeX(w.X) + ev.X, downY: homeY(w.Y) + ev.Y,
+				px: homeX(w.X) + ev.X, py: homeY(w.Y) + ev.Y,
+				grabDX: ev.X, grabDY: ev.Y,
+				cardX: homeX(w.X), cardY: homeY(w.Y),
+				orig: w,
+			}
+			c.AnimationFrame()
+			return true
+		case ui.InputPointerMove:
+			d := p.press
+			if d == nil || d.id != w.ID || d.settling {
+				return d != nil && d.id == w.ID && d.settling
+			}
+			d.px, d.py = d.cardX+ev.X, d.cardY+ev.Y
+			if d.dragging {
+				return true
+			}
+			if hypot(d.px-d.downX, d.py-d.downY) <= homeDragSlop {
+				return true
+			}
+			if p.editing {
+				d.dragging = true
+			} else {
+				d.suppress = true
+			}
+			return true
+		case ui.InputPointerUp:
+			d := p.press
+			if d == nil || d.id != w.ID {
+				return false
+			}
+			if d.settling {
+				return true
+			}
+			if d.dragging {
+				d.px, d.py = d.cardX+ev.X, d.cardY+ev.Y
+				p.homeDrop(d)
+				return true
+			}
+			p.press = nil
+			return true
+		}
+		return false
+	})
+	// The long-press deadline runs on the frame clock.
+	if d := p.press; d != nil && d.id == w.ID && !d.dragging && !d.settling && !d.suppress && !p.editing {
+		c.AnimationFrame()
+		if c.Now().Sub(d.downAt) >= homeLongPress {
+			p.editing, p.editAt = true, c.Now()
+			d.suppress = true
+		}
+	}
+	if !editing && live && card.Clicked() {
+		if p.press != nil {
+			// A suppressed press is not a tap.
+			p.press = nil
+			return
+		}
+		p.homeTapped(w)
+	}
+}
+
+// homeTapped runs a widget's tap action. Music toggles playback; the
+// other widgets defer to the card action.
+func (p *homePage) homeTapped(w layout.Widget) {
+	a := p.host
+	if w.ID == "playing" {
+		if a.np != nil {
+			a.np.send(mac.NPPlayPause)
+		}
+		return
+	}
+	if !a.runToolCard(w.ID) {
+		a.toolCardTapFeedback()
+	}
+}
+
+// homeDrop commits a move inside the canvas, pins the widget when the
+// release is outside the panel, or flies it back.
+func (p *homePage) homeDrop(d *homePress) {
+	a := p.host
+	inside := d.px >= 0 && d.px <= contentW && d.py >= 0 && d.py <= contentH
+	target := layout.Widget{X: d.orig.X, Y: d.orig.Y, W: d.orig.W, H: d.orig.H}
+	if inside {
+		col := int(math.Round(float64((d.px - d.grabDX) / (homeCellW() + homeGridGap))))
+		row := int(math.Round(float64((d.py - d.grabDY) / (homeCellH() + homeGridGap))))
+		col = max(0, min(col, homeGridCols-d.orig.W))
+		row = max(0, min(row, homeGridRows-d.orig.H))
+		if a.mutateTools(func(l *layout.Layout) { l.MoveWidget(d.id, col, row) }) {
+			target.X, target.Y = col, row
+			for _, w := range a.toolsLayout().Home {
+				if w.ID == d.id {
+					target = w
+				}
+			}
+		}
+	} else {
+		// The screen cursor is only needed for a drop outside the canvas;
+		// asking the window server on every grid drop would block a
+		// headless build.
+		cursor := cursorPoint()
+		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: sheetW, Height: a.panelH()}
+		if !insideRect(cursor, panel) {
+			span := d.orig.W
+			if span < 1 || span > 2 {
+				span = 1
+			}
+			w := pinCardW
+			if span == 2 {
+				w = pinCardW2
+			}
+			disp := displayIDAt(cursor, 0)
+			area := pinArea(disp)
+			edge := pinReleaseEdge(cursor, area)
+			frame := mygo.Rectangle{X: cursor.X - int(d.grabDX), Y: cursor.Y - int(d.grabDY), Width: w, Height: pinCardH}
+			if edge != pinFree {
+				frame = pinStripFrame(edge, area, cursor.Y)
+			}
+			if a.addPin(d.id, span, disp, edge, false, frame) != nil {
+				p.press = nil
+				return
+			}
+		}
+	}
+	d.settling, d.dragging = true, false
+	d.settleX, d.settleY = homeX(target.X), homeY(target.Y)
+}
+
+// homeSettle animates the released widget back to its committed cell.
+func (p *homePage) homeSettle(card ui.Element, d *homePress) {
+	if !d.settleJump {
+		card.Jump("hx", d.px-d.grabDX)
+		card.Jump("hy", d.py-d.grabDY)
+		card.Jump("hscale", 1.06)
+		d.settleJump = true
+	}
+	cx := card.AnimateTo("hx", d.settleX, ui.Animation{Spring: ui.SpringOptions{Duration: homeSettleAnim, Bounce: 0.12}})
+	cy := card.AnimateTo("hy", d.settleY, ui.Animation{Spring: ui.SpringOptions{Duration: homeSettleAnim, Bounce: 0.12}})
+	sc := card.AnimateTo("hscale", 1, ui.Animation{Spring: ui.SpringOptions{Duration: homeSettleAnim, Bounce: 0.12}})
+	card.Left(cx).Top(cy).Scale(sc, sc).TransformOrigin(0.5, 0.5)
+	d.cardX, d.cardY = cx, cy
+	if card.Settled("hx") && card.Settled("hy") && card.Settled("hscale") {
+		p.press = nil
+	}
+}
+
+// homeEditChrome draws the ⊖ badge and the size handle.
+func (p *homePage) homeEditChrome(c *ui.Context, card ui.Element, w layout.Widget, live bool) {
+	a := p.host
+	card.Children(func() {
+		badge := ui.Row(c.Key("home-minus")).Absolute().Top(2).Left(2).Size(18, 18).Radius(9).
+			Background(ui.Hex("#3A3A3C")).Border(1.5, ui.Hex("#000000")).
+			Center().Label("移除")
+		if live {
+			badge.HandleInput(func(ev ui.InputEvent) bool {
+				if ev.Kind == ui.InputPointerUp {
+					a.mutateTools(func(l *layout.Layout) { l.RemoveWidget(w.ID) })
+					return true
+				}
+				return true
+			})
+			badge.PointerPosition()
+		}
+		badge.Children(func() {
+			ui.Box(c).Size(8, 1.6).Radius(1).Background(ink)
+		})
+
+		handle := ui.Box(c.Key("home-size")).Absolute().Bottom(5).Right(5).Size(12, 12).
+			BorderWidth(0, 1.6, 1.6, 0).BorderColor(ink2).Label("改尺寸")
+		if live {
+			handle.HandleInput(func(ev ui.InputEvent) bool {
+				if ev.Kind == ui.InputPointerUp {
+					p.cycleSize(w)
+					return true
+				}
+				return true
+			})
+			handle.PointerPosition()
+		}
+	})
+}
+
+// cycleSize switches a widget to the next size in its list that fits its
+// anchor without overlapping another widget.
+func (p *homePage) cycleSize(w layout.Widget) {
+	sizes := homeSizes(w.ID)
+	start := 0
+	for i, s := range sizes {
+		if s[0] == w.W && s[1] == w.H {
+			start = i
+			break
+		}
+	}
+	for i := 1; i < len(sizes); i++ {
+		s := sizes[(start+i)%len(sizes)]
+		if s[0] == w.W && s[1] == w.H {
+			continue
+		}
+		if p.host.mutateTools(func(l *layout.Layout) { l.SetWidgetSize(w.ID, s[0], s[1]) }) {
+			return
+		}
+	}
+}
+
+// homeWobble is the edit-mode ±0.7° sway, phased by column.
+func (p *homePage) homeWobble(c *ui.Context, card ui.Element, w layout.Widget, editing bool) {
+	if c.Preferences().ReduceMotion {
+		return
+	}
+	if p.jiggle == w.ID {
+		t := float32(time.Since(p.jiggleAt)) / float32(toolJiggleSpan)
+		if t >= 1 {
+			p.jiggle = ""
+		} else {
+			card.Rotate(float32(math.Sin(float64(t*3*math.Pi)) * 3.0 * float64(1-t)))
+			card.TransformOrigin(0.5, 0.5)
+		}
+		return
+	}
+	if !editing {
+		return
+	}
+	phase := float64(time.Since(p.editAt)) / float64(homeWobblePeriod) * 2 * math.Pi
+	if w.X%2 == 1 {
+		phase += math.Pi
+	}
+	card.Rotate(float32(math.Sin(phase) * homeWobbleDeg))
+	card.TransformOrigin(0.5, 0.5)
+	c.AnimationFrame()
+}
+
+// pickerBody is the widget catalogue: one sheet of 30pt rows. Placed
+// widgets are greyed as 已添加.
+func (p *homePage) pickerBody(c *ui.Context, live bool) ui.Element {
+	a := p.host
+	placed := map[string]bool{}
+	l := a.toolsLayout()
+	for _, w := range l.Home {
+		placed[w.ID] = true
+	}
+	for _, card := range l.Cards {
+		placed[card.ID] = true
+	}
+	for _, pin := range l.Pins {
+		placed[pin.ID] = true
+	}
+	var defs []toolCardDef
+	for _, def := range toolCatalog() {
+		if def.kind == cardWidget && def.available(a) {
+			defs = append(defs, def)
+		}
+	}
+	return ui.Column(c.Key("home-pick")).Grow(1).MinHeight(0).Children(func() {
+		sheet := ui.Column(c.Key("home-picker")).FillWidth().Radius(14).
+			Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
+		sheet.Children(func() {
+			ui.Text(c, "小组件").SingleLine().FontSize(11).FontWeight(600).
+				TextColor(ink3).Margin(2, 0, 6, 0)
+			ui.Grid(c.Key("home-plist")).ColumnTracks(ui.Fr(1), ui.Fr(1)).
+				GapY(4).GapX(10).FillWidth().Children(func() {
+				for _, def := range defs {
+					p.pickRow(c, def, placed[def.id], live)
+				}
+			})
+		})
+	})
+}
+
+// pickRow is one catalogue row; a tap places the widget in its first free
+// cell and returns to the edit grid.
+func (p *homePage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui.Element {
+	a := p.host
+	row := ui.Row(c.Key("hpi-"+def.id)).Height(toolPickRowH).Radius(8).
+		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.title)
+	if !added && live {
+		if row.Hovered() {
+			row.Background(fill2)
+		}
+		row.HandleInput(func(ev ui.InputEvent) bool {
+			if ev.Kind == ui.InputPointerUp {
+				fits := false
+				a.mutateTools(func(l *layout.Layout) {
+					w, h := homeDefaultSize(def.id)
+					fits = l.AddWidgetBest(def.id, w, h)
+				})
+				if !fits {
+					a.toastStatus("主页没有空位", time.Now().Add(2*time.Second), statusInfo)
+				}
+				p.picking = false
+				return true
+			}
+			return false
+		})
+		row.PointerPosition()
+	}
+	row.Children(func() {
+		iconCol := ink
+		if added {
+			iconCol = ink3
+		}
+		ui.Icon(c, def.icon).Size(15, 15).TextColor(iconCol)
+		ui.Text(c, def.title).SingleLine().FontSize(12).FontWeight(500).TextColor(iconCol)
+		ui.Box(c).Grow(1)
+		w, h := homeDefaultSize(def.id)
+		size := fmt.Sprintf("%d × %d", w, h)
+		if added {
+			size += " · 已添加"
+		}
+		ui.Text(c, size).SingleLine().FontSize(10).TextColor(ink3)
+	})
+	return row
+}

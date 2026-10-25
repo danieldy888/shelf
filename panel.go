@@ -1343,6 +1343,9 @@ func (a *shelf) setTab(id pageID) {
 	if cur == pageTools { // 离开工具页即退出编辑与目录
 		a.resetToolsEdit()
 	}
+	if cur == pageHome { // 离开主页即退出编辑与目录
+		a.resetHomeEdit()
+	}
 	if a.visible {
 		a.tabAt = time.Now()
 	}

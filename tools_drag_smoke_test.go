@@ -28,6 +28,14 @@ type smokeWindowInfo struct {
 	Title     string
 }
 
+// isDragCardWindow reports whether w is a card-sized drag window: the
+// preview and the committed pin are exactly one card. The shared smoke
+// shelf's sheet is a larger window at the same place and must not be
+// mistaken for the gesture's card.
+func isDragCardWindow(w smokeWindowInfo) bool {
+	return w.Frame.Height == pinCardH && (w.Frame.Width == pinCardW || w.Frame.Width == pinCardW2)
+}
+
 func ownSmokeWindows(t *testing.T) []smokeWindowInfo {
 	t.Helper()
 	lib, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_LAZY)
@@ -203,7 +211,7 @@ func TestToolsNativeDragOutStaysVisible(t *testing.T) {
 	t.Logf("held cursor=%+v windows=%+v", end, windows)
 	visibleCard, previewNum := false, 0
 	for _, w := range windows {
-		if w.ID != panelNum && w.ID != arenaNum && w.Onscreen && w.Frame.Width >= int(toolColW(1)) && w.Frame.Height >= toolCellH && insideRect(end, w.Frame) {
+		if w.ID != panelNum && w.ID != arenaNum && w.Onscreen && isDragCardWindow(w) && insideRect(end, w.Frame) {
 			if visibleCard {
 				t.Error("two drag windows follow the same gesture")
 			}
@@ -263,7 +271,7 @@ func TestToolsNativeDragOutStaysVisible(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	previewNum = 0
 	for _, w := range ownSmokeWindows(t) {
-		if w.ID != panelNum && w.ID != arenaNum && w.Onscreen && insideRect(end, w.Frame) {
+		if w.ID != panelNum && w.ID != arenaNum && w.Onscreen && isDragCardWindow(w) && insideRect(end, w.Frame) {
 			previewNum = w.ID
 		}
 	}

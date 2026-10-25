@@ -748,8 +748,8 @@ func TestRegisteredPageJoinsTheOrderAtFixedSize(t *testing.T) {
 	a.x, a.y = 455, 0
 	fake := &fakePage{on: true}
 	a.registerPage(fake)
-	if got := a.pageIndex("fake"); got != 3 {
-		t.Fatalf("the fake page must register after the three built-ins, got index %d", got)
+	if got := a.pageIndex("fake"); got != 4 {
+		t.Fatalf("the fake page must register after the four built-ins, got index %d", got)
 	}
 	before := a.desiredFrame()
 	a.setTab("fake")

@@ -79,8 +79,9 @@ type pinItem struct {
 	owner     *shelf
 	cardID    string
 	span      int
-	cardW     int // 136 or 278 from span; height is always pinCardH
-	homeIndex int // grid slot it came from; -1 pins it back at the end
+	cardW     int           // 136 or 278 from span; height is always pinCardH
+	homeIndex int           // tool-page grid slot it came from; -1 pins it back at the end
+	homeSlot  layout.Widget // home-canvas rect it came from; zero ID for a tool card
 	display   int64
 	edge      pinEdge
 	always    bool // always expanded; the hide delay never collapses it
@@ -346,7 +347,14 @@ func (a *shelf) addPin(cardID string, span int, display int64, edge pinEdge, alw
 // commitPin publishes a placement only after its layout change succeeds.
 // A drag preview can lend its existing native window to the committed pin.
 func (a *shelf) commitPin(it *pinItem) bool {
-	it.homeIndex = slices.IndexFunc(a.toolsLayout().Cards, func(c layout.Card) bool { return c.ID == it.cardID })
+	l := a.toolsLayout()
+	it.homeIndex = slices.IndexFunc(l.Cards, func(c layout.Card) bool { return c.ID == it.cardID })
+	it.homeSlot = layout.Widget{}
+	for _, w := range l.Home {
+		if w.ID == it.cardID {
+			it.homeSlot = w
+		}
+	}
 	it.frame = pinClamp(it.frame, pinArea(it.display))
 	area := it.displayRect()
 	if !a.mutateTools(func(l *layout.Layout) {
@@ -429,6 +437,15 @@ func (it *pinItem) onClose(ev *mygo.CloseEvent) {
 // desktop without rejoining the page and can be re-added from the "+"
 // catalog later (从桌面移除, design §4).
 func (a *shelf) unpin(it *pinItem, putBack bool) bool {
+	widget := it.homeSlot
+	isWidget := false
+	if def := toolCardDefFor(it.cardID); def != nil && def.kind == cardWidget {
+		isWidget = true
+		if widget.ID == "" {
+			w, h := homeDefaultSize(it.cardID)
+			widget = layout.Widget{ID: it.cardID, W: w, H: h}
+		}
+	}
 	if !a.mutateTools(func(l *layout.Layout) {
 		// A pin restored from layout.json has no remembered slot (-1):
 		// 放回刘海 appends it to the page's end rather than the front.
@@ -436,7 +453,13 @@ func (a *shelf) unpin(it *pinItem, putBack bool) bool {
 		if before < 0 {
 			before = len(l.Cards)
 		}
-		l.RemovePin(it.cardID, putBack, before)
+		// A widget returns to the canvas, never to the tool page.
+		l.RemovePin(it.cardID, putBack && !isWidget, before)
+		if putBack && isWidget {
+			if !l.AddWidget(widget) {
+				l.AddWidgetBest(widget.ID, widget.W, widget.H)
+			}
+		}
 	}) {
 		it.wantKill = false // do not retry a failed menu action every tick
 		return false
