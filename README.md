@@ -119,8 +119,9 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 ### Optional
 
 - **Start at login**: right-click the menu-bar icon → Settings → General → Open at login.
-- **Notch drop protection**: Settings → General → Notch drop protection → 开启… (Turn On), then allow Shelf under System Settings → Privacy & Security → Accessibility. While you drag toward the notch, the pointer stays in the drop area instead of hitting the very top edge of the screen. Optional; everyday use needs no permissions. Turn it on again after each update.
-- **Screen text**: the first time you use 框选文字 (Screen Text), the shelf explains why it needs Screen Recording; click 打开系统设置 (Open System Settings), turn Shelf on, then quit and reopen Shelf. Only the area you select is captured, text is recognized on this Mac, and the shot is not kept. Grant it again after each update.
+- **System permissions**: right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions), or Settings → 系统权限 (System Permissions) → 全部开启 (Turn On All). Shelf opens each System Settings page in turn: Accessibility for notch drop protection, then Screen Recording for 框选文字 (Screen Text). Turn Shelf on in each; when Screen Recording is on, click 重新打开 Shelf (Reopen Shelf). Both are optional; everyday use needs no permissions. Updating from 1.7.0 or earlier asks for them once more; later updates keep them.
+- **Notch drop protection** (Accessibility): while you drag toward the notch, the pointer stays in the drop area instead of hitting the very top edge of the screen.
+- **Screen text** (Screen Recording): only the area you select is captured, text is recognized on this Mac, and the shot is not kept.
 - **Uninstall**: right-click the menu-bar icon → Quit, then move Shelf from Applications to the Trash. To also delete your saved items, remove `~/Library/Application Support/Shelf/`.
 
 ## Everyday use
@@ -261,8 +262,9 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 ### 可选
 
 - **开机自动启动**：右键菜单栏图标 → 设置… → 通用 →「开机时自动启动」。
-- **刘海拖放保护**：设置… → 通用 →「刘海拖放保护」旁的「开启…」，再到 系统设置 → 隐私与安全性 → 辅助功能 里允许 Shelf。开启后，拖着东西靠近刘海时，指针会停在托盘的接收区里，不会顶到屏幕最上沿。这一项可选，日常使用不需要任何授权。每次更新后需要重新开启一次。
-- **框选文字**：第一次用时，面板里会说明为什么需要「屏幕录制」权限；点「打开系统设置」，打开 Shelf 的开关，再退出并重新打开 Shelf。只截取你框选的那一块，文字在本机识别，不保存截图。每次更新后需要重新授权一次。
+- **系统权限**：右键菜单栏图标 →「开启系统权限」，或 设置… → 系统权限 →「全部开启」。Shelf 会依次打开系统设置里的两页：「辅助功能」（刘海拖放保护）和「屏幕录制」（框选文字）；在每页打开 Shelf 的开关，屏幕录制开好后点「重新打开 Shelf」。两项都可选，日常使用不需要任何授权。从 1.7.0 或更早的版本更新上来时要再开一次，之后的更新会保留授权。
+- **刘海拖放保护**（辅助功能）：拖着东西靠近刘海时，指针会停在托盘的接收区里，不会顶到屏幕最上沿。
+- **框选文字**（屏幕录制）：只截取你框选的那一块，文字在本机识别，不保存截图。
 - **卸载**：右键菜单栏图标 → 退出 Shelf，再把“应用程序”里的 Shelf 移到废纸篓。如果连保存的内容也要删除，删掉 `~/Library/Application Support/Shelf/` 文件夹。
 
 ## 日常使用
