@@ -67,7 +67,7 @@ const (
 )
 
 // peekKind is which content the peek shell is showing: the chevron or the
-// 松开放入 pill, the hover player, or the completion capsule. Recorded
+// 松开放入 pill, the hover wings, or the completion capsule. Recorded
 // each revealed frame so a fold can keep drawing that same content while
 // it shrinks away.
 type peekKind int
@@ -75,7 +75,7 @@ type peekKind int
 const (
 	peekChevron peekKind = iota
 	peekDrop
-	peekPlayer
+	peekWings
 	peekCapsule
 	// peekHint is the drag-in-flight hint: a notch-high shell, a little
 	// wider, with no glyph inside — it must not outgrow the menu bar.

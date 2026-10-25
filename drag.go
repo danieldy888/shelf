@@ -235,10 +235,10 @@ func (a *shelf) monitorDrag(now time.Time) {
 	a.pinTick(now, p, dragLeftDown(), active && !a.ownDrag && dragSummonsBasket(dragTypes()))
 	// The pointer inside the notch drop band grows 「松开放入」 and takes
 	// the drop; outside it the shell only shows the narrow hint.
-	// The peek player extends below the notch (and wider than it): the
-	// pointer must be able to rest on its controls without the pill
-	// folding shut under it. pinReturning holds the 松开放回 pill for the
-	// whole put-back zone, which reaches past the pill's own body.
+	// The peek wings reach past the notch on both sides: the pointer must
+	// be able to rest on them without the shell folding shut under it.
+	// pinReturning holds the 松开放回 pill for the whole put-back zone,
+	// which reaches past the pill's own body.
 	holdPeek := overNotch || a.pinReturning || (a.peeking && a.overPeekPill(p))
 	// Dragging or hovering reveals the pill; only a click or a real incoming
 	// drag in the trigger zone can open the full panel.

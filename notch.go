@@ -96,7 +96,7 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	// hint, inside it the shell grows 「松开放入」. The frame always
 	// covers the shape being aimed at (plus ears) and the shell actually
 	// drawn, so the morph, a fold remnant and the Spaces edge guard stay
-	// covered — and the player/capsule's tall frames are never held
+	// covered — and the wings/capsule's taller frames are never held
 	// through a drag.
 	if a.dragging && !a.ownDrag {
 		bandH := max(32, a.notchH)
@@ -126,9 +126,9 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 	// goes, while nothing is drawn.
 	pw, ph := a.peekSize()
 	if a.np != nil && a.np.hasTrack() && a.settings.IslandNowPlaying {
-		// The capsule and the player can alternate on the same strip: keep
+		// The capsule and the wings can alternate on the same strip: keep
 		// room for both so one hand-off never resizes the window.
-		mw, mh := a.playerSize()
+		mw, mh := a.wingsSize()
 		pw, ph = max(pw, mw), max(ph, mh)
 	}
 	if a.fx.peek {
@@ -203,16 +203,16 @@ func (a *shelf) windowGeometryChanged() {
 }
 
 // peekSize is the hover shape: the status capsule while the closed panel
-// has something to report, the now-playing player while a track is loaded
-// (the notch grows into it, Droppy style), the drop pill while a drag is
-// over the notch band, the narrow drag hint while one is in flight,
-// otherwise a bulge carrying a chevron. The glyphs sit wholly below
-// the hardware notch: nothing drawn inside it is visible.
+// has something to report, the now-playing wings while a track is loaded
+// (the notch grows 52pt to each side, barely below), the drop pill while a
+// drag is over the notch band, the narrow drag hint while one is in
+// flight, otherwise a bulge carrying a chevron. The glyphs sit wholly
+// below the hardware notch: nothing drawn inside it is visible.
 func (a *shelf) peekSize() (w, h float32) {
 	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
 	if a.pinReturning {
 		// A pinned card held over the notch wins over the capsule and
-		// the player: the release reads this same zone, so the affordance
+		// the wings: the release reads this same zone, so the affordance
 		// must always be the drop-pill it acts on (design §4 松开放回).
 		return baseW + dropPillExtraW, baseH + dropPillBody
 	}
@@ -223,7 +223,7 @@ func (a *shelf) peekSize() (w, h float32) {
 		return a.fb.capsule(baseW, baseH)
 	}
 	if a.np != nil && a.np.showsPlayer() {
-		return a.playerSize()
+		return a.wingsSize()
 	}
 	if a.dragging && !a.ownDrag {
 		if a.dropHot {
@@ -236,11 +236,12 @@ func (a *shelf) peekSize() (w, h float32) {
 	return baseW + 40, baseH + peekBody
 }
 
-// playerSize is the hover player's size: npPlayerW wide (wider on a wide
-// notch) and npPlayerBody tall below the notch.
-func (a *shelf) playerSize() (w, h float32) {
+// wingsSize is the hover wings' size: the notch plus npWingsW on each
+// side, and npWingsBody below it. Wide notches keep their width and gain
+// the same wings.
+func (a *shelf) wingsSize() (w, h float32) {
 	baseW := float32(max(180, a.notchW))
-	return max(baseW+npPlayerMinX, npPlayerW), float32(max(32, a.notchH)) + npPlayerBody
+	return baseW + 2*npWingsW, float32(max(32, a.notchH)) + npWingsBody
 }
 
 // shellSize is the one interpolation the shell Path and the content layout
@@ -305,8 +306,8 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	// often gives that press to the menu bar or the app underneath, so the
 	// overlay paints a "click to expand" pill that never receives the click.
 	// A press on the visible pill expands either way — except a press the
-	// hover player received itself: its transport buttons handle that, and
-	// the player opens the shelf for presses elsewhere on it. Only a press
+	// hover wings received itself: they have no controls, and their own
+	// handler opens the shelf for a press anywhere on them. Only a press
 	// inside the drawn shape acts: transparent window margin neither opens
 	// the panel nor claims the event for it.
 	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && a.overPeekPill(p) {

@@ -67,7 +67,7 @@ func TestPeekDropHintHiddenDuringOwnDrag(t *testing.T) {
 
 // An incoming drag must never outgrow the drag hint's own box while the
 // cursor is outside the drop band. A peek folding mid-morph pins its
-// half-grown shape (e.g. the hover player) in fx.peekW/H; when the drag
+// half-grown shape (e.g. the hover wings) in fx.peekW/H; when the drag
 // re-raises the shell, that remnant must not ride the shell back past
 // the menu bar — the "notch flashes at drag start" bug.
 func TestDragStartNeverCarriesFoldRemnant(t *testing.T) {
@@ -77,7 +77,7 @@ func TestDragStartNeverCarriesFoldRemnant(t *testing.T) {
 	fakeTrack(a, true)
 	a.dispBounds = mygo.Rectangle{X: 0, Y: 0, Width: 1470, Height: 956}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	// Hover the notch: the shell morphs toward the 400x172 player.
+	// Hover the notch: the shell morphs toward the 284×36 wings.
 	a.peeking, a.peekProgress, a.peekFrom = true, 1, 1
 	view.Frame()
 	for range 10 {
@@ -90,7 +90,11 @@ func TestDragStartNeverCarriesFoldRemnant(t *testing.T) {
 		view.Frame()
 		view.Advance(16 * time.Millisecond)
 	}
-	if a.fx.peekW <= 240 || a.fx.peekH <= 64 {
+	// The remnant must still be bigger than the hint on at least one
+	// axis, or there is no flash to catch.
+	hintShapeW := float32(max(180, a.notchW) + dropHintExtraW)
+	hintShapeH := float32(max(32, a.notchH))
+	if a.fx.peekW <= hintShapeW && a.fx.peekH <= hintShapeH {
 		t.Skipf("remnant %gx%g too small to exercise the flash", a.fx.peekW, a.fx.peekH)
 	}
 	// A drag begins far from the notch: every tick's window must stay

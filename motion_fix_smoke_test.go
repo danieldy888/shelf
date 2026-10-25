@@ -259,8 +259,8 @@ func TestFixNativeCapsuleScreenshots(t *testing.T) {
 // TestFixNativeFoldTrace replays the user's cancelled-drag video: a track
 // is loaded, the pointer is away from the notch, and the drop pill folds.
 // Before the fix the shell grew toward the player and the player's text
-// drew mid-fold; now every frame only shrinks and the strip sheds its
-// click surface with it.
+// drew mid-fold; now every frame only shrinks — the wings have no text —
+// and the strip sheds its click surface with it.
 func TestFixNativeFoldTrace(t *testing.T) {
 	a := redesignShelf(t)
 	motionClosed(a)

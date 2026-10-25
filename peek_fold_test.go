@@ -5,8 +5,8 @@ package main
 // The fold after a cancelled drag is subtract-only: the shell keeps the
 // shape and content it was showing and just shrinks back into the notch.
 // What it must never do is re-aim at the live peekSize()/peekView answer —
-// a loaded track would morph the folding shell toward the player and flash
-// its title mid-fold (the user's frame-235 glitch).
+// a loaded track would morph the folding shell toward the wings and flash
+// their label mid-fold (the user's frame-235 glitch).
 
 import (
 	"testing"
@@ -40,8 +40,8 @@ func foldFrames(t *testing.T, a *shelf, view *ui.Tester, keepText string) {
 			t.Fatalf("frame %d: folding shell grew to %.1fx%.1f (was %.1fx%.1f)", i, a.fx.w, a.fx.h, pw, ph)
 		}
 		pw, ph = a.fx.w, a.fx.h
-		if _, ok := view.Find("Fashion Killa"); ok {
-			t.Fatalf("frame %d: the player title appeared mid-fold", i)
+		if view.HasText("Fashion Killa") {
+			t.Fatalf("frame %d: the wings appeared mid-fold", i)
 		}
 		if keepText != "" && a.fx.peekK > 0.02 {
 			tr, ok := view.Find(keepText)
@@ -63,8 +63,8 @@ func foldFrames(t *testing.T, a *shelf, view *ui.Tester, keepText string) {
 }
 
 // TestPeekFoldKeepsShownShape: a cancelled drag folds the drop pill straight
-// back — with a track loaded, the shell may only shrink and the player's
-// title must not appear.
+// back — with a track loaded, the shell may only shrink and the wings must
+// not appear.
 func TestPeekFoldKeepsShownShape(t *testing.T) {
 	a := dragPeekShelf()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
@@ -79,20 +79,20 @@ func TestPeekFoldKeepsShownShape(t *testing.T) {
 }
 
 // TestPeekFoldMidMorphOnlyShrinks: the pointer leaves the notch while the
-// pill is still morphing toward the player — the fold must not grow past
+// pill is still morphing toward the wings — the fold must not grow past
 // the size it froze at (the second grok finding: AnimateTo kept outward
 // velocity and grew the shell one more step).
 func TestPeekFoldMidMorphOnlyShrinks(t *testing.T) {
 	a := dragPeekShelf()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	// Drag ends over the notch: the shell starts morphing toward the player.
+	// Drag ends over the notch: the shell starts morphing toward the wings.
 	a.dragging = false
 	for range 2 {
 		view.Frame()
 		view.Advance(16 * time.Millisecond)
 	}
 	if a.fx.w <= float32(180+dropPillExtraW) {
-		t.Fatalf("the player morph never grew the shell: %.1f", a.fx.w)
+		t.Fatalf("the wings morph never grew the shell: %.1f", a.fx.w)
 	}
 	// The pointer leaves the notch mid-morph: fold from the drawn size.
 	a.peeking = false
@@ -119,10 +119,10 @@ func TestPeekFoldWithoutTrackAlsoPlain(t *testing.T) {
 	foldFrames(t, a, view, "松开放入")
 }
 
-// TestPeekFoldHoverStillGetsThePlayer: if the pointer rests on the notch
-// when the drag ends, the pill may morph into the hover player — the fold
+// TestPeekFoldHoverStillGetsTheWings: if the pointer rests on the notch
+// when the drag ends, the pill may morph into the hover wings — the fold
 // freeze only applies while the peek is going away.
-func TestPeekFoldHoverStillGetsThePlayer(t *testing.T) {
+func TestPeekFoldHoverStillGetsTheWings(t *testing.T) {
 	a := dragPeekShelf()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
 	view.Frame()
@@ -137,16 +137,16 @@ func TestPeekFoldHoverStillGetsThePlayer(t *testing.T) {
 		view.Advance(16 * time.Millisecond)
 	}
 	if !grew {
-		t.Fatal("a hover after the drag never morphed toward the player size")
+		t.Fatal("a hover after the drag never morphed toward the wings' size")
 	}
-	if _, ok := view.Find("Fashion Killa"); !ok {
-		t.Fatal("the hover player never appeared over the notch")
+	if _, ok := view.Find("正在播放：Fashion Killa · 展开 Shelf"); !ok {
+		t.Fatal("the hover wings never appeared over the notch")
 	}
 }
 
 // TestPeekFoldInterruptedByNewDrag: a drag that starts while the pill is
 // folding must grow it back out as the drop pill — no empty shell, no
-// player flash.
+// wings flash.
 func TestPeekFoldInterruptedByNewDrag(t *testing.T) {
 	a := dragPeekShelf()
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
@@ -163,8 +163,8 @@ func TestPeekFoldInterruptedByNewDrag(t *testing.T) {
 	var back bool
 	for i := range 30 {
 		view.Frame()
-		if _, ok := view.Find("Fashion Killa"); ok {
-			t.Fatalf("frame %d: the player title appeared while a drag re-raised the pill", i)
+		if view.HasText("Fashion Killa") {
+			t.Fatalf("frame %d: the wings appeared while a drag re-raised the pill", i)
 		}
 		if a.fx.w > mid+40 {
 			back = true

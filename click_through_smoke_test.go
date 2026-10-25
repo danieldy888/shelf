@@ -12,22 +12,22 @@ import (
 )
 
 // While idle, the resident overlay must let clicks through everywhere —
-// under the notch where the hover player would grow and beside it in the
-// menu bar — and while the player shows it must take them. Asked of
-// WindowServer itself: a view refusing hitTest: still swallows the click,
-// which is how the idle strip once blocked a 400×172 area under the notch.
-// Run with SHELF_BASKET_SMOKE=1.
+// beside the notch where the hover wings grow into the menu bar — and
+// while the wings show it must take them. Asked of WindowServer itself: a
+// view refusing hitTest: still swallows the click, which is how the idle
+// strip once blocked a 400×172 area under the notch. Run with
+// SHELF_BASKET_SMOKE=1.
 func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 	a := redesignShelf(t)
 	oldCursor := cursorPoint
 	t.Cleanup(func() { onMain(func() { cursorPoint = oldCursor }) })
 	onMain(func() {
 		a.settings.IslandNowPlaying = true
-		fakeTrack(a, true) // the strip reserves the hover player's size
+		fakeTrack(a, true) // the strip reserves the hover wings' size
 		a.modules = []module{a.np}
 		a.place(mygo.Screen.CursorScreenPoint())
 		cursorPoint = func() mygo.Point {
-			return mygo.Point{X: a.stripCenter(), Y: a.y + a.notchH + 20}
+			return mygo.Point{X: a.stripCenter(), Y: a.y + a.notchH/2}
 		}
 		a.peeking, a.peekProgress, a.visible, a.progress = false, 0, false, 0
 		a.syncMousePassThrough()
@@ -43,11 +43,14 @@ func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 			sampleW := f.Width
 			if wantShelf {
 				// The ear margins are transparent below the top arc.
-				// Hit-test the visible player; idle still checks the
+				// Hit-test the visible wings; idle still checks the
 				// entire native strip, margins included.
 				sampleW = int(a.fx.w)
 			}
-			for _, y := range []float64{10, float64(a.notchH) + 20, float64(f.Height) - 10} {
+			// The wings are barely taller than the notch: sample their own
+			// band (top, notch bottom, near the shell's bottom edge), not
+			// the old player's 172pt depth.
+			for _, y := range []float64{6, float64(a.notchH) - 6, float64(f.Height) - 6} {
 				for _, dx := range []float64{0, -float64(sampleW)/2 + 10, float64(sampleW)/2 - 10} {
 					got := mac.WindowAtPoint(cx+dx, float64(a.dispBounds.Y)+y, screenH) == shelf
 					if got != wantShelf {
@@ -62,7 +65,7 @@ func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 		a.setPeek(true)
 	})
 	time.Sleep(200 * time.Millisecond)
-	check(true, "hover player")
+	check(true, "hover wings")
 	peekRestore(t, a)
 }
 

@@ -18,10 +18,10 @@ import (
 	"shelf/internal/mac"
 )
 
-// TestNowPlayingPeekSmokeScreenshot draws the now-playing peek pill in the
-// real notch window, screenshots it with `screencapture -l <id>` and checks
-// the picture: the drawn pill must reach the design width (notch +120 for
-// cover plus equalizer bars) and must contain the cover's colours. Run with
+// TestNowPlayingPeekSmokeScreenshot draws the now-playing hover wings in
+// the real notch window, screenshots it with `screencapture -l <id>` and
+// checks the picture: the drawn pill must reach the wings' width (notch
+// plus 52pt on each side) and must contain the cover's colours. Run with
 // SHELF_BASKET_SMOKE=1 (see basket_test.go).
 func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
@@ -97,7 +97,7 @@ func TestNowPlayingPeekSmokeScreenshot(t *testing.T) {
 	var wantW float32
 	onMain(func() { wantW, _ = a.peekSize() })
 	if box.Dx() < int(wantW) {
-		t.Fatalf("screenshot %s shows %dpt of paint; the player pill must be %.0fpt wide", shot, box.Dx(), wantW)
+		t.Fatalf("screenshot %s shows %dpt of paint; the wings must be %.0fpt wide", shot, box.Dx(), wantW)
 	}
 	if !hasColour(img) {
 		t.Fatalf("screenshot %s has no cover colours; the artwork did not draw", shot)

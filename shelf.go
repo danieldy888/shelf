@@ -45,7 +45,7 @@ type shelf struct {
 	shownH                                                      float32 // panel height the shell is drawn at (eases toward panelH)
 	settings                                                    settings.Settings
 	modules                                                     []module
-	np                                                          *nowPlayingModule     // the peek player reads its state
+	np                                                          *nowPlayingModule     // the peek wings read its state
 	conv                                                        *converter            // image conversion jobs; nil until the app starts
 	usage                                                       *usageFeature         // nil until the AI usage page registers itself
 	clip                                                        *clipboardModule      // nil until monitoring starts

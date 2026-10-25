@@ -13,43 +13,37 @@ import (
 )
 
 // The now-playing module's drawing lives here; nowplaying_module.go owns
-// the helper's state. Two surfaces: the hover player that grows out of the
-// notch (cover, title, artist, equalizer, progress and transport — the
-// notch itself becomes the player, as Droppy does) and the expanded
-// panel's activity (36pt cover, title/「artist · app」, ⏮ ⏯ ⏭, a hairline
-// progress track).
+// the helper's state. Two surfaces: the hover wings that grow out of the
+// notch (a cover in the left wing, the equalizer in the right — nothing
+// else) and the expanded panel's activity (36pt cover, title/「artist ·
+// app」, ⏮ ⏯ ⏭, a hairline progress track). Transport stays in the panel:
+// the wings only say what is playing.
 
-// Hover player geometry: at least 400pt wide (the notch +220), and
-// npPlayerBody tall below the notch.
+// Hover wings geometry: the notch grows npWingsW to each side and
+// npWingsBody below it. The hardware notch hides the middle, so both
+// pieces sit in the notch's own band and never grow down into the screen.
 const (
-	npPlayerW      = 400
-	npPlayerMinX   = 220 // extra width beyond the notch
-	npPlayerBody   = 140
-	npPlayerPad    = 16
-	npPlayerArt    = 52
-	npPlayerArtR   = 11
-	npPlayerCtl    = 32
-	npPlayerPlay   = 40
-	npPlayerCtlGap = 18
-	eqBars         = 4
-	eqBarW         = 3
-	eqBarGap       = 2
-	eqBarR         = 1.5
-	eqMaxH         = 14
-	eqPausedH      = 4 // 暂停时静止为低矮等高
-	eqStillH       = 8 // 减少动态效果时的静止高度
+	npWingsW    = 52 // each wing beyond the notch
+	npWingsBody = 4  // height below the notch: barely more than the band
+	npWingsPad  = 14 // content inset from the shell's outer edge
+	npWingsArt  = 22
+	npWingsArtR = 5
+	eqBars      = 4
+	eqBarW      = 3
+	eqBarGap    = 2
+	eqBarR      = 1.5
+	eqMaxH      = 14
+	eqPausedH   = 4 // 暂停时静止为低矮等高
+	eqStillH    = 8 // 减少动态效果时的静止高度
 )
 
-// Activity geometry (DESIGN.md「活动条」) and the hover player's progress
-// row.
+// Activity geometry (DESIGN.md「活动条」).
 const (
 	npLiveArt  = 36
 	npLiveArtR = 8
 	npLiveCtl  = 28 // 上一首/下一首
 	npLivePlay = 32 // 播放/暂停
 	npLiveBar  = 2  // 活动底部的细进度线
-	npTrackH   = 4
-	npProgRowH = 14
 )
 
 // eqPeriods are the equalizer bars' loop periods, inside the design's
@@ -66,7 +60,7 @@ var (
 	nextFill    = fillSymbol(`<path d="M13 6v12l8-6zM4 6v12l8-6z"/>`)
 )
 
-// showsPlayer reports whether hovering the notch shows the player rather
+// showsPlayer reports whether hovering the notch shows the two wings rather
 // than the plain bulge: a track is loaded, the setting is on and no file
 // drag is asking for the notch's drop target.
 func (m *nowPlayingModule) showsPlayer() bool {
@@ -74,40 +68,31 @@ func (m *nowPlayingModule) showsPlayer() bool {
 	return ok && m.host.settings.IslandNowPlaying && !m.host.dragging
 }
 
-// peekPlayer draws the hover player at its final size w×h; the caller
-// clips it to the growing shell and passes the peek progress as k, so the
-// layout never squeezes while the notch opens. The transport buttons work
-// in place; a press anywhere else opens the shelf. It reports whether it
-// drew anything.
-func (m *nowPlayingModule) peekPlayer(c *ui.Context, w, h, k float32) bool {
+// peekWings draws the hover wings at their final size w×h: the cover in
+// the left wing, the equalizer in the right, both centered in the band the
+// hardware notch occupies. The middle stays empty — the camera housing
+// hides it. There are no controls: a press anywhere on the shell opens the
+// shelf, and the expanded panel's activity strip keeps the transport. The
+// caller clips the layout to the growing shell and passes the peek
+// progress as k, so nothing squeezes while the notch opens. It reports
+// whether it drew anything.
+func (m *nowPlayingModule) peekWings(c *ui.Context, w, h, k float32) bool {
 	st, ok := m.track()
 	if !ok || !m.showsPlayer() {
 		return false
 	}
-	m.ctlPressed = false
-	player := ui.Column(c.Key("np-peek")).Width(w).Height(h).
-		Padding(0, npPlayerPad, 12, npPlayerPad).Gap(10).Opacity(min(max(k*k, 0), 1)).Label("展开 Shelf")
-	player.Children(func() {
-		// The camera housing sits in the top band; content starts below it.
-		ui.Box(c.Key("np-peek-notch")).Height(float32(max(0, m.host.topInset-2)))
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			m.coverArt(c, "np-peek-art", npPlayerArt, npPlayerArtR)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Justify(ui.Center).Children(func() {
-				ui.Text(c.Key("np-peek-title"), st.Title).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-				if meta := m.cardMeta(st); meta != "" {
-					ui.Text(c.Key("np-peek-artist"), meta).SingleLine().FontSize(11).TextColor(ink2)
-				}
-			})
-			m.eqBars(c, st.Playing)
-		})
-		m.progressRow(c, st, time.Now())
-		ui.Row(c.Key("np-peek-ctl")).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(npPlayerCtlGap).Children(func() {
-			m.controlButton(c, "np-peek-prev", prevFill, "上一首", mac.NPPrevious, npPlayerCtl, 18)
-			m.controlButton(c, "np-peek-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, npPlayerPlay, 24)
-			m.controlButton(c, "np-peek-next", nextFill, "下一首", mac.NPNext, npPlayerCtl, 18)
-		})
+	label := "展开 Shelf"
+	if st.Title != "" {
+		label = "正在播放：" + st.Title + " · 展开 Shelf"
+	}
+	wings := ui.Row(c.Key("np-wings")).Width(w).Height(h).
+		Padding(0, npWingsPad, npWingsBody, npWingsPad).AlignItems(ui.Center).
+		Justify(ui.SpaceBetween).Opacity(min(max(k*k, 0), 1)).Label(label)
+	wings.Children(func() {
+		m.coverArt(c, "np-wings-art", npWingsArt, npWingsArtR)
+		m.eqBars(c, st.Playing)
 	})
-	if player.Clicked() && !m.ctlPressed {
+	if wings.Clicked() {
 		m.host.show(false)
 	}
 	return true
@@ -217,27 +202,6 @@ func (m *nowPlayingModule) cardMeta(st mac.NowPlayingState) string {
 	}
 }
 
-// progressRow is the card's progress line: elapsed m:ss on the left, the
-// 4pt white-on-fill3 track, remaining -m:ss on the right.
-func (m *nowPlayingModule) progressRow(c *ui.Context, st mac.NowPlayingState, now time.Time) {
-	ui.Row(c.Key("np-progress")).Gap(8).AlignItems(ui.Center).Height(npProgRowH).Children(func() {
-		elapsed := st.Position(now)
-		ui.Text(c, mac.FormatClock(elapsed)).SingleLine().FontSize(10).TextColor(ink3)
-		track := ui.Row(c.Key("np-bar")).Grow(1).MinWidth(0).Height(npTrackH).Radius(2).Clip().Background(fill3)
-		track.Children(func() {
-			frac := float32(0.34) // unknown length: a quiet static bar
-			if st.Duration > 0 {
-				frac = float32(min(max(elapsed/st.Duration, 0), 1))
-			}
-			ui.Box(c).WidthPercent(frac * 100).FillHeight().Radius(2).Background(progress)
-		})
-		if st.Duration > 0 {
-			// Counting down, as the streaming player shows it.
-			ui.Text(c, "-"+mac.FormatClock(st.Duration-elapsed)).SingleLine().FontSize(10).TextColor(ink3)
-		}
-	})
-}
-
 // controlButton is one transport button: a white glyph, no fill, fill2
 // while hovered; size 32 for prev/next, 38 for play/pause.
 func (m *nowPlayingModule) controlButton(c *ui.Context, key string, icon *ui.SVG, label string, command mac.NowPlayingCommand, size, glyph float32) {
@@ -254,7 +218,6 @@ func (m *nowPlayingModule) controlButton(c *ui.Context, key string, icon *ui.SVG
 		ui.Icon(c, icon).Size(glyph, glyph).TextColor(ink)
 	})
 	if b.Clicked() {
-		m.ctlPressed = true
 		m.send(command)
 	}
 }

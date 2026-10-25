@@ -17,17 +17,17 @@ import (
 )
 
 // nowPlayingModule shows what the system is playing. The closed notch stays
-// bare while music plays: no wings, matching Droppy's demo. Hovering the
-// notch peeks a compact player (artwork, title/artist, play/pause), and the
-// expanded panel carries the full card (artwork, title/artist, ⏮ ⏯ ⏭,
-// elapsed and remaining time).
+// bare while music plays: no wings until the pointer arrives. Hovering the
+// notch peeks two small wings — the cover on the left, the equalizer on the
+// right — and the expanded panel carries the full card (artwork,
+// title/artist, ⏮ ⏯ ⏭, elapsed and remaining time).
 //
 // The state comes from mac.NowPlayingHost, which reads MediaRemote
 // through an Apple-signed perl host (macOS 15.4 and later deny
 // Apple-unsigned readers). The host is started lazily while the
 // islandNowPlaying setting is on and stopped when it is turned off, so
 // an off switch costs no process at all. The same setting covers every
-// now-playing surface here (peek player and panel card).
+// now-playing surface here (peek wings and panel card).
 //
 // Artwork arrives in its own MediaRemote notification, often a moment
 // after the title. The helper therefore waits a short grace window before
@@ -52,13 +52,12 @@ type nowPlayingModule struct {
 
 	// snap is the last state the UI was invalidated for; comparing new
 	// states against it keeps the redraw rate tied to visible changes.
-	snap       npSnap
-	art        *ui.Bitmap // artwork or app icon of the current track
-	artIsIcon  bool       // art is the app icon fallback, not the cover
-	ctlPressed bool       // a transport button took this frame's press
-	artColor   ui.Color   // the artwork's average colour: EQ bars
-	artDone    string     // artID decoded once (success or undecodable blob)
-	iconFor    string     // artID whose app-icon fallback was looked up
+	snap      npSnap
+	art       *ui.Bitmap // artwork or app icon of the current track
+	artIsIcon bool       // art is the app icon fallback, not the cover
+	artColor  ui.Color   // the artwork's average colour: EQ bars
+	artDone   string     // artID decoded once (success or undecodable blob)
+	iconFor   string     // artID whose app-icon fallback was looked up
 
 	// iconPNGs caches app icons by bundle id: the fallback is looked up
 	// once per app, not once per track.

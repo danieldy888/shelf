@@ -327,7 +327,7 @@ func TestOpeningFrameStaysAlignedAndFreezesPeekMorph(t *testing.T) {
 	img := writeFile(t, dir, "1.png", testPNGBytes(t))
 	t.Setenv("SHELF_DEBUG_DROP_FILES", img)
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	// Start a peek morph partway (as a drag or hover player does), then open.
+	// Start a peek morph partway (as a drag or hover wings does), then open.
 	a.dragging, a.peeking = true, true
 	view.Frame()
 	view.Advance(32 * time.Millisecond)
@@ -413,14 +413,29 @@ func TestClosingFollowsCurrentPeekAfterOpeningStateChanges(t *testing.T) {
 				changedView.Advance(16 * time.Millisecond)
 				controlView.Advance(16 * time.Millisecond)
 			}
-			direction := float32(-1)
-			if name == "drag ends" {
-				direction = 1
+			// Each axis must move toward the live peek shape: the changing
+			// shelf follows its new target, the control keeps the old one.
+			// The hover wings are narrower but shorter than the chevron,
+			// so the two axes no longer share a direction.
+			cw, ch := changed.peekSize()
+			ow, oh := control.peekSize()
+			check := func(axis string, got, want, target, other float32) {
+				dir := float32(0)
+				switch {
+				case target > other:
+					dir = 1
+				case target < other:
+					dir = -1
+				default:
+					t.Skipf("%s: both states share the peek target %.1f", axis, target)
+				}
+				if dir*(got-want) <= 0.1 {
+					t.Fatalf("the fold still uses the old peek shape on %s: changed %.3f, unchanged %.3f (targets %.1f vs %.1f)",
+						axis, got, want, target, other)
+				}
 			}
-			if direction*(changed.fx.w-control.fx.w) <= 0.1 || direction*(changed.fx.h-control.fx.h) <= 0.1 {
-				t.Fatalf("the fold still uses the old peek shape: changed %.3fx%.3f, unchanged %.3fx%.3f",
-					changed.fx.w, changed.fx.h, control.fx.w, control.fx.h)
-			}
+			check("width", changed.fx.w, control.fx.w, cw, ow)
+			check("height", changed.fx.h, control.fx.h, ch, oh)
 		})
 	}
 }

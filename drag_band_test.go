@@ -190,7 +190,7 @@ func TestDragGuardLandsBelowMenuBarInsideTheWindow(t *testing.T) {
 
 // The incoming-drag frame must never exceed the menu bar's height while
 // nothing taller is drawn: the widened hint stays band-high, and the
-// player/capsule's tall frames are not retained through a drag.
+// wings/capsule's taller frames are not retained through a drag.
 func TestIncomingDragFrameStaysInMenuBand(t *testing.T) {
 	a := dragShelf()
 	a.settings.IslandNowPlaying = true

@@ -372,7 +372,7 @@ func TestSmokeProgressiveBlur(t *testing.T) {
 }
 
 // TestSmokePeekMorphNeverClipped grows the chevron pill into the now-playing
-// player mid-strip: the morph spring overshoots, and the resident strip must
+// wings mid-strip: the morph spring overshoots, and the resident strip must
 // hold every frame of it.
 func TestSmokePeekMorphNeverClipped(t *testing.T) {
 	a := redesignShelf(t)
@@ -403,6 +403,6 @@ func TestSmokePeekMorphNeverClipped(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	motionShot(t, a, "peek-player", 100*time.Millisecond)
+	motionShot(t, a, "peek-wings", 100*time.Millisecond)
 	motionClosed(a)
 }

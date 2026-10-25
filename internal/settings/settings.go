@@ -26,7 +26,7 @@ type Settings struct {
 	// ExcludedApps lists bundle identifiers whose copies are never
 	// recorded into the shelf.
 	ExcludedApps []string `json:"excludedApps"`
-	// IslandNowPlaying shows the now-playing peek player and panel card.
+	// IslandNowPlaying shows the now-playing peek wings and panel card.
 	IslandNowPlaying bool `json:"islandNowPlaying"`
 	// AutoCheckUpdates checks the GitHub release feed for a newer version
 	// in the background; it is the app's only network access.

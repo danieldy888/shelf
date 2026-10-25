@@ -115,7 +115,7 @@ func TestClosingFoldsCrisp(t *testing.T) {
 }
 
 // TestPeekStripHoldsFoldingShapes keeps the native strip as big as the
-// shape it is folding back from: a capsule that just expired, or a player
+// shape it is folding back from: a capsule that just expired, or wings
 // whose track stopped, must not be clipped on its way down.
 func TestPeekStripHoldsFoldingShapes(t *testing.T) {
 	a := motionShelf()
@@ -582,7 +582,7 @@ func TestCapsuleGrowNeverPaintsPastTheShell(t *testing.T) {
 }
 
 // TestPeekMorphFlightKeepsStripRoom: while a peek morph is still in flight
-// (chevron → player, or the capsule growing), the strip must hold the target
+// (chevron → wings, or the capsule growing), the strip must hold the target
 // plus the spring's overshoot, so no mid-flight frame is clipped.
 func TestPeekMorphFlightKeepsStripRoom(t *testing.T) {
 	a := motionShelf()
@@ -666,22 +666,22 @@ func TestSettledCapsuleAsksForNoFrames(t *testing.T) {
 	}
 }
 
-// TestPlayerFadesOutWithTheShell: when the pointer leaves a hovering player,
-// the pill keeps drawing it while the shell folds — fading with the shell
-// (peekK) — instead of snapping back to the bare chevron mid-retract.
-func TestPlayerFadesOutWithTheShell(t *testing.T) {
+// TestWingsFadeOutWithTheShell: when the pointer leaves hovering wings,
+// the pill keeps drawing them while the shell folds — fading with the
+// shell (peekK) — instead of snapping back to the bare chevron mid-retract.
+func TestWingsFadeOutWithTheShell(t *testing.T) {
 	a := motionShelf()
 	a.settings.IslandNowPlaying = true
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{
 		Playing: true, Title: "Fashion Killa", Duration: 200, Elapsed: 30, Received: time.Now(),
 	}}
-	// peekK mid-decay, the pointer gone: the player is still the shape on
-	// show, drawn at its fading opacity.
+	// peekK mid-decay, the pointer gone: the wings are still the shape on
+	// show, drawn at their fading opacity.
 	view := ui.NewTester(func(c *ui.Context) {
-		a.peekView(c, 380, 140, 0, 0.6, 0, false, false)
+		a.peekView(c, 284, 36, 0, 0.6, 0, false, false)
 	}, panelWidth, panelHeight)
 	view.Frame()
-	if !view.HasText("Fashion Killa") {
-		t.Fatal("the player vanished mid-retract instead of fading with the shell")
+	if _, ok := view.Find("正在播放：Fashion Killa · 展开 Shelf"); !ok {
+		t.Fatal("the wings vanished mid-retract instead of fading with the shell")
 	}
 }

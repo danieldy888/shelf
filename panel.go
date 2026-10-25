@@ -366,11 +366,11 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	a.shownH = shownH
 	// The hover shape springs between its forms (chevron, drop pill,
-	// player, capsule) when it changes while shown, e.g. a drag starting.
+	// wings, capsule) when it changes while shown, e.g. a drag starting.
 	// A fold is subtract-only: while the peek closes (peekTarget 0), the
 	// shape freezes at what is actually drawn — re-aiming at the live
 	// peekSize() answer would grow the folding shell toward a track's
-	// player size before it could shrink.
+	// wings before it could shrink.
 	peekW, peekH := a.peekSize()
 	if a.win != nil {
 		if expanded {
@@ -398,7 +398,7 @@ func (a *shelf) view(c *ui.Context) {
 			case a.dragging && !a.ownDrag && !a.dropHot && (a.fx.peekW > peekW || a.fx.peekH > peekH):
 				// An incoming drag outside the drop band owns the hint
 				// shape. A fold remnant pinned mid-morph (e.g. the hover
-				// player still growing when the drag began) rides the
+				// wings still growing when the drag began) rides the
 				// re-rising shell past the menu bar for the whole
 				// morph — the "notch flashes" bug. The drag's shape
 				// never morphs, so snap the channels: the drawn shell
@@ -915,17 +915,17 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 }
 
 // peekView draws the pill under the hardware notch while hovering: the
-// now-playing player while a track is loaded, 「松开放入」 while a drag is
+// now-playing wings while a track is loaded, 「松开放入」 while a drag is
 // on, otherwise the small downward chevron. A closed panel with something
 // to report draws the status capsule instead (feedback.go). Like the
-// player, the pill's content is laid out at its final size and uncovered
+// wings, the pill's content is laid out at its final size and uncovered
 // by the growing shell; the glyphs sit in the band below the hardware
 // notch, where the screen has pixels.
 func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake float32, over, folding bool) {
 	now := c.Now()
 	if a.fb.retracting && !a.peeking && !(a.dragging && !a.ownDrag) {
 		// The shell is still folding back from the capsule: only the frame
-		// moves, as when the panel closes. The hover player is not drawn
+		// moves, as when the panel closes. The hover wings are not drawn
 		// over a capsule on its way out.
 		return
 	}
@@ -938,18 +938,18 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		switch {
 		case a.pinReturning:
 			// A pinned card held over the notch wins over the capsule
-			// and the player: the release reads this same zone, so the
+			// and the wings: the release reads this same zone, so the
 			// affordance must always be the pill it acts on
 			// (design §4 松开放回).
 			kind = peekReturn
 		case a.capsuleUp(now):
-			// The completion capsule outranks the player: a status that is
+			// The completion capsule outranks the wings: a status that is
 			// up is what the shell grew for (peekSize and desiredFrame
-			// agree), and the player takes the shape back when the toast
+			// agree), and the wings take the shape back when the toast
 			// is done.
 			kind = peekCapsule
 		case !over && a.np != nil && a.np.showsPlayer():
-			kind = peekPlayer
+			kind = peekWings
 		case a.dragging && !a.ownDrag:
 			// Inside the notch band the drop pill invites the release;
 			// outside it only the widened hint shows — never a glyph.
@@ -969,17 +969,17 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	case peekCapsule:
 		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
 		return
-	case peekPlayer:
+	case peekWings:
 		if a.np != nil {
-			pw, ph := a.playerSize()
+			pw, ph := a.wingsSize()
 			clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
 			drew := false
-			clip.Children(func() { drew = a.np.peekPlayer(c, pw, ph, peekK) })
+			clip.Children(func() { drew = a.np.peekWings(c, pw, ph, peekK) })
 			if drew {
 				return
 			}
 		}
-		// The player's content is gone mid-fold (track ended): fold the
+		// The wings' content is gone mid-fold (track ended): fold the
 		// shell silently rather than swapping in another glyph.
 		return
 	case peekHint:
@@ -992,7 +992,7 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		// Folding keeps the content kind frozen but lays it out at the
 		// shrinking shell's size: the frozen drop-pill size (a.fx.peekW/H)
 		// would center the words below the clipping shell mid-fold, while
-		// the live peekSize() answer (a loaded track's player size) pushes
+		// the live peekSize() answer (a loaded track's wings) pushes
 		// them outside even sooner.
 		pw, ph = shellW, shellH
 	}

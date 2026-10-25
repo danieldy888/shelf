@@ -56,9 +56,9 @@ func TestCapsuleOutranksThePlayer(t *testing.T) {
 	}
 	// The strip holds room for both shapes, so the hand-off needs no resize.
 	f := a.desiredFrame()
-	pw, ph := a.playerSize()
+	pw, ph := a.wingsSize()
 	if f.Width < int(pw+0.5) || f.Height < int(ph+0.5) {
-		t.Fatalf("strip %+v cannot hold the player %.0fx%.0f", f, pw, ph)
+		t.Fatalf("strip %+v cannot hold the wings %.0fx%.0f", f, pw, ph)
 	}
 }
 

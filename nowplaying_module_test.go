@@ -123,13 +123,13 @@ func TestNPSnapOf(t *testing.T) {
 func TestNowPlayingTrackAndSettingOff(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"T","artist":"A","duration":100,"elapsed":5}`)
-	// Music never owns the collapsed notch: it feeds only the peek player
+	// Music never owns the collapsed notch: it feeds only the peek wings
 	// and the panel card, so playing must report a track while paused does
 	// too — the controls are most useful while paused.
 	if !s.mod.hasTrack() {
-		t.Fatal("playing music must still feed the peek player and card")
+		t.Fatal("playing music must still feed the peek wings and card")
 	}
-	// Paused: the peek player and card stay for resuming.
+	// Paused: the peek wings and card stay for resuming.
 	s.feed(t, `{"ok":true,"isPlaying":false,"appState":2,"title":"T","artist":"A","duration":100,"elapsed":5}`)
 	if !s.mod.hasTrack() {
 		t.Fatal("paused playback must still have a card")
@@ -187,24 +187,25 @@ func TestNowPlayingActivityDrawsTrackAndControls(t *testing.T) {
 	}
 }
 
-func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
+func TestPeekGrowsIntoTheWingsForATrack(t *testing.T) {
 	a := &shelf{settings: settings.Settings{IslandNowPlaying: true}, notchW: 180, notchH: 32}
 	if w, h := a.peekSize(); w != 220 || h != 32+peekBody {
 		t.Fatalf("idle peek = %.0fx%.0f, want 220x%d (notch +40/+%d)", w, h, 32+peekBody, peekBody)
 	}
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Title: "T"}}
-	if w, h := a.peekSize(); w != npPlayerW || h != 32+npPlayerBody {
-		t.Fatalf("with a track the notch must grow into the %dx%d player, got %.0fx%.0f", npPlayerW, 32+npPlayerBody, w, h)
+	// 180 + 52 + 52 wide, and only 4pt below the notch band.
+	if w, h := a.peekSize(); w != 284 || h != 36 {
+		t.Fatalf("with a track the notch must grow two 52pt wings, got %.0fx%.0f, want 284x36", w, h)
 	}
-	// The resident strip already holds the player, so hovering never
+	// The resident strip already holds the wings, so hovering never
 	// resizes the native window.
-	if f := a.desiredFrame(); f.Width < npPlayerW || f.Height < 32+npPlayerBody {
-		t.Fatalf("idle strip %dx%d cannot hold the player", f.Width, f.Height)
+	if f := a.desiredFrame(); f.Width < 284+2*earR || f.Height < 36 {
+		t.Fatalf("idle strip %dx%d cannot hold the wings", f.Width, f.Height)
 	}
 	// A file drag inside the notch band needs the drop pill — its
 	// 「松开放入」 line wholly below the hardware notch. Outside the band
 	// the drag only gets the band-height hint. Switching the feature off
-	// collapses the player even before the next tick stops the helper.
+	// collapses the wings even before the next tick stops the helper.
 	a.dragging = true
 	if w, h := a.peekSize(); w != 180+dropHintExtraW || h != 32 {
 		t.Fatalf("a drag outside the band must show only the hint, got %.0fx%.0f", w, h)
@@ -216,7 +217,7 @@ func TestPeekGrowsIntoThePlayerForATrack(t *testing.T) {
 	a.dragging = false
 	a.settings.IslandNowPlaying = false
 	if w, _ := a.peekSize(); w != 220 {
-		t.Fatalf("the player must close when now playing is off, got %.0f", w)
+		t.Fatalf("the wings must close when now playing is off, got %.0f", w)
 	}
 }
 
@@ -247,7 +248,7 @@ func TestPeekShapesFitTheIdleStrip(t *testing.T) {
 	}
 }
 
-func TestHoverPlayerControlsWorkInPlace(t *testing.T) {
+func TestPeekWingsShowCoverAndBarsOnly(t *testing.T) {
 	s := newStubNowPlaying(t, true)
 	s.feed(t, `{"ok":true,"isPlaying":true,"appState":1,"title":"夜曲","artist":"周杰伦","duration":100,"elapsed":5}`)
 	a := &shelf{
@@ -262,23 +263,67 @@ func TestHoverPlayerControlsWorkInPlace(t *testing.T) {
 	a.np = s.mod
 	a.modules = []module{s.mod}
 	view := ui.NewTester(a.view, panelWidth, panelHeight)
-	if !view.HasText("夜曲") {
-		t.Fatal("the hover player must show the track title")
+	// The wings carry no title, artist, clock or transport: the only
+	// label is the accessibility one, which opens the shelf.
+	for _, txt := range []string{"夜曲", "周杰伦", "暂停", "上一首", "下一首"} {
+		for _, got := range view.Texts() {
+			if got == txt {
+				t.Fatalf("the hover wings drew %q; they show cover and bars only", txt)
+			}
+		}
 	}
-	// The transport works without opening the shelf.
-	if err := view.Click("暂停"); err != nil {
-		t.Fatalf("the hover player must offer play/pause: %v", err)
+	const label = "正在播放：夜曲 · 展开 Shelf"
+	if _, ok := view.Find(label); !ok {
+		t.Fatalf("the wings lack their accessibility label; texts %v", view.Texts())
 	}
-	s.expectCommand(t, "toggle")
-	if a.visible {
-		t.Fatal("a transport press must not open the shelf")
-	}
-	// A press elsewhere on the player opens the shelf.
-	if err := view.Click("夜曲"); err != nil {
+	// A press anywhere on the shell opens the shelf and sends nothing —
+	// the empty middle, the cover and the bars alike (the wings have no
+	// in-place controls).
+	r, _ := view.Find(label)
+	if err := view.Click(label); err != nil {
 		t.Fatal(err)
 	}
 	if !a.visible {
-		t.Fatal("a press on the player outside its buttons must expand the panel")
+		t.Fatal("a press on the wings must expand the panel")
+	}
+	select {
+	case got := <-s.cmds:
+		t.Fatalf("a wings press sent %q; the wings have no controls", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, p := range []struct {
+		name string
+		x, y float32
+	}{
+		{"cover", r.X + npWingsPad + npWingsArt/2, r.Y + r.H/2 - 2},
+		{"bars", r.X + r.W - npWingsPad - eqBars*eqBarW/2 - (eqBars-1)*eqBarGap/2, r.Y + r.H/2 - 2},
+	} {
+		a.visible, a.progress = false, 0
+		view.Frame()
+		view.ClickAt(p.x, p.y)
+		if !a.visible {
+			t.Fatalf("a press on the %s must expand the panel too", p.name)
+		}
+	}
+}
+
+// The wings' label drops the track when there is nothing to name, so the
+// automation surface still reads 「展开 Shelf」.
+func TestPeekWingsLabelWithoutATitle(t *testing.T) {
+	a := &shelf{
+		settings:     settings.Settings{IslandNowPlaying: true},
+		notchW:       180,
+		notchH:       32,
+		peeking:      true,
+		peekProgress: 1,
+	}
+	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Playing: true}}
+	view := ui.NewTester(a.view, panelWidth, panelHeight)
+	if _, ok := view.Find("展开 Shelf"); !ok {
+		t.Fatalf("the untitled wings must still be labeled; texts %v", view.Texts())
+	}
+	if view.HasText("正在播放") {
+		t.Fatal("a track without a title must not read 「正在播放：」")
 	}
 }
 
