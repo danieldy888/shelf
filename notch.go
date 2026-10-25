@@ -67,10 +67,15 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		if a.currentLevel() == 1 && a.fx.levelK <= 0.001 && !a.fx.openMoving {
 			expW, expH = islandW, float32(islandH+top)
 		}
-		// The room is constant per level: a frame that changed its box at
-		// the spring's peak would slide the window sideways under the
-		// shell, and the extra margin is a handful of transparent points.
-		w, h := openFrameRoom(expW, expH)
+		// The room is constant while the springs move: a frame that
+		// changed its box at the spring's peak would slide the window
+		// sideways under the shell. Once settled, the height is the shell's
+		// exact box so its transparent margin cannot swallow clicks below.
+		w, roomH := openFrameRoom(expW, expH)
+		h := int(math.Ceil(float64(expH)))
+		if a.fx.openMoving {
+			h = roomH
+		}
 		if closing {
 			// Follow the drawn shell through its fold, with room for the
 			// ears and two points below the bottom curve.
@@ -360,13 +365,13 @@ func (a *shelf) windowLevel() int {
 // over the transparent margin the frame keeps for shake and growth.
 func (a *shelf) syncMousePassThrough() {
 	a.syncWindowFrame()
-	acceptAll := a.visible || a.fx.openK > 0.01 || a.dragging || a.pointerDrag ||
+	acceptAll := a.visible || a.fx.openK > 0.02 || a.dragging || a.pointerDrag ||
 		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting
 	// A hovered or capsule shape only takes the mouse over its drawn body.
 	// Native shadow/ear margins must not block menu-bar items or windows
 	// below — and while the capsule shows, a press elsewhere on the strip
 	// belongs to whatever is underneath.
-	if a.winH != 0 && !a.visible && a.fx.openK <= 0.01 && !a.dragging && !a.pointerDrag {
+	if a.winH != 0 && !a.visible && a.fx.openK <= 0.02 && !a.dragging && !a.pointerDrag {
 		acceptAll = acceptAll && a.overPeekPill(cursorPoint())
 	}
 	a.ignoringMouse = !acceptAll

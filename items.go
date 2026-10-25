@@ -117,10 +117,11 @@ func (a *shelf) tileThumb(c *ui.Context, item store.Item) {
 	box.Children(func() {
 		defer formatBadge(c, item)
 		if thumb := a.thumbnail(item); thumb != nil {
-			im := ui.Image(c.Key("bmp"), thumb).Size(tileArt, tileArt).Radius(8).Fit(ui.Cover)
-			if item.Kind == store.KindImage {
+			ext := strings.ToLower(filepath.Ext(item.Path))
+			im := ui.Image(c.Key("bmp"), thumb).Size(tileArt, tileArt).Fit(ui.Cover)
+			if item.Kind == store.KindImage || imageExts[ext] {
 				// 图片缩略图：圆角 + 阴影，像 Finder 里的预览。
-				im.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.45))
+				im.Radius(8).Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.45))
 			} else {
 				// 文件/文件夹用系统图标：图标自带形状，不再裁圆角。
 				im.Radius(0).Fit(ui.Contain)

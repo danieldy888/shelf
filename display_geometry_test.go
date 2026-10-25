@@ -61,8 +61,8 @@ func TestSecondaryDisplayKeepsStripAtItsOwnTop(t *testing.T) {
 			}
 			a.visible = true
 			panel := a.desiredFrame()
-			sw, sh := sheetFrame()
-			if panel.Y != a.dispBounds.Y || panel.Width != sw || panel.Height != sh {
+			sw, _ := sheetFrame()
+			if panel.Y != a.dispBounds.Y || panel.Width != sw || panel.Height != sheetH {
 				t.Fatalf("expanded panel %+v lost the display-top anchor", panel)
 			}
 			if panel.X+panel.Width/2 != cx {

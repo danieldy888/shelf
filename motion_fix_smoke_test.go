@@ -140,7 +140,14 @@ func TestFixNativeMotionTraces(t *testing.T) {
 	}()
 	defer func() { close(stop); <-stopped; motionClosed(a) }()
 	baseH := float32(max(32, a.notchH))
-	onMain(func() { a.show(false) })
+	openSheet := func() {
+		onMain(func() {
+			a.show(false)
+			a.setLevel(2)
+			a.jumpLevel = true
+		})
+	}
+	openSheet()
 	open := sampleMotion(a, 900*time.Millisecond)
 	saveMotion(t, "trace-open", open)
 	checkMotion(t, "open", open, false, baseH)
@@ -155,7 +162,7 @@ func TestFixNativeMotionTraces(t *testing.T) {
 	closed := sampleMotion(a, 800*time.Millisecond)
 	saveMotion(t, "trace-close", closed)
 	checkMotion(t, "close", closed, true, baseH)
-	onMain(func() { a.show(false) })
+	openSheet()
 	time.Sleep(100 * time.Millisecond)
 	onMain(func() { a.hide(hidePassive) })
 	interrupted := sampleMotion(a, 800*time.Millisecond)
@@ -165,7 +172,7 @@ func TestFixNativeMotionTraces(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 	onMain(func() { a.hide(hidePassive) })
 	time.Sleep(100 * time.Millisecond)
-	onMain(func() { a.show(false) })
+	openSheet()
 	reopened := sampleMotion(a, 900*time.Millisecond)
 	saveMotion(t, "trace-mid-close-open", reopened)
 	checkMotion(t, "mid-close-open", reopened, false, baseH)
@@ -322,6 +329,8 @@ func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
 					a.setTab("fake")
 				}
 				a.show(false)
+				a.setLevel(2)
+				a.jumpLevel = true
 			})
 			t.Cleanup(func() { motionClosed(a) })
 			time.Sleep(850 * time.Millisecond)
@@ -413,8 +422,8 @@ func TestSmokeEdgeOpenedDropZoneFollowsPointer(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	onMain(func() {
 		withoutZone = a.win.Bounds().Height
-		if withoutZone >= withZone || withoutZone != a.panelH() {
-			t.Errorf("native panel retained drop-zone height: with=%d outside=%d panelH=%d", withZone, withoutZone, a.panelH())
+		if withoutZone != withZone || withZone != a.panelH() {
+			t.Errorf("the drop zone changed the native panel: with=%d outside=%d panelH=%d", withZone, withoutZone, a.panelH())
 		}
 		point = mygo.Point{X: a.stripCenter(), Y: a.y + a.notchH + 8}
 		a.win.Invalidate()

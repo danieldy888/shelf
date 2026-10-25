@@ -285,8 +285,6 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 				}
 			})
 		})
-		top, bottom, _ := scrollEdges(&p.scroll, contentH)
-		a.scrollMelt(c, "tools", top, bottom, 0)
 	})
 }
 
@@ -499,9 +497,7 @@ func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
 	defer p.closeDragPreview()
 	a := p.host
 	// The drop lands inside the stage when the release is within the
-	// viewport the scroll shows — the stage's own height. scrollEdges
-	// would answer contentH−MaxY, which shrinks as the content grows and
-	// misreads releases near the viewport's bottom.
+	// viewport the scroll shows.
 	viewH := float32(contentH)
 	inside := d.px >= 0 && d.px <= toolStageW &&
 		d.py >= p.scroll.Y && d.py <= p.scroll.Y+viewH

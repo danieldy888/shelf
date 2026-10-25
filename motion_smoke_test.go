@@ -91,13 +91,20 @@ func TestSmokeOpeningIsElasticAndNotClipped(t *testing.T) {
 	a := redesignShelf(t)
 	motionClosed(a)
 	time.Sleep(300 * time.Millisecond)
-	onMain(func() { a.show(false) })
+	openSheet := func() {
+		onMain(func() {
+			a.show(false)
+			a.setLevel(2)
+			a.jumpLevel = true
+		})
+	}
+	openSheet()
 	// A screenshot mid-flight proves the look; it takes its own opening so
 	// its frame-sync sleep cannot sit on the trace's peak.
 	motionShot(t, a, "open-mid", 90*time.Millisecond)
 	motionClosed(a)
 	time.Sleep(200 * time.Millisecond)
-	onMain(func() { a.show(false) })
+	openSheet()
 	final := float32(0)
 	peak := float32(0)
 	for i := range 80 {
@@ -345,17 +352,22 @@ func TestSmokeProgressiveBlur(t *testing.T) {
 		t.Fatalf("the 24-row list does not scroll: MaxY=%.0f", maxY)
 	}
 	motionShot(t, a, "blur-top", 200*time.Millisecond)
-	// A real wheel scroll over the list, as a trackpad would deliver it.
-	// One event already runs to the end of a 24-row list, so scroll back up
-	// once to land partway, where both bands melt.
+	// A real wheel over the list: one event already runs to the end of a
+	// 24-row list, the reverse one returns to the top, which proves the
+	// gesture reaches this scroll view. The settled middle position the
+	// bands need is then set directly.
 	for _, delta := range []float64{40, -20} {
 		onMain(func() {
-			if !mac.SurfaceScroll(a.win.NativeHandle(), 280, 240, delta) {
+			if !mac.SurfaceScroll(a.win.NativeHandle(), 280, 125, delta) {
 				t.Error("the scroll event did not reach the list")
 			}
 		})
 		time.Sleep(40 * time.Millisecond)
 	}
+	onMain(func() {
+		page.scroll.Y = maxY / 2
+		a.win.Invalidate()
+	})
 	time.Sleep(200 * time.Millisecond)
 	var y float32
 	onMain(func() { y = page.scroll.Y })

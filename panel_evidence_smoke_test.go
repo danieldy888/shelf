@@ -173,6 +173,9 @@ func TestSmokePanelEvidence(t *testing.T) {
 			sample(phase, start)
 			time.Sleep(8 * time.Millisecond)
 		}
+		// One sample at rest: the frame drops its spring room once the
+		// shell has settled.
+		time.Sleep(300 * time.Millisecond)
 		sample(phase, start)
 	}
 	// Fold to idle first.

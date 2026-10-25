@@ -454,7 +454,7 @@ func TestToolsGridScrollsPastThreeRows(t *testing.T) {
 
 // A release inside the visible grid commits the reorder: the drop
 // predicate measures the viewport (the stage height), not the
-// contentH−MaxY scrollEdges answers once the content really scrolls —
+// contentH−MaxY bound that shrinks once the content really scrolls —
 // that shrinks with the content and misreads releases near the
 // viewport's bottom as outside the stage.
 func TestToolsDropInVisibleGridCommits(t *testing.T) {
@@ -474,7 +474,7 @@ func TestToolsDropInVisibleGridCommits(t *testing.T) {
 	if p.scroll.MaxY <= 28 {
 		t.Fatalf("fixture did not overflow the content box enough: %+v", p.scroll)
 	}
-	// Near the viewport's bottom: the scrollEdges bound (contentH−MaxY) is
+	// Near the viewport's bottom: the old bound (contentH−MaxY) is
 	// negative for this overflowing grid, so a release here must still
 	// count as inside the stage rather than pin the card.
 	py := p.scroll.Y + stage - 20

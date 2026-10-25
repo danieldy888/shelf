@@ -657,9 +657,9 @@ func TestPanelSizeIsFixedPerLevel(t *testing.T) {
 		}
 	}
 	island := a.desiredFrame()
-	iw, ih := islandFrame()
-	if island.Width != iw || island.Height != ih {
-		t.Fatalf("empty island frame = %d×%d, want %d×%d", island.Width, island.Height, iw, ih)
+	iw, _ := islandFrame()
+	if island.Width != iw || island.Height != islandH {
+		t.Fatalf("empty island frame = %d×%d, want %d×%d", island.Width, island.Height, iw, islandH)
 	}
 	add(gridCols * 4)
 	if got := a.desiredFrame(); got != island {
@@ -667,9 +667,9 @@ func TestPanelSizeIsFixedPerLevel(t *testing.T) {
 	}
 	a.setLevel(2)
 	sheet := a.desiredFrame()
-	sw, sh := sheetFrame()
-	if sheet.Width != sw || sheet.Height != sh {
-		t.Fatalf("sheet frame = %d×%d, want %d×%d", sheet.Width, sheet.Height, sw, sh)
+	sw, _ := sheetFrame()
+	if sheet.Width != sw || sheet.Height != sheetH {
+		t.Fatalf("sheet frame = %d×%d, want %d×%d", sheet.Width, sheet.Height, sw, sheetH)
 	}
 	add(gridCols)
 	a.settings.IslandNowPlaying = true
@@ -804,12 +804,12 @@ func TestPanelFrameHoldsWhileShrinking(t *testing.T) {
 		t.Fatalf("frame %d wide cuts the shrinking shell, want %d", got, sw)
 	}
 	a.fx.levelK = 0
-	iw, ih := islandFrame()
+	iw, _ := islandFrame()
 	if got := a.desiredFrame().Width; got != iw {
 		t.Fatalf("frame %d did not settle to the island's width %d", got, iw)
 	}
-	if got := a.desiredFrame().Height; got != ih {
-		t.Fatalf("frame %d did not settle to the island's height %d", got, ih)
+	if got := a.desiredFrame().Height; got != islandH {
+		t.Fatalf("frame %d did not settle to the island's height %d", got, islandH)
 	}
 }
 
