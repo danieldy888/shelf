@@ -294,8 +294,12 @@ func TestUsageRefreshClickShowsProgress(t *testing.T) {
 	}
 	flush()
 	fx.f.tick(*fx.now)
-	if _, count := fx.f.title(); count == "正在更新…" {
+	fx.view.Frame()
+	if fx.view.HasText("正在更新…") {
 		t.Fatal("finished work must settle back to the data stamp")
+	}
+	if !fx.view.HasText("刚刚更新") {
+		t.Fatalf("the back row lost the data stamp after the refresh; texts %v", fx.view.Texts())
 	}
 }
 

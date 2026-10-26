@@ -184,11 +184,11 @@ func (a *shelf) resetToolsEdit() {
 	}
 }
 
-func (p *toolsPage) title() (name, count string) {
+func (p *toolsPage) title() string {
 	if p.picking {
-		return "卡片目录", ""
+		return "卡片目录"
 	}
-	return "工具", fmt.Sprintf("%d 项", len(p.host.toolsLayout().Cards))
+	return "工具"
 }
 
 // overflows reports a third row of cards (or the catalogue, which is

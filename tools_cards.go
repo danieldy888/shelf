@@ -449,24 +449,27 @@ func (a *shelf) toolCardTargets(id string) []store.Item {
 	return out
 }
 
+// clipboardHistory is the clipboard page's list with no search: every
+// capture the page shows, pinned first. A capture hidden from the page
+// (OffClip) lives on the tray only, so the card does not surface it.
+func (a *shelf) clipboardHistory() []store.Item {
+	if a.store == nil {
+		return nil
+	}
+	visible := make([]store.Item, 0, len(a.store.Items))
+	for _, it := range a.store.Items {
+		if it.Source != store.SourceClipboard || it.OffClip {
+			continue
+		}
+		visible = append(visible, it)
+	}
+	return clipboardOrder(visible)
+}
+
 // latestClipboardItem is the newest clipboard capture (pinned first,
 // like the clipboard page): the 剪贴板最新 card's payload.
 func (a *shelf) latestClipboardItem() (store.Item, bool) {
-	if a.store == nil {
-		return store.Item{}, false
-	}
-	var pinned, rest []store.Item
-	for _, it := range a.store.Items {
-		if it.Source != store.SourceClipboard {
-			continue
-		}
-		if it.Pinned {
-			pinned = append(pinned, it)
-		} else {
-			rest = append(rest, it)
-		}
-	}
-	items := append(pinned, rest...)
+	items := a.clipboardHistory()
 	if len(items) == 0 {
 		return store.Item{}, false
 	}

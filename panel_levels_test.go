@@ -64,12 +64,9 @@ func TestIslandOpensFirstAndPageIconOpensSheet(t *testing.T) {
 		t.Fatalf("page icon: level=%d tab=%s, want the sheet on the tray", a.currentLevel(), a.tab)
 	}
 	view.Frame()
-	name, count := a.currentPage().title()
+	name := a.currentPage().title()
 	if _, ok := view.Find(name); !ok {
 		t.Fatalf("the sheet lost its back-row page name %q; texts %v", name, view.Texts())
-	}
-	if _, ok := view.Find(count); !ok {
-		t.Fatalf("the sheet lost its back-row count %q; texts %v", count, view.Texts())
 	}
 	// Esc is the way back now: the title is plain text with no ‹ and no
 	// click of its own.
@@ -80,9 +77,9 @@ func TestIslandOpensFirstAndPageIconOpensSheet(t *testing.T) {
 }
 
 // TestBackRowTitleHasNoBackControl: the back row's left edge is the page's
-// plain 「名称 数量」 title, aligned with the content box — no ‹, no
-// clickable back and no 「返回一级岛」 label. Clicking the title keeps the
-// sheet open; Esc is what steps back to the island.
+// plain name, aligned with the content box — no ‹, no clickable back and
+// no 「返回一级岛」 label. Clicking the title keeps the sheet open; Esc is
+// what steps back to the island.
 func TestBackRowTitleHasNoBackControl(t *testing.T) {
 	a, view := levelShelf(t)
 	a.visible, a.level = true, 2
@@ -91,18 +88,13 @@ func TestBackRowTitleHasNoBackControl(t *testing.T) {
 		a.setTab(id)
 		view.Frame()
 		view.Frame()
-		name, count := a.page(id).title()
+		name := a.page(id).title()
 		r, ok := view.Find(name)
 		if !ok {
 			t.Fatalf("%s: the page title %q is missing; texts %v", id, name, view.Texts())
 		}
 		if r.X < left-0.5 || r.X > left+0.5 {
 			t.Fatalf("%s: the title starts at %.1f, want the content's left edge %.1f", id, r.X, left)
-		}
-		if count != "" {
-			if _, ok := view.Find(count); !ok {
-				t.Fatalf("%s: the count %q is missing; texts %v", id, count, view.Texts())
-			}
 		}
 		for _, text := range view.Texts() {
 			if strings.Contains(text, "‹") || strings.Contains(text, "返回") {

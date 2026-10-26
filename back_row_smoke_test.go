@@ -4,7 +4,8 @@ package main
 
 // Real-window evidence for the back row without a back button: 托盘、
 // 剪贴板 and 主页 are screenshotted whole and cropped to the title row, so
-// the plain 「名称 数量」 title and the missing ‹ can be checked by eye.
+// the plain page name and the missing ‹ can be checked by eye — and the
+// page icons can be compared across the three crops for one x.
 // Run with SHELF_BASKET_SMOKE=1; the PNGs land in /tmp/shelf-noback. The
 // test instance uses the smoke data dir and never touches
 // ~/Library/Application Support/Shelf.

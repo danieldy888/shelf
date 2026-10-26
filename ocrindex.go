@@ -115,10 +115,12 @@ func (o *ocrIndex) tick(time.Time) {
 // needs reports whether the background pass should recognize the item:
 // clipboard-captured images only (tray files are recognized on demand
 // from the menu), not yet done, not in flight, not failed this session,
-// with its managed file still there.
+// with its managed file still there. A capture hidden from the clipboard
+// page (OffClip) is skipped: its text is only ever read there, and
+// re-copying the image clears the flag, so the pass picks it up then.
 func (o *ocrIndex) needs(it store.Item) bool {
 	return it.Kind == store.KindImage && it.Source == store.SourceClipboard &&
-		!it.OCRDone && !it.Missing && it.Path != "" &&
+		!it.OffClip && !it.OCRDone && !it.Missing && it.Path != "" &&
 		!o.busy(it.ID) && !o.failed[it.ID]
 }
 

@@ -123,12 +123,12 @@ func (p *homePage) icon(c *ui.Context, _ bool) ui.Element {
 }
 func (p *homePage) enabled() bool { return true }
 
-// title is the back row's page name/count (the P interface).
-func (p *homePage) title() (name, count string) {
+// title is the back row's page name (the P interface).
+func (p *homePage) title() string {
 	if p.picking {
-		return "小组件目录", ""
+		return "小组件目录"
 	}
-	return "主页", ""
+	return "主页"
 }
 
 // actions is the back row's right side: the pencil, or 完成 while

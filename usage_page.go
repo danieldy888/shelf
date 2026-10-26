@@ -172,32 +172,38 @@ func (f *usageFeature) leastWindow() (five, week *aiusage.Window, ok bool) {
 	return nil, week, ok
 }
 
-// title shows the data age, or progress while any source is busy.
-func (f *usageFeature) title() (name, count string) {
-	name = "AI 用量"
+// title is the back row's page name; the data stamp is in actions.
+func (f *usageFeature) title() string { return "AI 用量" }
+
+// stamp is the data age — or progress while any source is busy — shown
+// just left of the refresh button; empty before the first answer.
+func (f *usageFeature) stamp() string {
+	if f.quota[0].busy || f.quota[1].busy || f.localBusy {
+		return "正在更新…"
+	}
 	at := f.lastUpdatedAt()
-	busy := f.quota[0].busy || f.quota[1].busy || f.localBusy
-	if busy {
-		return name, "正在更新…"
-	}
 	if at.IsZero() {
-		return name, ""
+		return ""
 	}
-	count = usageAgo(at, f.deps.now()) + "更新"
+	s := usageAgo(at, f.deps.now()) + "更新"
 	if f.offline() {
-		count += " · 网络不通"
+		s += " · 网络不通"
 	}
-	return name, count
+	return s
 }
 
-// actions is the refresh button; 「刷新」 is its tooltip and accessible
-// name.
+// actions is the data stamp and the refresh button; 「刷新」 is the
+// button's tooltip and accessible name.
 func (f *usageFeature) actions(c *ui.Context) []ui.Element {
+	var out []ui.Element
+	if s := f.stamp(); s != "" {
+		out = append(out, panelLabel(c, "usage-stamp", s, 10, 600).TextColor(ink3))
+	}
 	b := f.host.iconButton(c, "usage-refresh", refreshSymbol, "刷新")
 	if b.Clicked() && f.host.tab == pageUsage {
 		f.requestRefresh()
 	}
-	return []ui.Element{b}
+	return append(out, b)
 }
 
 // body is the fixed 396 × 174 two-column layout: quota cards on the left
@@ -728,7 +734,7 @@ func (f *usageFeature) kpiGrid(c *ui.Context, s aiusage.Summary) {
 // only while a real price shows. tip, when not empty, explains the value
 // on hover — the 2 × 2 grid is too tight to spell the parts out inline.
 func (f *usageFeature) kpi(c *ui.Context, k, v string, money bool, tip string) {
-	cell := ui.Column(c.Key("kpi-"+k)).Height(25).MinWidth(0)
+	cell := ui.Column(c.Key("kpi-" + k)).Height(25).MinWidth(0)
 	if tip != "" {
 		cell.Tooltip(tip)
 	}

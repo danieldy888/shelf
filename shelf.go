@@ -62,6 +62,7 @@ type shelf struct {
 	warmed                                                      map[pageID]bool       // pages already drawn once while the panel rested
 	warming                                                     pageID                // page queued for that warm draw
 	search                                                      string                // clipboard page's search text
+	titleWidths                                                 map[string]float32    // back-row page name → measured width at the title font (see backTitleWidth)
 	reveal                                                      string                // row to keep in view after a keyboard move
 	focusMode                                                   bool                  // the window took the keyboard for clipboard search
 	prevAppPID                                                  int                   // app to hand the keyboard back to when focusMode ends

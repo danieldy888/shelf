@@ -152,7 +152,10 @@ func TestClearAllButtonAndPerItemRemove(t *testing.T) {
 }
 
 // Each page's 清空 removes only what that page shows: clearing the tray
-// keeps the clipboard history, and the other way round. Pinned rows stay.
+// keeps the clipboard history, and a capture that lives on both pages is
+// only hidden from the cleared page — the other page keeps it, together
+// with its managed PNG, until that page's own 清空 deletes it. Pinned rows
+// stay.
 func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -173,28 +176,64 @@ func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
 	if err := s.AddClipText("置顶的文字", ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.AddClipImage(testPNG(t), "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	// newest-first: image, pinned text, unpinned text, file.
+	clipImg := s.Items[0]
 	var pinned string
 	for _, it := range s.Items {
 		if it.Text == "置顶的文字" {
 			pinned = it.ID
 		}
 	}
+	if clipImg.Kind != store.KindImage || pinned == "" {
+		t.Fatalf("fixture: %+v", s.Items)
+	}
+	managed := clipImg.Path
 	if err := s.SetPinned(pinned, true); err != nil {
 		t.Fatal(err)
 	}
 	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
 	view := ui.NewTester(a.view, sheetW, sheetH)
+
+	// 托盘页的清空：拖入的文件真删（原文件不动），剪贴板收录只移出托盘。
 	if err := view.Click("清空"); err != nil {
 		t.Fatalf("tray clear: %v", err)
 	}
-	var left []string
+	if len(s.Items) != 3 {
+		t.Fatalf("the tray's 清空 must keep the 3 clipboard captures, got %+v", s.Items)
+	}
 	for _, it := range s.Items {
-		left = append(left, it.Text)
+		if it.Kind == store.KindFile {
+			t.Fatal("the tray's 清空 kept the file item")
+		}
+		if it.ID == clipImg.ID && !it.OffTray {
+			t.Fatalf("tray clear did not hide the capture: %+v", it)
+		}
 	}
-	if len(left) != 2 || !slices.Contains(left, "复制的文字") || !slices.Contains(left, "置顶的文字") {
-		t.Fatalf("the tray's 清空 must remove only the file and keep the clipboard history: %q", left)
+	for _, want := range []string{"复制的文字", "置顶的文字"} {
+		found := false
+		for _, it := range s.Items {
+			found = found || it.Text == want
+		}
+		if !found {
+			t.Fatalf("the tray's 清空 dropped the clipboard text %q: %+v", want, s.Items)
+		}
 	}
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("original file deleted by tray clear: %v", err)
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted by tray clear: %v", err)
+	}
+
+	// 剪贴板页：截图仍列出（它只是离开托盘）；这一页的清空才真删。
 	a.setTab(pageClipboard)
+	view.Frame()
+	if !view.HasText(itemTitle(clipImg)) {
+		t.Fatalf("the capture hidden from the tray is missing from the clipboard page; texts %v", view.Texts())
+	}
 	a.search = "复制"
 	view.Frame()
 	if view.HasText("清空") {
@@ -205,8 +244,87 @@ func TestClearOnlyEmptiesItsOwnPage(t *testing.T) {
 	if err := view.Click("清空"); err != nil {
 		t.Fatalf("clipboard clear: %v", err)
 	}
+	// 截图在托盘页已被移出，两页都不再可见，只能真删；置顶的行留下。
 	if len(s.Items) != 1 || s.Items[0].ID != pinned {
 		t.Fatalf("the clipboard's 清空 must keep only the pinned row, left %+v", s.Items)
+	}
+	if _, err := os.Stat(managed); !os.IsNotExist(err) {
+		t.Fatalf("managed png should be deleted with a capture off both pages: %v", err)
+	}
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("original file deleted by clipboard clear: %v", err)
+	}
+}
+
+// 剪贴板页的清空只把两页都在的截图移出剪贴板页：它仍在托盘、受管 PNG 不删；
+// 托盘页随后的清空才真正删除（连图片）。重新复制同一张图又回到两页。
+func TestClipboardClearHidesCaptureFromClipboardPageOnly(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	pngA := testPNG(t)
+	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	clip := s.Items[0]
+	managed := clip.Path
+	a := &shelf{store: s, thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}}
+	view := ui.NewTester(a.view, sheetW, sheetH)
+
+	a.setTab(pageClipboard)
+	view.Frame()
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("clipboard clear: %v", err)
+	}
+	if len(s.Items) != 1 || s.Items[0].ID != clip.ID || !s.Items[0].OffClip {
+		t.Fatalf("the clipboard's 清空 must only hide the capture from its page: %+v", s.Items)
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png deleted by clipboard clear: %v", err)
+	}
+	view.Frame()
+	if view.HasText(itemTitle(clip)) {
+		t.Fatal("the clipboard page still lists the capture it cleared")
+	}
+	a.setTab(pageTray)
+	view.Frame()
+	if !view.HasText(itemTitle(clip)) {
+		t.Fatalf("the tray lost the capture hidden from the clipboard page; texts %v", view.Texts())
+	}
+
+	// 重新复制同一张图：去重命中，两页都回来。
+	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if s.Items[0].OffClip || !view.HasText(itemTitle(clip)) {
+		t.Fatalf("re-copy did not bring the capture back to the tray: %+v", s.Items[0])
+	}
+	a.setTab(pageClipboard)
+	view.Frame()
+	if !view.HasText(itemTitle(clip)) {
+		t.Fatalf("re-copy did not bring the capture back to the clipboard page; texts %v", view.Texts())
+	}
+
+	// 再从剪贴板页清空，然后托盘页清空：这回真的删除，图片一起没了。
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("second clipboard clear: %v", err)
+	}
+	if !s.Items[0].OffClip {
+		t.Fatalf("second clipboard clear did not hide the capture: %+v", s.Items[0])
+	}
+	a.setTab(pageTray)
+	view.Frame()
+	if err := view.Click("清空"); err != nil {
+		t.Fatalf("tray clear: %v", err)
+	}
+	if len(s.Items) != 0 {
+		t.Fatalf("the tray's clear must delete a capture hidden from both pages: %+v", s.Items)
+	}
+	if _, err := os.Stat(managed); !os.IsNotExist(err) {
+		t.Fatalf("managed png should be deleted with the item: %v", err)
 	}
 }
 
@@ -749,7 +867,7 @@ func (p *fakePage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 		ui.Text(c, "假页面内容").FontSize(13).TextColor(ink)
 	})
 }
-func (p *fakePage) title() (name, count string) { return "假页面", "" }
+func (p *fakePage) title() string { return "假页面" }
 func (p *fakePage) actions(c *ui.Context) []ui.Element {
 	return nil
 }
@@ -1124,13 +1242,65 @@ func TestBackRowKeepsTheSamePageIcons(t *testing.T) {
 	}
 }
 
+// TestBackRowIconsKeepOneXAcrossPages: the title slot is one width for
+// every page — the widest enabled page name — so switching pages never
+// shifts the page-strip icons. The current page's name is also its icon's
+// label, and the title text is found first, so each frame measures the
+// icons of the other pages; every icon is measured on the pages it is not
+// current on and must sit at the same x on all of them.
+func TestBackRowIconsKeepOneXAcrossPages(t *testing.T) {
+	a, view := levelShelf(t)
+	if err := a.store.AddClipImage(testPNG(t), "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	a.visible, a.level = true, 2
+	a.setTab(pageTray)
+	seen := map[pageID]float32{}
+	for i, id := range []pageID{pageTray, pageClipboard, pageHome, pageTools, pageTray} {
+		if i > 0 {
+			if err := view.Click(a.page(id).label()); err != nil {
+				t.Fatalf("the %s icon is missing while on %s: %v", id, a.tab, err)
+			}
+		}
+		view.Frame()
+		view.Frame() // the switch settles
+		if a.tab != id {
+			t.Fatalf("the panel is on %s, want %s", a.tab, id)
+		}
+		if got := a.currentPage().title(); got != a.page(id).label() {
+			t.Fatalf("the title shows %q on %s, want its name alone", got, id)
+		}
+		for _, p := range a.backPages() {
+			if p.id() == id {
+				continue // its name is this frame's title text
+			}
+			r, ok := view.Find(p.label())
+			if !ok {
+				t.Fatalf("the %s icon is missing on %s; texts %v", p.id(), id, view.Texts())
+			}
+			if want, ok := seen[p.id()]; ok {
+				if r.X != want {
+					t.Fatalf("the %s icon moved from %.1f to %.1f when the panel switched to %s",
+						p.id(), want, r.X, id)
+				}
+				continue
+			}
+			seen[p.id()] = r.X
+		}
+	}
+	if len(seen) != len(a.backPages()) {
+		t.Fatalf("measured %d of the %d icons", len(seen), len(a.backPages()))
+	}
+}
+
 // TestClipboardBackRowFitsFiveIconsAndSearch: the back row's tightest
-// case — a three-digit clipboard count, five page icons, the search box
-// and 清空 — must fit the 396pt row without the icons running into the
-// count or the field.
+// case — a long clipboard history, five page icons, the title slot, the
+// search box and 清空 — must fit the 396pt row without the icons running
+// into each other or the field. The title is the page name only: the
+// count lives on the island's line.
 func TestClipboardBackRowFitsFiveIconsAndSearch(t *testing.T) {
 	a, view := levelShelf(t)
-	a.store.SetTextLimit(300) // the widest setting: the count is three digits
+	a.store.SetTextLimit(300) // the widest history setting
 	a.settings.ClipboardLimit = 300
 	for i := range 108 {
 		if err := a.store.AddClipText(fmt.Sprintf("剪贴板内容 %d · 一段足够长的文字用于检查省略", i), "com.example.Source"); err != nil {
@@ -1145,21 +1315,24 @@ func TestClipboardBackRowFitsFiveIconsAndSearch(t *testing.T) {
 	if got := len(a.backPages()); got != 5 {
 		t.Fatalf("the back row has %d icons, want 5", got)
 	}
-	name, count := a.page(pageClipboard).title()
-	if count != "120 条" {
-		t.Fatalf("clipboard count reads %q, want 120 条: the audit needs the widest case", count)
+	name := a.page(pageClipboard).title()
+	if name != "剪贴板" {
+		t.Fatalf("back-row name = %q", name)
 	}
-	countBox, ok := view.Find(count)
+	nameBox, ok := view.Find(name)
 	if !ok {
-		t.Fatalf("the count %q is not drawn; texts %v", count, view.Texts())
+		t.Fatalf("the page name %q is not drawn; texts %v", name, view.Texts())
+	}
+	if view.HasText("120 条") {
+		t.Fatal("the back row still draws the clipboard count")
 	}
 	home, ok := view.Find("主页")
 	if !ok {
 		t.Fatal("the first page icon is missing")
 	}
-	if countBox.X+countBox.W > home.X-1 {
-		t.Fatalf("the count %q (%.1f..%.1f) runs into the first icon %.1f", count,
-			countBox.X, countBox.X+countBox.W, home.X)
+	if nameBox.X+nameBox.W > home.X-1 {
+		t.Fatalf("the page name %q (%.1f..%.1f) runs into the first icon %.1f", name,
+			nameBox.X, nameBox.X+nameBox.W, home.X)
 	}
 	fifth, ok := view.Find("假页面")
 	if !ok {
@@ -1174,8 +1347,5 @@ func TestClipboardBackRowFitsFiveIconsAndSearch(t *testing.T) {
 	wrapLeft := search.X - 24
 	if fifth.X+fifth.W > wrapLeft-1 {
 		t.Fatalf("the fifth icon ends at %.1f, into the search field at %.1f", fifth.X+fifth.W, wrapLeft)
-	}
-	if name != "剪贴板" {
-		t.Fatalf("back-row name = %q", name)
 	}
 }

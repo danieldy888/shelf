@@ -249,7 +249,7 @@ const (
 	tileArt     = 40  // 缩略图边长
 	clipRowH    = 30  // 剪贴板行高
 	clipRowGap  = 0   // 行紧挨着，同原型 .cl
-	clipSearchW = 140 // 收窄 10pt：返回行要放下「名字 数量」、5 个页面图标、搜索框与清空
+	clipSearchW = 140 // 收窄 10pt：返回行要放下页名、5 个页面图标、搜索框与清空
 	clipSearchH = 22
 	// earMaxPages is how many page icons the back row (and the island)
 	// carries: one per page of the design.
@@ -1019,35 +1019,63 @@ func (a *shelf) backPages() []panelPage {
 	return out
 }
 
-// backRow is the sheet's 26pt row: the page's 「名称 数量」 as a plain
-// title, the five page icons with the active page's capsule, then the
-// current page's own buttons. The title is text, not a control — Esc steps
-// back to the island, while an outside click and the shortcut fold the
-// panel away — so the row carries no back button. t is the page switch's
-// progress: the title crossfades and the capsule glides over tabAnimation
-// (the value is 1 at rest).
+// backTitleSize and backTitleWeight are the title font: the slot is the
+// widest page name at exactly this size and weight.
+const (
+	backTitleSize   = 11.5
+	backTitleWeight = 600
+)
+
+// backTitleWidth is the width of the back row's title slot: the widest
+// name among the enabled pages' titles at the title font. Being one
+// width for every page keeps the page-strip icons at the same x when
+// the panel switches pages, instead of shifting by however wide the
+// incoming name is. A catalogue title (小组件目录, 卡片目录) is wider
+// than every page name and so widens the slot while the catalogue is
+// open. Widths are measured once per name and cached: the names are
+// fixed strings, so the map only grows when a new page registers.
+func (a *shelf) backTitleWidth(c *ui.Context) float32 {
+	w := float32(0)
+	for _, p := range a.enabledPages() {
+		name := p.title()
+		mw, ok := a.titleWidths[name]
+		if !ok {
+			mw, _ = c.MeasureText(0, ui.Span{Text: name, Size: backTitleSize, Weight: backTitleWeight})
+			if a.titleWidths == nil {
+				a.titleWidths = make(map[string]float32, len(a.pages))
+			}
+			a.titleWidths[name] = mw
+		}
+		w = max(w, mw)
+	}
+	return w
+}
+
+// backRow is the sheet's 26pt row: the page's plain name, the five page
+// icons with the active page's capsule, then the current page's own
+// buttons. The title is text, not a control — Esc steps back to the
+// island, while an outside click and the shortcut fold the panel away —
+// so the row carries no back button, and it names the page without a
+// count, which stays the island's line. t is the page switch's progress:
+// the title crossfades inside its fixed slot and the capsule glides over
+// tabAnimation (the value is 1 at rest).
 func (a *shelf) backRow(c *ui.Context, t float32) {
 	cur := a.currentPage()
-	name, count := cur.title()
+	name := cur.title()
 	row := ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(4).AlignItems(ui.Center)
 	var navs map[pageID]ui.Element
 	row.Children(func() {
-		title := ui.Row(c.Key("back-title")).Height(22).AlignItems(ui.Center).Clip()
+		title := ui.Row(c.Key("back-title")).Width(a.backTitleWidth(c)).Height(22).
+			AlignItems(ui.Center).Clip()
 		title.Children(func() {
-			// The labels share one slot: the outgoing name leaves over the
-			// first share, the incoming one arrives after it. The slot is
-			// as wide as the incoming name, so the page icons never move
-			// during a switch.
+			// The labels share that one slot: the outgoing name leaves over
+			// the first share, the incoming one arrives after it.
 			if t < tabOutShare && a.tabFrom != a.tab {
 				if from := a.page(a.tabFrom); from != nil && from.enabled() {
-					oldName, oldCount := from.title()
 					old := ui.Row(c.Key("back-name-out")).Absolute().Left(0).Top(0).Height(22).
-						AlignItems(ui.Center).Gap(2).Opacity(1 - ui.EaseIn(t/tabOutShare))
+						AlignItems(ui.Center).Opacity(1 - ui.EaseIn(t/tabOutShare))
 					old.Children(func() {
-						panelLabel(c, nil, oldName, 11.5, 600).TextColor(ink2)
-						if oldCount != "" {
-							panelLabel(c, nil, oldCount, 10, 600).TextColor(ink3)
-						}
+						panelLabel(c, nil, from.title(), backTitleSize, backTitleWeight).TextColor(ink2)
 					})
 				}
 			}
@@ -1055,12 +1083,9 @@ func (a *shelf) backRow(c *ui.Context, t float32) {
 			if t < 1 {
 				in = ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
 			}
-			now := ui.Row(c.Key("back-name-in")).Height(22).AlignItems(ui.Center).Gap(2).Opacity(in)
+			now := ui.Row(c.Key("back-name-in")).Height(22).AlignItems(ui.Center).Opacity(in)
 			now.Children(func() {
-				panelLabel(c, nil, name, 11.5, 600).TextColor(ink2)
-				if count != "" {
-					panelLabel(c, nil, count, 10, 600).TextColor(ink3)
-				}
+				panelLabel(c, nil, name, backTitleSize, backTitleWeight).TextColor(ink2)
 			})
 			if t < 1 {
 				c.AnimationFrame()

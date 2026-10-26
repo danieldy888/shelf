@@ -64,6 +64,10 @@ var ErrLocked = errors.New("store: data directory is in use by another instance"
 // the tray's remove/clear for clipboard captures); it stays in the
 // clipboard list, is cleared by pinning or by re-adding the same
 // content, and only the clipboard page can truly remove the item.
+// OffClip is the mirror for a capture removed from the clipboard page:
+// the item stays on the tray, and a capture off both pages is deleted by
+// the next removal. Both flags are cleared by pinning and by re-adding
+// the same content.
 // Converted marks a KindFile item whose file Shelf itself created
 // inside <root>/converted: removal paths delete that file like a
 // managed image, while a plain KindFile item's path is never deleted.
@@ -78,6 +82,7 @@ type Item struct {
 	Source    string    `json:"source,omitempty"`
 	SourceApp string    `json:"sourceApp,omitempty"`
 	OffTray   bool      `json:"offTray,omitempty"`
+	OffClip   bool      `json:"offClip,omitempty"`
 	Converted bool      `json:"converted,omitempty"`
 	Missing   bool      `json:"-"`
 	// OCRText is what text recognition found in the image (empty when it
@@ -609,6 +614,7 @@ func (s *Store) addText(text string, clip bool, sourceApp string) error {
 	if idx >= 0 {
 		s.moveToFront(idx)
 		s.Items[0].OffTray = false // 重新收录同一条内容会把它带回托盘
+		s.Items[0].OffClip = false // 也会把它带回剪贴板页
 		if clip {
 			s.Items[0].Source = SourceClipboard
 			s.Items[0].SourceApp = sourceApp
@@ -691,6 +697,7 @@ func (s *Store) addImage(png []byte, clip bool, sourceApp string) error {
 			s.moveToFront(i)
 			s.Items[0].Missing = false
 			s.Items[0].OffTray = false // 重新收录同一张图片会把它带回托盘
+			s.Items[0].OffClip = false // 也会把它带回剪贴板页
 			if clip {
 				s.Items[0].Source = SourceClipboard
 				s.Items[0].SourceApp = sourceApp
@@ -814,21 +821,23 @@ func (s *Store) Remove(id string) error {
 
 // SetPinned marks or unmarks the item with the given id as pinned and
 // persists atomically (memory rolls back on save failure). Pinning also
-// clears OffTray: a pinned item belongs at the top of both pages. An
-// unknown id is an error; setting the flag to its current value is a
-// no-op unless pinning an off-tray item, which still saves to unhide it.
+// clears OffTray and OffClip: a pinned item belongs at the top of both
+// pages. An unknown id is an error; setting the flag to its current value
+// is a no-op unless pinning an item hidden from a page, which still saves
+// to unhide it.
 func (s *Store) SetPinned(id string, pinned bool) error {
 	idx := slices.IndexFunc(s.Items, func(it Item) bool { return it.ID == id })
 	if idx < 0 {
 		return fmt.Errorf("store: no item with id %q", id)
 	}
-	if s.Items[idx].Pinned == pinned && (!pinned || !s.Items[idx].OffTray) {
+	if s.Items[idx].Pinned == pinned && (!pinned || (!s.Items[idx].OffTray && !s.Items[idx].OffClip)) {
 		return nil
 	}
 	old := s.Items[idx]
 	s.Items[idx].Pinned = pinned
 	if pinned {
 		s.Items[idx].OffTray = false
+		s.Items[idx].OffClip = false
 	}
 	if err := s.Save(); err != nil {
 		s.Items[idx] = old
@@ -874,6 +883,22 @@ func (s *Store) RemoveMany(ids []string) (int, error) {
 // to hide => no write, (0, nil). On save failure memory is rolled back.
 // Returns how many items were newly hidden.
 func (s *Store) HideFromTray(ids []string) (int, error) {
+	return s.hideFrom(ids, func(it *Item) *bool { return &it.OffTray })
+}
+
+// HideFromClipboard marks the items with the given IDs OffClip and saves
+// once — the clipboard page's mirror of HideFromTray: the capture stays
+// on the tray, and no managed file is touched. Unknown IDs and items
+// already off the clipboard are ignored; nothing to hide => no write,
+// (0, nil). On save failure memory is rolled back. Returns how many items
+// were newly hidden.
+func (s *Store) HideFromClipboard(ids []string) (int, error) {
+	return s.hideFrom(ids, func(it *Item) *bool { return &it.OffClip })
+}
+
+// hideFrom sets the flag off picks on the items with the given IDs and
+// saves once; it is the shared body of the two HideFrom* methods.
+func (s *Store) hideFrom(ids []string, off func(*Item) *bool) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -884,8 +909,11 @@ func (s *Store) HideFromTray(ids []string) (int, error) {
 	old := slices.Clone(s.Items)
 	n := 0
 	for i := range s.Items {
-		if _, ok := want[s.Items[i].ID]; ok && !s.Items[i].OffTray {
-			s.Items[i].OffTray = true
+		if _, ok := want[s.Items[i].ID]; !ok {
+			continue
+		}
+		if p := off(&s.Items[i]); !*p {
+			*p = true
 			n++
 		}
 	}
@@ -1263,7 +1291,9 @@ func (s *Store) moveToFront(i int) {
 }
 
 // trimText keeps only the textLimit newest unpinned text items; pinned
-// texts are never evicted and do not count towards the limit.
+// texts are never evicted and do not count towards the limit. Items
+// hidden from a page (OffTray, OffClip) still count: hiding a row never
+// lets the history grow past the limit.
 func (s *Store) trimText() {
 	limit := s.textLimit
 	if limit < 1 {

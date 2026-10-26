@@ -555,23 +555,10 @@ func (p *homePage) clipBody(c *ui.Context, card ui.Element, w layout.Widget) {
 }
 
 // clipboardItemAt is the n-th clipboard capture (pinned first, newest
-// within each group), used by the 2×2 clipboard widget's second line.
+// within each group, the page's own order), used by the 2×2 clipboard
+// widget's second line.
 func (a *shelf) clipboardItemAt(n int) (store.Item, bool) {
-	if a.store == nil {
-		return store.Item{}, false
-	}
-	var pinned, rest []store.Item
-	for _, it := range a.store.Items {
-		if it.Source != store.SourceClipboard {
-			continue
-		}
-		if it.Pinned {
-			pinned = append(pinned, it)
-		} else {
-			rest = append(rest, it)
-		}
-	}
-	items := append(pinned, rest...)
+	items := a.clipboardHistory()
 	if n < 0 || n >= len(items) {
 		return store.Item{}, false
 	}

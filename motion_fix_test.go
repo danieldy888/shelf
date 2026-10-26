@@ -187,7 +187,7 @@ func (p *tallPage) icon(c *ui.Context, active bool) ui.Element {
 func (p *tallPage) body(c *ui.Context, over bool, live bool) ui.Element {
 	return ui.Box(c).Grow(1)
 }
-func (p *tallPage) title() (string, string) { return "高页", "" }
+func (p *tallPage) title() string { return "高页" }
 func (p *tallPage) actions(c *ui.Context) []ui.Element {
 	return nil
 }

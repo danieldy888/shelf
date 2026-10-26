@@ -36,8 +36,10 @@ type panelPage interface {
 	icon(c *ui.Context, active bool) ui.Element
 	enabled() bool                                       // false keeps the icon off the panel and falls the current page back to the tray
 	body(c *ui.Context, over bool, live bool) ui.Element // the fixed 396 × 174 content
-	title() (name, count string)                         // the back row's plain 「名称 数量」; empty count shows nothing
-	actions(c *ui.Context) []ui.Element                  // the back row's right side, appended in order
+	// title is the back row's plain page name. Its slot is as wide as the
+	// widest enabled page name, so the icons behind it never move.
+	title() string
+	actions(c *ui.Context) []ui.Element // the back row's right side, appended in order
 }
 
 // ensurePages registers the built-in pages once; later pages are appended
@@ -202,9 +204,7 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	})
 }
 
-func (p *trayPage) title() (name, count string) {
-	return "托盘", fmt.Sprintf("%d 项", len(p.items()))
-}
+func (p *trayPage) title() string { return "托盘" }
 
 func (p *trayPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
@@ -244,25 +244,40 @@ func (p *clipboardPage) icon(c *ui.Context, _ bool) ui.Element {
 func (p *clipboardPage) enabled() bool { return true }
 
 // items is the page's list: clipboard captures matching the (already
-// trimmed) search text; pinned first.
+// trimmed) search text; pinned first. Captures removed from this page
+// (OffClip) are gone from it while they stay on the tray.
 func (p *clipboardPage) items() []store.Item {
 	a := p.host
 	if a.store == nil {
 		return nil
 	}
 	query := strings.ToLower(strings.TrimSpace(a.search))
-	var pinned, rest []store.Item
+	visible := make([]store.Item, 0, len(a.store.Items))
 	for _, it := range a.store.Items {
-		if it.Source != store.SourceClipboard || !clipboardItemMatches(it, query) {
+		if it.Source != store.SourceClipboard || it.OffClip || !clipboardItemMatches(it, query) {
 			continue
 		}
+		visible = append(visible, it)
+	}
+	return clipboardOrder(visible)
+}
+
+// clipboardOrder is the capture list's order: pinned first, newest first
+// within each group. The page and the 剪贴板最新 card share it, so the
+// card shows what the page shows.
+func clipboardOrder(items []store.Item) []store.Item {
+	out := make([]store.Item, 0, len(items))
+	for _, it := range items {
 		if it.Pinned {
-			pinned = append(pinned, it)
-		} else {
-			rest = append(rest, it)
+			out = append(out, it)
 		}
 	}
-	return append(pinned, rest...)
+	for _, it := range items {
+		if !it.Pinned {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
@@ -292,9 +307,7 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	})
 }
 
-func (p *clipboardPage) title() (name, count string) {
-	return "剪贴板", fmt.Sprintf("%d 条", len(p.items()))
-}
+func (p *clipboardPage) title() string { return "剪贴板" }
 
 // actions is the back row's right side: the compact search box and, when
 // there is something to clear, the trash button. While the page is the

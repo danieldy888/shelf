@@ -376,30 +376,51 @@ func (a *shelf) removeExcludedApp(bundleID string) {
 	a.applySettings(next)
 }
 
-// remove takes items off the shelf; original files stay. On the tray
-// page, removing a clipboard capture only hides it from the tray — the
-// clipboard page keeps it and only its own 移除/清空 truly deletes —
-// while every other item is deleted outright. On the clipboard page all
-// of them are deleted.
+// remove takes items off the shelf; original files stay. A clipboard
+// capture is only hidden from the page it is removed on while it still
+// shows on the other one: the tray's 移除/清空 hides it from the tray
+// (OffTray) and the clipboard's hides it from the clipboard (OffClip),
+// each leaving the other page alone. Everything else — an item living on
+// this page only, a capture already hidden from the other page, and a
+// plain file — is deleted outright.
 func (a *shelf) remove(items []store.Item) { a.removeFrom(items, a.currentPage().id()) }
 
 // removeFrom is remove as done from page id.
 func (a *shelf) removeFrom(items []store.Item, id pageID) {
-	var hide, del []string
+	// What the tray page is showing is the one rule for "still reachable
+	// from the tray" — its filter (OffTray, a drag-out in its grace,
+	// unpinned clipboard text) is not copied here.
+	onTray := make(map[string]bool, len(items))
+	for _, it := range a.itemsFor(pageTray) {
+		onTray[it.ID] = true
+	}
+	var hideTray, hideClip, del []string
 	for _, it := range items {
-		if id == pageTray && it.Source == store.SourceClipboard {
-			hide = append(hide, it.ID)
-		} else {
+		switch {
+		case id == pageTray && it.Source == store.SourceClipboard && !it.OffClip:
+			hideTray = append(hideTray, it.ID)
+		case id == pageClipboard && !it.OffClip && onTray[it.ID]:
+			hideClip = append(hideClip, it.ID)
+		default:
+			// A clipboard capture hidden from both pages would linger
+			// invisible forever, so it is deleted like any other item.
 			del = append(del, it.ID)
 		}
 	}
 	hidden := 0
-	if len(hide) > 0 {
-		n, err := a.store.HideFromTray(hide)
+	if len(hideTray) > 0 {
+		n, err := a.store.HideFromTray(hideTray)
 		if err != nil {
 			a.report(err)
 		}
-		hidden = n
+		hidden += n
+	}
+	if len(hideClip) > 0 {
+		n, err := a.store.HideFromClipboard(hideClip)
+		if err != nil {
+			a.report(err)
+		}
+		hidden += n
 	}
 	n := 0
 	if len(del) > 0 {

@@ -17,7 +17,7 @@ import (
 )
 
 // TestToolsPageRenders builds the expanded panel headless on the tools
-// tab and checks the module bar and the cards appear.
+// tab and checks the back row's page name and the cards appear.
 func TestToolsPageRenders(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -27,13 +27,13 @@ func TestToolsPageRenders(t *testing.T) {
 	a := &shelf{store: s, tab: pageTools, visible: true}
 	view := ui.NewTester(a.view, sheetW, sheetH)
 	if !view.HasText("工具") {
-		t.Fatal("module bar did not show 工具")
+		t.Fatal("the back row did not show 工具")
 	}
 	if !view.HasText("压缩到 1 MB") {
 		t.Fatal("default cards missing")
 	}
-	if !view.HasText("项") {
-		t.Fatal("module count missing")
+	if view.HasText("项") {
+		t.Fatal("the back row still shows the card count")
 	}
 }
 
