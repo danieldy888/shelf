@@ -3,13 +3,14 @@
 package main
 
 // Level geometry and navigation: the island opens first, a page icon opens
-// the sheet, and ‹ / Esc / outside clicks / the shortcut close it in the
+// the sheet, and Esc / outside clicks / the shortcut close it in the
 // documented order. Every page must fit the fixed 396 × 174 content box
 // without clipped or wrapped text.
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,9 +57,6 @@ func TestIslandOpensFirstAndPageIconOpensSheet(t *testing.T) {
 	if !view.HasText("托盘 1 项 · 剪贴板 12 条") {
 		t.Fatalf("the island lost its counts; texts %v", view.Texts())
 	}
-	if view.HasText("返回一级岛") {
-		t.Fatal("the island drew a sheet back row")
-	}
 	if err := view.Click("托盘"); err != nil {
 		t.Fatalf("island page icon: %v", err)
 	}
@@ -67,14 +65,61 @@ func TestIslandOpensFirstAndPageIconOpensSheet(t *testing.T) {
 	}
 	view.Frame()
 	name, count := a.currentPage().title()
-	if !view.HasText("返回一级岛 · " + name + " " + count) {
-		t.Fatalf("the sheet lost its back row; texts %v", view.Texts())
+	if _, ok := view.Find(name); !ok {
+		t.Fatalf("the sheet lost its back-row page name %q; texts %v", name, view.Texts())
 	}
-	if err := view.Click("返回一级岛 · " + name + " " + count); err != nil {
-		t.Fatalf("back button: %v", err)
+	if _, ok := view.Find(count); !ok {
+		t.Fatalf("the sheet lost its back-row count %q; texts %v", count, view.Texts())
 	}
+	// Esc is the way back now: the title is plain text with no ‹ and no
+	// click of its own.
+	view.Key(0, ui.KeyEscape)
 	if a.currentLevel() != 1 {
-		t.Fatalf("back left level %d, want the island", a.currentLevel())
+		t.Fatalf("Esc left level %d, want the island", a.currentLevel())
+	}
+}
+
+// TestBackRowTitleHasNoBackControl: the back row's left edge is the page's
+// plain 「名称 数量」 title, aligned with the content box — no ‹, no
+// clickable back and no 「返回一级岛」 label. Clicking the title keeps the
+// sheet open; Esc is what steps back to the island.
+func TestBackRowTitleHasNoBackControl(t *testing.T) {
+	a, view := levelShelf(t)
+	a.visible, a.level = true, 2
+	left := float32((sheetW - contentW) / 2)
+	for _, id := range []pageID{pageHome, pageTray, pageClipboard} {
+		a.setTab(id)
+		view.Frame()
+		view.Frame()
+		name, count := a.page(id).title()
+		r, ok := view.Find(name)
+		if !ok {
+			t.Fatalf("%s: the page title %q is missing; texts %v", id, name, view.Texts())
+		}
+		if r.X < left-0.5 || r.X > left+0.5 {
+			t.Fatalf("%s: the title starts at %.1f, want the content's left edge %.1f", id, r.X, left)
+		}
+		if count != "" {
+			if _, ok := view.Find(count); !ok {
+				t.Fatalf("%s: the count %q is missing; texts %v", id, count, view.Texts())
+			}
+		}
+		for _, text := range view.Texts() {
+			if strings.Contains(text, "‹") || strings.Contains(text, "返回") {
+				t.Fatalf("%s: the back row still shows a back control %q; texts %v", id, text, view.Texts())
+			}
+		}
+		if err := view.Click(name); err != nil {
+			t.Fatalf("%s: clicking the title: %v", id, err)
+		}
+		if a.currentLevel() != 2 {
+			t.Fatalf("%s: clicking the title went back to the island", id)
+		}
+		view.Key(0, ui.KeyEscape)
+		if a.currentLevel() != 1 || !a.visible {
+			t.Fatalf("%s: Esc left level %d visible=%v, want the island", id, a.currentLevel(), a.visible)
+		}
+		a.setLevel(2)
 	}
 }
 

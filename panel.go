@@ -29,7 +29,6 @@ var (
 	trashSymbol     = symbol(`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>`)
 	gearSymbol      = symbol(`<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6"/>`)
 	chevronUpSymbol = symbol(`<path d="M6 15l6-6 6 6"/>`)
-	backSymbol      = symbolWidth(`<path d="M14.5 6 8.5 12l6 6"/>`, 2)
 	chevronDownSym  = symbolWidth(`<path d="M6 9l6 6 6-6"/>`, 2.2)
 	searchSymbol    = symbol(`<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>`)
 )
@@ -250,7 +249,7 @@ const (
 	tileArt     = 40  // 缩略图边长
 	clipRowH    = 30  // 剪贴板行高
 	clipRowGap  = 0   // 行紧挨着，同原型 .cl
-	clipSearchW = 140 // 收窄 10pt：返回行要放下「‹ 名字 数量」、5 个页面图标、搜索框与清空
+	clipSearchW = 140 // 收窄 10pt：返回行要放下「名字 数量」、5 个页面图标、搜索框与清空
 	clipSearchH = 22
 	// earMaxPages is how many page icons the back row (and the island)
 	// carries: one per page of the design.
@@ -986,67 +985,53 @@ func (a *shelf) backPages() []panelPage {
 	return out
 }
 
-// backRow is the sheet's 26pt row: 「‹ 页面名 数量」, the five page icons
-// with the active page's capsule, then the current page's own buttons.
-// t is the page switch's progress: the name crossfades and the capsule
-// glides over tabAnimation (the value is 1 at rest).
+// backRow is the sheet's 26pt row: the page's 「名称 数量」 as a plain
+// title, the five page icons with the active page's capsule, then the
+// current page's own buttons. The title is text, not a control — the sheet
+// goes back to the island with Esc, an outside click or the shortcut, so
+// the row carries no back button. t is the page switch's progress: the
+// title crossfades and the capsule glides over tabAnimation (the value is
+// 1 at rest).
 func (a *shelf) backRow(c *ui.Context, t float32) {
 	cur := a.currentPage()
 	name, count := cur.title()
 	row := ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(4).AlignItems(ui.Center)
 	var navs map[pageID]ui.Element
 	row.Children(func() {
-		label := name
-		if count != "" {
-			label += " " + count
-		}
-		back := ui.ButtonBase(c.Key("back")).Height(22).Radius(11).Padding(0, 6, 0, 4).
-			Label("返回一级岛 · " + label).Tooltip("返回")
-		if back.Hovered() {
-			back.Background(fill1)
-		}
-		back.Children(func() {
-			ui.Row(c.Key("back-in")).AlignItems(ui.Center).Gap(2).Children(func() {
-				ui.Icon(c, backSymbol).Size(14, 14).TextColor(ink2)
-				slot := ui.Row(c.Key("back-name")).Height(22).AlignItems(ui.Center).Clip()
-				slot.Children(func() {
-					// The labels share one slot: the outgoing name leaves
-					// over the first share, the incoming one arrives after
-					// it. The slot is as wide as the incoming name, so the
-					// page icons never move during a switch.
-					if t < tabOutShare && a.tabFrom != a.tab {
-						if from := a.page(a.tabFrom); from != nil && from.enabled() {
-							oldName, oldCount := from.title()
-							old := ui.Row(c.Key("back-name-out")).Absolute().Left(0).Top(0).Height(22).
-								AlignItems(ui.Center).Gap(2).Opacity(1 - ui.EaseIn(t/tabOutShare))
-							old.Children(func() {
-								panelLabel(c, nil, oldName, 11.5, 600).TextColor(ink2)
-								if oldCount != "" {
-									panelLabel(c, nil, oldCount, 10, 600).TextColor(ink3)
-								}
-							})
-						}
-					}
-					in := float32(1)
-					if t < 1 {
-						in = ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
-					}
-					now := ui.Row(c.Key("back-name-in")).Height(22).AlignItems(ui.Center).Gap(2).Opacity(in)
-					now.Children(func() {
-						panelLabel(c, nil, name, 11.5, 600).TextColor(ink2)
-						if count != "" {
-							panelLabel(c, nil, count, 10, 600).TextColor(ink3)
+		title := ui.Row(c.Key("back-title")).Height(22).AlignItems(ui.Center).Clip()
+		title.Children(func() {
+			// The labels share one slot: the outgoing name leaves over the
+			// first share, the incoming one arrives after it. The slot is
+			// as wide as the incoming name, so the page icons never move
+			// during a switch.
+			if t < tabOutShare && a.tabFrom != a.tab {
+				if from := a.page(a.tabFrom); from != nil && from.enabled() {
+					oldName, oldCount := from.title()
+					old := ui.Row(c.Key("back-name-out")).Absolute().Left(0).Top(0).Height(22).
+						AlignItems(ui.Center).Gap(2).Opacity(1 - ui.EaseIn(t/tabOutShare))
+					old.Children(func() {
+						panelLabel(c, nil, oldName, 11.5, 600).TextColor(ink2)
+						if oldCount != "" {
+							panelLabel(c, nil, oldCount, 10, 600).TextColor(ink3)
 						}
 					})
-					if t < 1 {
-						c.AnimationFrame()
-					}
-				})
+				}
+			}
+			in := float32(1)
+			if t < 1 {
+				in = ui.EaseOut(max(t-tabOutShare, 0) / (1 - tabOutShare))
+			}
+			now := ui.Row(c.Key("back-name-in")).Height(22).AlignItems(ui.Center).Gap(2).Opacity(in)
+			now.Children(func() {
+				panelLabel(c, nil, name, 11.5, 600).TextColor(ink2)
+				if count != "" {
+					panelLabel(c, nil, count, 10, 600).TextColor(ink3)
+				}
 			})
+			if t < 1 {
+				c.AnimationFrame()
+			}
 		})
-		if back.Clicked() {
-			a.setLevel(1)
-		}
 		navs = map[pageID]ui.Element{}
 		ui.Row(c.Key("page-strip")).Gap(2).AlignItems(ui.Center).Children(func() {
 			for _, q := range a.backPages() {

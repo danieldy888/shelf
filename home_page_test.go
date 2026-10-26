@@ -207,8 +207,14 @@ func TestHomeIsTheFirstIslandPageAndOpensTheSheet(t *testing.T) {
 		t.Fatalf("home icon: level=%d tab=%s, want the sheet on 主页", a.currentLevel(), a.tab)
 	}
 	view.Frame()
-	if !view.HasText("返回一级岛 · 主页") {
-		t.Fatalf("the sheet lost its home back row; texts %v", view.Texts())
+	// The back row is the page's plain title at the content's left edge;
+	// there is no ‹ and no 「返回一级岛」 label to click.
+	left := float32((sheetW - contentW) / 2)
+	if r, ok := view.Find("主页"); !ok || r.X < left-0.5 || r.X > left+0.5 {
+		t.Fatalf("the sheet lost its 主页 title at the content's left edge; texts %v", view.Texts())
+	}
+	if view.HasText("返回一级岛") || view.HasText("‹") {
+		t.Fatalf("the home back row drew a back control; texts %v", view.Texts())
 	}
 }
 

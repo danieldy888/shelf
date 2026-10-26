@@ -36,7 +36,7 @@ type panelPage interface {
 	icon(c *ui.Context, active bool) ui.Element
 	enabled() bool                                       // false keeps the icon off the panel and falls the current page back to the tray
 	body(c *ui.Context, over bool, live bool) ui.Element // the fixed 396 × 174 content
-	title() (name, count string)                         // the back row's 「‹ 名称 数量」; empty count shows nothing
+	title() (name, count string)                         // the back row's plain 「名称 数量」; empty count shows nothing
 	actions(c *ui.Context) []ui.Element                  // the back row's right side, appended in order
 }
 
