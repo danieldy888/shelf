@@ -388,6 +388,10 @@ func (a *shelf) commitPin(it *pinItem) bool {
 // restore paths can be tested without a window server.
 var pinOpenWindow = func(it *pinItem) { it.openWindow(false) }
 
+// pinOpenPreview opens the transient window a drag follows the pointer in;
+// the same seam, for the tools page and the home canvas.
+var pinOpenPreview = func(it *pinItem) { it.openWindow(true) }
+
 // openWindow creates a non-activating card panel. A preview ignores mouse
 // events and sits above the source panel; a committed pin floats at level 3.
 func (it *pinItem) openWindow(preview bool) {

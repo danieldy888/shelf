@@ -85,6 +85,14 @@ type homePage struct {
 	jiggle    string
 	jiggleAt  time.Time
 
+	// preview is the window a drag follows the pointer in once the copy
+	// leaves the canvas: the page clips its own drawing at the content
+	// box, so the copy is only visible there through a window of its own.
+	// viewport is the canvas' box in window coordinates (the previous
+	// frame's), which tells the preview where that edge is.
+	preview  dragPreview
+	viewport ui.Rect
+
 	// active is the set of widgets that took cells the last time the page
 	// drew. A widget that comes back after its feature was off is compared
 	// against it: one whose stored cells were taken in the meantime goes
@@ -183,8 +191,9 @@ func (a *shelf) homePageOf() *homePage {
 // resetHomeEdit ends editing and the picker; called on hide and on
 // leaving the page so re-entry starts clean.
 func (a *shelf) resetHomeEdit() {
-	if p := a.homePageOf(); p != nil && (p.editing || p.picking || p.press != nil) {
+	if p := a.homePageOf(); p != nil && (p.editing || p.picking || p.press != nil || p.preview.window() != nil) {
 		p.editing, p.picking, p.press = false, false, nil
+		p.preview.close()
 		p.jiggle = ""
 		if a.win != nil {
 			a.win.Invalidate()
@@ -304,6 +313,7 @@ func (p *homePage) body(c *ui.Context, _ bool, live bool) ui.Element {
 		return p.pickerBody(c, live)
 	}
 	canvas := ui.Column(c.Key("home-canvas")).Width(contentW).Height(contentH)
+	p.viewport = canvas.Bounds()
 	canvas.Children(func() {
 		for _, w := range p.homeWidgets() {
 			p.homeWidget(c, w, live)
@@ -311,7 +321,9 @@ func (p *homePage) body(c *ui.Context, _ bool, live bool) ui.Element {
 		if p.editing {
 			p.homeAddCell(c, live)
 		}
-		if d := p.press; d != nil && d.dragging {
+		// Inside the box the page draws the lifted copy; past its edge the
+		// preview window carries it, so only one of the two is shown.
+		if d := p.press; d != nil && d.dragging && p.preview.window() == nil {
 			p.homeLifted(c, *d)
 		}
 	})
@@ -489,6 +501,27 @@ func (p *homePage) homeLifted(c *ui.Context, d homePress) {
 		Scale(1.06, 1.06).TransformOrigin(0.5, 0.5).PassThrough()
 }
 
+// syncPreview moves the drag's preview window out to the pointer, or
+// closes it while the pointer is still over the canvas. The page draws the
+// lifted copy itself and clips it at the content box, so the copy is only
+// whole inside; past that edge the window shows the card the drop would
+// pin, at the width homePinSpan picks. A widget may be as large as the box
+// (2×2), so the pointer — not the copy's rectangle — decides.
+func (p *homePage) syncPreview(d *homePress) {
+	a := p.host
+	span := homePinSpan(d.id, d.orig.W)
+	cardW := pinCardW
+	if span == 2 {
+		cardW = pinCardW2
+	}
+	cursor := mygo.Point{
+		X: a.frame.X + int(math.Round(float64(p.viewport.X+d.px))),
+		Y: a.frame.Y + int(math.Round(float64(p.viewport.Y+d.py))),
+	}
+	inside := d.px >= 0 && d.px <= contentW && d.py >= 0 && d.py <= contentH
+	a.syncDragPreview(&p.preview, d.id, span, cardW, d.grabDX, d.grabDY, cursor, inside)
+}
+
 // homeInput wires the widget's press: long press to edit, drag to a free
 // cell, release outside the panel to pin, tap to run.
 func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, editing, live bool) {
@@ -517,6 +550,7 @@ func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, ed
 			}
 			d.px, d.py = d.cardX+ev.X, d.cardY+ev.Y
 			if d.dragging {
+				p.syncPreview(d) // follow the pointer outside the canvas
 				return true
 			}
 			if hypot(d.px-d.downX, d.py-d.downY) <= homeDragSlop {
@@ -524,6 +558,7 @@ func (p *homePage) homeInput(c *ui.Context, card ui.Element, w layout.Widget, ed
 			}
 			if p.editing {
 				d.dragging = true
+				p.syncPreview(d)
 			} else {
 				d.suppress = true
 			}
@@ -585,6 +620,7 @@ func (p *homePage) homeTapped(w layout.Widget) {
 // release is outside the panel, or flies it back.
 func (p *homePage) homeDrop(d *homePress) {
 	a := p.host
+	defer p.preview.close() // a landed drag leaves no copy on the desktop
 	inside := d.px >= 0 && d.px <= contentW && d.py >= 0 && d.py <= contentH
 	target := layout.Widget{X: d.orig.X, Y: d.orig.Y, W: d.orig.W, H: d.orig.H}
 	if inside {
@@ -619,7 +655,21 @@ func (p *homePage) homeDrop(d *homePress) {
 			if edge != pinFree {
 				frame = pinStripFrame(edge, area, cursor.Y)
 			}
-			if a.addPin(d.id, span, disp, edge, false, frame) != nil {
+			// The preview the drag was following becomes the pin: the card
+			// stays under the pointer instead of blinking out and back.
+			if it := p.preview.take(); it != nil {
+				it.span, it.cardW = span, w
+				it.display, it.edge, it.expanded, it.frame = disp, edge, edge == pinFree, frame
+				if a.commitPin(it) {
+					p.press = nil
+					return
+				}
+				if it.win != nil {
+					it.win.Hide()
+					it.win.Destroy()
+					it.win = nil
+				}
+			} else if a.addPin(d.id, span, disp, edge, false, frame) != nil {
 				p.press = nil
 				return
 			}

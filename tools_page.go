@@ -71,8 +71,8 @@ type toolPress struct {
 type toolsPage struct {
 	host     *shelf
 	scroll   ui.ScrollState
-	viewport ui.Rect  // previous frame's scroll viewport, in window coordinates
-	preview  *pinItem // transient drag window; absent from layout and live pins
+	viewport ui.Rect     // previous frame's scroll viewport, in window coordinates
+	preview  dragPreview // transient drag window; absent from layout and live pins
 
 	editing   bool
 	picking   bool
@@ -294,7 +294,7 @@ func (p *toolsPage) body(c *ui.Context, _ bool, live bool) ui.Element {
 					}
 					p.toolCell(c, cell, editing, live, band*edgeBlurPerPT*w)
 				}
-				if d != nil && d.dragging && p.preview == nil {
+				if d != nil && d.dragging && p.preview.window() == nil {
 					p.toolLiftedCard(c, *d)
 				}
 			})
@@ -549,11 +549,15 @@ func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
 				frame = pinStripFrame(edge, area, cursor.Y) // the 24 pt edge rule, same as pin drags
 			}
 			var committed bool
-			if it := p.preview; it != nil {
+			if it := p.preview.take(); it != nil {
 				it.display, it.edge, it.expanded, it.frame = disp, edge, edge == pinFree, frame
 				committed = a.commitPin(it)
-				if committed {
-					p.preview = nil // the committed pin now owns this window
+				if !committed {
+					if it.win != nil {
+						it.win.Hide()
+						it.win.Destroy()
+						it.win = nil
+					}
 				}
 			} else {
 				committed = a.addPin(d.id, span, disp, edge, false, frame) != nil
