@@ -277,12 +277,20 @@ const (
 	pageWarmOpacity = 0.006
 )
 
+// pageSwitchPhase overrides the page switch's progress for a headless
+// view (a live window always reads a.tabPhase). Tests install it to render
+// the fading layers and their hit behaviour; production leaves it nil.
+var pageSwitchPhase func(a *shelf, now time.Time) float32
+
 // pageMotion is how far the current page switch has run and which side the
 // new page arrives from: the pages sit left to right as their icons do, so
 // going right the new page comes from the right.
 func (a *shelf) pageMotion(now time.Time) (t, dir float32) {
 	t = 1
-	if a.win != nil {
+	switch {
+	case pageSwitchPhase != nil:
+		t = pageSwitchPhase(a, now)
+	case a.win != nil:
 		t = a.tabPhase(now)
 	}
 	dir = 1
@@ -855,6 +863,12 @@ func (a *shelf) pageBody(c *ui.Context, over bool) {
 	a.backRow(c, t)
 	ui.Box(c.Key("page-gap")).Height(contentGap)
 	ui.Column(c.Key("page-content")).Width(contentW).Height(contentH).Clip().Children(func() {
+		// The warm layer goes first, under the visible page: its rows are
+		// drawn (their glyphs, thumbnails and layouts are the point) but
+		// every hit lands on the page above it — the frame's own box and
+		// its children come later in the hit tree, so a click, a
+		// right-click, a drag or the wheel can never reach the unseen page.
+		a.warmPage(c)
 		if t < tabOutShare && a.tabFrom != a.tab {
 			// The outgoing page is only a picture: it takes no pointer and
 			// never the keyboard. It may already be disabled; an
@@ -893,7 +907,15 @@ func (a *shelf) pageBody(c *ui.Context, over bool) {
 			c.AnimationFrame()
 		}
 		frame.Children(func() { a.currentPage().body(c, over, true) })
-		a.warmPage(c)
+		if t < tabOutShare {
+			// Neither page is a target in a switch's first phase: the old
+			// one is only a picture and the new one is still invisible
+			// (pageWarmOpacity). A plain box with no handler takes the hit
+			// chain, so nothing behind it — the fading pages included — can
+			// copy, drag, open a menu or move a slider. Once the new page
+			// starts to fade in (t >= tabOutShare) it takes the pointer.
+			ui.Box(c.Key("page-shield")).Absolute().Left(0).Top(0).Right(0).Bottom(0)
+		}
 	})
 }
 
@@ -903,7 +925,7 @@ func (a *shelf) pageBody(c *ui.Context, over bool) {
 // the user switches to it.
 func (a *shelf) warmPage(c *ui.Context) {
 	id := a.warming
-	if id == "" || a.win == nil || a.tabPhase(c.Now()) < 1 {
+	if id == "" || a.tabPhase(c.Now()) < 1 {
 		return
 	}
 	if a.warmed == nil {
@@ -912,11 +934,13 @@ func (a *shelf) warmPage(c *ui.Context) {
 	if id == a.tab {
 		// The user switched to it first: drawing it for real warms it.
 		a.warmed[id], a.warming = true, ""
+		a.warmDone()
 		return
 	}
 	p := a.page(id)
 	if p == nil || !p.enabled() {
 		a.warming = ""
+		a.warmDone()
 		return
 	}
 	hidden := ui.Column(c.Key("warm-" + string(id))).Absolute().Left(0).Right(0).Top(0).Bottom(0).
@@ -924,6 +948,16 @@ func (a *shelf) warmPage(c *ui.Context) {
 	hidden.Children(func() { p.body(c, false, false) })
 	a.warmed[id] = true
 	a.warming = ""
+	a.warmDone()
+}
+
+// warmDone asks for the frame that drops the warm layer it just drew: the
+// layer lives in the last built scene (and its hit tree) until a repaint,
+// and nothing else may repaint a resting panel.
+func (a *shelf) warmDone() {
+	if a.win != nil {
+		a.win.Invalidate()
+	}
 }
 
 // nextWarmPage queues one page that was never drawn, for the next frame's
@@ -987,11 +1021,11 @@ func (a *shelf) backPages() []panelPage {
 
 // backRow is the sheet's 26pt row: the page's 「名称 数量」 as a plain
 // title, the five page icons with the active page's capsule, then the
-// current page's own buttons. The title is text, not a control — the sheet
-// goes back to the island with Esc, an outside click or the shortcut, so
-// the row carries no back button. t is the page switch's progress: the
-// title crossfades and the capsule glides over tabAnimation (the value is
-// 1 at rest).
+// current page's own buttons. The title is text, not a control — Esc steps
+// back to the island, while an outside click and the shortcut fold the
+// panel away — so the row carries no back button. t is the page switch's
+// progress: the title crossfades and the capsule glides over tabAnimation
+// (the value is 1 at rest).
 func (a *shelf) backRow(c *ui.Context, t float32) {
 	cur := a.currentPage()
 	name, count := cur.title()
@@ -1522,6 +1556,7 @@ func (a *shelf) setLevel(level int) {
 	}
 	a.level = level
 	a.tabFrom = a.tab
+	a.tabAt = time.Time{}
 	a.tabOutK, a.tabOutShift = 1, 0
 	if level == 2 {
 		// A fresh opening warms every page again: textures and the glyph
@@ -1602,7 +1637,7 @@ func (a *shelf) setTab(id pageID) {
 	}
 	now := time.Now()
 	outK, outShift, from := float32(1), float32(0), cur
-	if a.win != nil && !a.tabAt.IsZero() {
+	if !a.tabAt.IsZero() {
 		// A switch is still running: carry the picture on screen into this
 		// one, so rapid switching continues instead of flashing the page
 		// that was arriving.
@@ -1614,6 +1649,9 @@ func (a *shelf) setTab(id pageID) {
 				// it is instead of rising again.
 				from = a.tabFrom
 				outK = a.tabOutK * (1 - ui.EaseIn(ph/tabOutShare))
+				// The picture is also part-way through its 8pt settle:
+				// start this fade at the offset it has reached.
+				outShift = a.tabOutShift * (1 - ph/tabOutShare)
 			} else {
 				in := ui.EaseOut((ph - tabOutShare) / (1 - tabOutShare))
 				outK = in
