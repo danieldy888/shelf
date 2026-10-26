@@ -607,3 +607,130 @@ func TestLegacyDisabledClipboardStillRecordsAndDropsOldKey(t *testing.T) {
 		t.Fatalf("saving dropped retained clipboard preferences: %+v, %v", again, err)
 	}
 }
+
+// clipModuleShelf drives a clipboardModule from copyEventReader on a shelf
+// with an empty temporary store. Changing the reader between ticks models
+// macOS publishing a change's types and bytes after its changeCount bump.
+func clipModuleShelf(t *testing.T) (*shelf, *clipboardModule, *copyEventReader) {
+	t.Helper()
+	a, _, _ := clipShelf(t)
+	board := &copyEventReader{app: "com.example.Source"}
+	m := &clipboardModule{host: a, board: board, count: board.changeCount()}
+	a.clip = m
+	return a, m, board
+}
+
+// 截图等复制会在 changeCount 跳变后 20-54ms 才公布类型和字节：落在间隙里的
+// tick 必须等后续 tick 再读，并记在这次变化发生瞬间的前台应用名下。
+func TestClipboardTickWaitsForLateRepresentations(t *testing.T) {
+	a, m, board := clipModuleShelf(t)
+	now := time.Unix(1_700_000_000, 0)
+	board.app = "com.example.Screenshots"
+	board.serial++
+	m.tick(now)
+	if len(a.store.Items) != 0 {
+		t.Fatal("recorded a change whose types had not been published")
+	}
+	now = now.Add(30 * time.Millisecond)
+	m.tick(now) // still unpublished
+	if len(a.store.Items) != 0 {
+		t.Fatal("recorded a change without types")
+	}
+	// The types and PNG bytes arrive without another bump, and the frontmost
+	// app has changed meanwhile: the copy still belongs to the bump's app.
+	board.formats, board.png = []string{"public.png"}, testPNGBytes(t)
+	board.app = "com.example.Other"
+	now = now.Add(24 * time.Millisecond)
+	m.tick(now)
+	items := a.store.Items
+	if len(items) != 1 || items[0].Kind != store.KindImage || items[0].SourceApp != "com.example.Screenshots" {
+		t.Fatalf("late screenshot not recorded once with its own source: %+v", items)
+	}
+	if m.pending != nil {
+		t.Fatal("pending change survived being recorded")
+	}
+}
+
+// 内容一直不出现时，等待到期就放弃这条变化；之后真正的复制照常记录。
+func TestClipboardTickDropsUnreadableChangeAfterDeadline(t *testing.T) {
+	a, m, board := clipModuleShelf(t)
+	now := time.Unix(1_700_000_000, 0)
+	board.serial++
+	m.tick(now)
+	if m.pending == nil {
+		t.Fatal("an unreadable change was not kept pending")
+	}
+	now = now.Add(clipPublishWait - 30*time.Millisecond)
+	m.tick(now)
+	if m.pending == nil {
+		t.Fatal("gave up before the wait ran out")
+	}
+	now = now.Add(30 * time.Millisecond)
+	m.tick(now)
+	if m.pending != nil {
+		t.Fatal("pending change outlived the deadline")
+	}
+	board.serial++
+	board.formats, board.value, board.app = []string{"public.utf8-plain-text"}, "later real copy", "com.example.Editor"
+	m.tick(now.Add(30 * time.Millisecond))
+	if len(a.store.Items) != 1 || a.store.Items[0].Text != "later real copy" || a.store.Items[0].SourceApp != "com.example.Editor" {
+		t.Fatalf("a real copy after the drop was not recorded: %+v", a.store.Items)
+	}
+}
+
+// 隐藏/临时类型当场跳过，不进入等待：同一 changeCount 之后出现的文字也不收。
+func TestClipboardPrivateTypesHandledWithoutWaiting(t *testing.T) {
+	a, m, board := clipModuleShelf(t)
+	now := time.Unix(1_700_000_000, 0)
+	board.formats, board.value = []string{"org.nspasteboard.ConcealedType", "public.utf8-plain-text"}, "private fixture"
+	board.serial++
+	m.tick(now)
+	if m.pending != nil {
+		t.Fatal("a concealed copy was kept pending")
+	}
+	board.formats = []string{"public.utf8-plain-text"}
+	m.tick(now.Add(30 * time.Millisecond))
+	if len(a.store.Items) != 0 {
+		t.Fatalf("private copy recorded: %+v", a.store.Items)
+	}
+}
+
+// 等待期间 changeCount 再次跳变：丢掉旧变化，只收新的那份，来源重新取。
+func TestClipboardNewerChangeSupersedesPending(t *testing.T) {
+	a, m, board := clipModuleShelf(t)
+	now := time.Unix(1_700_000_000, 0)
+	board.app = "com.example.First"
+	board.serial++
+	m.tick(now)
+	board.serial++
+	board.app = "com.example.Second"
+	board.formats, board.value = []string{"public.utf8-plain-text"}, "second copy"
+	m.tick(now.Add(30 * time.Millisecond))
+	items := a.store.Items
+	if len(items) != 1 || items[0].Text != "second copy" || items[0].SourceApp != "com.example.Second" {
+		t.Fatalf("newer change not recorded alone: %+v", items)
+	}
+	if m.pending != nil {
+		t.Fatal("pending change survived a newer change")
+	}
+}
+
+// skipCurrent 连等待中的变化一起清掉：Shelf 自己写剪贴板后不再回头收它。
+func TestClipboardSkipCurrentClearsPending(t *testing.T) {
+	a, m, board := clipModuleShelf(t)
+	now := time.Unix(1_700_000_000, 0)
+	board.serial++
+	m.tick(now)
+	if m.pending == nil {
+		t.Fatal("an unreadable change was not kept pending")
+	}
+	m.skipCurrent()
+	if m.pending != nil {
+		t.Fatal("skipCurrent left the pending change behind")
+	}
+	board.formats, board.png = []string{"public.png"}, testPNGBytes(t)
+	m.tick(now.Add(30 * time.Millisecond))
+	if len(a.store.Items) != 0 {
+		t.Fatalf("a skipped change was recorded: %+v", a.store.Items)
+	}
+}
