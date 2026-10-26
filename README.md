@@ -34,17 +34,17 @@
 
 ## What is Shelf
 
-When you move files between apps, you usually need somewhere to put them for a moment. Shelf puts that place in the notch. It stays out of sight until you need it: hover the notch or drag something toward it, and a small black island grows out of the notch — the track that is playing on the left, one icon per page on the right. Click an icon and that page opens from the island, 420 × 250 whatever the page holds, so it fits under your menu bar instead of covering it. Only the black shape on screen takes clicks: the menu bar beside it works as usual. Put things in, take them out, and it goes back into the notch.
+When you move files between apps, you usually need somewhere to put them for a moment. Shelf puts that place in the notch. It stays out of sight until you need it: hover the notch or click it, and a small black island grows out — the track that is playing on the left, one icon per page on the right. Drag something onto the notch instead and the tray opens on its own, already waiting for the drop. Click an icon and that page opens from the island, 420 × 250 whatever the page holds, so it fits under your menu bar instead of covering it. Only the black shape on screen takes clicks: the menu bar beside it works as usual. Put things in, take them out, and it goes back into the notch.
 
 It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and never copies your files — it only remembers where they are.
 
 ## Highlights
 
 **A shelf in the notch**
-- Drag files, folders, images or text toward the notch — it shows "release to drop" (松开放入), and the 托盘 (Tray) page opens as you let go. While the files are over the panel you can pick what happens on the spot: drop on 放入托盘 (Add to Tray), or on an action tile that fits the files — compress pictures to 1 MB, turn them into a PDF or JPEG, convert PDFs to Word or images, extract archives, zip anything, or AirDrop it. Results land on the shelf; originals stay where they are.
+- Drag files, folders, images or text toward the notch — it shows "release to drop" (松开放入) and the 托盘 (Tray) opens while you are still dragging. The page becomes a drop zone: drop on 放入托盘 (Add to Tray), or on an action tile that fits the files — compress pictures to 1 MB, turn them into a PDF or JPEG, convert PDFs to Word or images, extract archives, zip anything, or AirDrop it. Results land on the shelf; originals stay where they are.
 - Files show as thumbnails. Drag one or several (⌘/⇧ to select) straight into any app.
 - Press Space for Quick Look; right-click to open, reveal in Finder, AirDrop, copy, pin or remove — pictures get an extra "复制图片" (Copy Image) entry that copies the image itself.
-- Convert in place: right-click a picture → 转换为 (Convert To) JPEG, HEIC, PNG or PDF, or recognize its text into a Word document; select several to merge them into one PDF. Right-click a PDF → 转换为 (Convert To) Word (its text) or one image per page. Everything runs on this Mac, the original stays untouched, and results land at the front of the shelf.
+- Convert in place: right-click a picture → 转换为 (Convert To) JPEG, HEIC, PNG or PDF, or recognize its text into a Word document; select several to merge them into one PDF. Right-click a PDF → 转换为 (Convert To) Word (its text) or one image per page. 缩小图片 (Shrink) resizes pictures to 2560, 1600 or 800 px on the long edge. Everything runs on this Mac, the original stays untouched, and results land at the front of the shelf.
 - Tidy files where they sit: right-click a picture → 压缩到 (Compress To) to fit it under 500 KB, 1 MB, 2 MB or 5 MB; right-click a zip, tar, 7z or rar archive → 解压 (Extract); right-click files → 重新命名… (Rename…) to rename a batch the way Finder does — replace text, add text, or name plus number — with a live preview and undo.
 - Other ways in: shake the pointer while dragging to summon a drop basket beside the cursor, or use Services → "添加到 Shelf" (Add to Shelf) in Finder and other apps.
 
@@ -56,7 +56,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 **Now playing**
 - Hover the notch while music plays and it grows two small wings: the cover on the left, a moving equalizer on the right. Nothing drops down over your windows.
 - Click the notch and the island carries the player on its left: cover, title, artist, the equalizer and play-pause. The island keeps its size whether or not a track is playing.
-- Open 主页 (Home) for the music widget: cover, title, previous / play-pause / next, a progress bar you drag to skip, and the volume bar for your default output device.
+- Open 主页 (Home) for the music widget. At 2 × 2 it is the full player: previous / play-pause / next, a progress bar you drag to skip, and the volume bar for your default output device; at 2 × 1 it shows the cover, title and artist with play-pause; at 1 × 1 it is cover and title, and a tap toggles playback.
 
 **AI usage** (optional, off by default)
 - Enable it in Settings → AI 用量 and the island gains one more page: the left column holds a double-ring card per tool — outer ring weekly, inner ring 5-hour — and the right column holds this Mac's token usage for omp, Claude Code and Codex, over 今天 (Today) / 7 天 (7 days) / 30 天 (30 days) / 全部 (All), as four numbers and a stacked chart with its legend. The page fits one screen and never scrolls. Hover a card for its reset times; hover the token or cost number for its parts.
@@ -69,12 +69,12 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 
 **Home page**
 - 主页 (Home) is a canvas: four columns and two rows, and every widget sits in a cell of 1 × 1, 2 × 1 or 2 × 2 — whichever of those it offers. Cells you leave empty stay empty.
-- The music widget is the full player: drag the progress bar to skip, and drag the volume bar to set the volume of your output device.
+- The music widget is the full player at its default 2 × 2: drag the progress bar to skip, and drag the volume bar to set the volume of your output device. At 2 × 1 it shows the cover, title and artist with play-pause; at 1 × 1 the cover and title, and a tap toggles playback.
 - 保持唤醒 (Stay Awake), AI 用量 (AI Usage), 最近文件 (Recent Files) and 剪贴板最新 (Latest Clipboard) live here as widgets. The AI usage widget shows the tool with the least left.
 - Long-press a widget (or click the pencil) to edit: drag it to a free cell, ⊖ to remove it, the corner handle to change its size, and the dashed + cell to add a widget back from the widget catalogue (a full canvas puts + beside 完成 (Done) instead). 完成 (Done) or Esc to finish. Drag a widget out of the panel to keep it on the desktop.
 
 **Tools page**
-- 工具 (Tools) holds action cards: 框选文字 (Screen Text), compress to 1 MB, to PDF, to JPEG, to Word, extract, shrink, zip and AirDrop. Four columns, two rows; more cards scroll inside the page.
+- 工具 (Tools) starts with eight action cards, exactly two rows: 框选文字 (Screen Text), 压缩到 1 MB (Compress to 1 MB), 转成 PDF (To PDF), 打成 zip (Zip), 转 JPEG (To JPEG), 转 Word (To Word), 解压 (Extract) and 缩小图片 (Shrink). More cards — including 隔空投送 (AirDrop) — are in the + catalogue and scroll inside the page once they push it past two rows.
 - Tap an action card to run it on the pictures or files selected on the shelf, or drop files straight onto it.
 - Long-press a card (or click the pencil) to edit: drag to reorder, ⊖ to remove, + to add from the catalogue; 完成 (Done) or Esc to finish.
 
@@ -126,7 +126,7 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 ### Optional
 
 - **Start at login**: right-click the menu-bar icon → Settings → General → Open at login.
-- **System permissions**: right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions), or Settings → 系统权限 (System Permissions) → 全部开启 (Turn On All). Shelf opens each System Settings page in turn: Accessibility for notch drop protection, then Screen Recording for 框选文字 (Screen Text). Turn Shelf on in each; when Screen Recording is on, click 重新打开 Shelf (Reopen Shelf). Both are optional; everyday use needs no permissions. Updating from 1.7.0 or earlier asks for them once more; later updates keep them.
+- **System permissions**: right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions), or Settings → 系统权限 (System Permissions) → 全部开启 (Turn On All). Shelf opens each System Settings page in turn: Accessibility for notch drop protection, then Screen Recording for 框选文字 (Screen Text). Turn Shelf on in each; when Screen Recording is on, click 重新打开 Shelf (Reopen Shelf). Both are optional; everyday use needs no permissions. Updating from 1.7.0 or earlier asks for them once more. Official releases from 1.9.0 on keep the grants across updates; a build you compile yourself is signed afresh each time and may ask again.
 - **Notch drop protection** (Accessibility): while you drag toward the notch, the pointer stays in the drop area instead of hitting the very top edge of the screen.
 - **Screen text** (Screen Recording): only the area you select is captured, text is recognized on this Mac, and the shot is not kept.
 - **Uninstall**: right-click the menu-bar icon → Quit, then move Shelf from Applications to the Trash. To also delete your saved items, remove `~/Library/Application Support/Shelf/`.
@@ -137,8 +137,8 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | --- | --- |
 | Open or close the shelf | Press `⌃⌥Space`, click the menu-bar icon, or hover the notch and click it — the island opens |
 | Open a page | Click a page icon in the island: 主页 (Home), 托盘 (Tray), 剪贴板 (Clipboard), 工具 (Tools), or AI 用量 (AI Usage) when enabled |
-| Go back | Click ‹ in the page, or press Esc; Esc again folds the island into the notch |
-| Put something in | Drag it toward the notch and let go — the 托盘 (Tray) page opens; or shake the pointer while dragging and drop on the basket |
+| Go back | Press Esc — the page closes to the island, and Esc again folds it into the notch; clicking outside the panel (not on the menu bar), 收起 (Collapse) or the shortcut closes the whole shelf |
+| Put something in | Drag it toward the notch: the 托盘 (Tray) opens as the drag arrives, and you let go to add it; or shake the pointer while dragging and drop on the basket |
 | Take something out | Drag it from the shelf into any app; ⌘/⇧-click to take several at once |
 | Copy text back | Click a text item, then paste with `⌘V` |
 | Copy image data | Select one picture and press `⌘C`, or right-click it → 复制图片 (Copy Image) — the clipboard gets PNG data, not the path |
@@ -147,6 +147,8 @@ From then on Shelf opens normally. If macOS ever says the app **is damaged**, do
 | Control music | Use the player on the island's left, or the music widget on 主页 (Home) to skip and set the volume |
 | Pin, remove, Quick Look, AirDrop | Right-click an item (Space also opens Quick Look) |
 | Copy text from the screen | Press `⌃⌥O` and drag over the text |
+| Convert a picture or a PDF | Right-click a picture → 转换为 (Convert To); right-click several pictures → 合并为一个 PDF (Merge into One PDF); right-click a PDF → 转换为 (Convert To) Word or one image per page |
+| Shrink a picture, zip files | Right-click a picture → 缩小图片 (Shrink) and pick 2560 / 1600 / 800 px; right-click files or folders → 压缩为 zip (Compress to zip) |
 | Run a tool card | Open 工具 (Tools), then tap a card for the selected shelf items or drop files on it |
 | Arrange widgets or cards | Long-press a widget on 主页 (Home) or a card on 工具 (Tools) to edit; drag it out of the shelf to pin it to the desktop |
 | Shrink a picture to a file size | Right-click it → 压缩到 (Compress To) → 500 KB / 1 MB / 2 MB / 5 MB |
@@ -185,14 +187,14 @@ MIT — see [LICENSE](LICENSE).
 
 ## Shelf 是什么
 
-在应用之间搬东西时，总需要一个临时放一下的地方。Shelf 把这个地方放进了刘海里。平时它不露面；鼠标移到刘海上，或者拖着东西靠近刘海，一个小黑岛就从刘海里长出来——左边是正在播放的歌，右边每个页面一个图标。点图标，那一页就从岛上展开：任何一页都是 420 × 250，所以它停在你的菜单栏下面，不会盖住菜单栏和窗口。屏幕上只有画出来的黑块接鼠标，旁边的菜单栏照常可点。放进去、拿出来，用完它就缩回刘海。
+在应用之间搬东西时，总需要一个临时放一下的地方。Shelf 把这个地方放进了刘海里。平时它不露面；鼠标移到刘海上点一下，一个小黑岛就从刘海里长出来——左边是正在播放的歌，右边每个页面一个图标；如果是拖着东西过来，打开的是「托盘」页，直接等着接收。点图标，那一页就从岛上展开：任何一页都是 420 × 250，所以它停在你的菜单栏下面，不会盖住菜单栏和窗口。屏幕上只有画出来的黑块接鼠标，旁边的菜单栏照常可点。放进去、拿出来，用完它就缩回刘海。
 
 它只在菜单栏里，不占 Dock；所有内容都留在你的 Mac 上；放进来的文件不会被复制，Shelf 只记住它们在哪儿。
 
 ## 亮点
 
 **刘海里的托盘**
-- 把文件、文件夹、图片或文字往刘海拖，刘海会提示「松开放入」，一松手「托盘」页就打开。文件还在面板上时可以直接选择怎么处理：松在「放入托盘」就收进托盘；松在下方的动作格上，就按文件类型直接压缩到 1 MB、转成 PDF 或 JPEG、PDF 转 Word 或图片、解压、打成 zip，或隔空投送。结果放进托盘，原文件不动。
+- 把文件、文件夹、图片或文字往刘海拖，刘海会提示「松开放入」，还在拖着的时候「托盘」页就已经打开。整页变成投放区：松在「放入托盘」就收进托盘；松在下方的动作格上，就按文件类型直接压缩到 1 MB、转成 PDF 或 JPEG、PDF 转 Word 或图片、解压、打成 zip，或隔空投送。结果放进托盘，原文件不动。
 - 文件以缩略图显示（iPhone 拍的 HEIC 照片也有预览），可以一次拖出一个或多个（按住 ⌘ 或 ⇧ 多选），直接拖进任何应用；也可以在设置里让拖出去的东西自动离开托盘。
 - 按空格快速查看；右键可以打开、在 Finder 中显示、隔空投送、复制（图片多一项「复制图片」，复制图片数据本身）、置顶或移除。
 - 图片和 PDF 可以直接转换：右键图片 →「转换为」JPEG、HEIC、PNG、PDF，或识别图里的文字生成 Word，多张还能合并成一个 PDF；大图可以一键缩小；右键 PDF 可以提取文字生成 Word，或每页存成一张图片。文件和文件夹可以压缩成 zip。全部在本机完成，原文件不动，做好的文件放在托盘最前面。
@@ -207,7 +209,7 @@ MIT — see [LICENSE](LICENSE).
 **正在播放**
 - 放音乐时把鼠标移到刘海上，刘海只向左右各长出一小截：左边是封面，右边是跳动的音频条，不会向下盖住窗口。
 - 点一下刘海，小岛的左边就是播放器：封面、歌名、歌手、音频条和播放暂停。有歌没歌，小岛都是同样大小。
-- 打开「主页」有音乐小组件：封面、歌名、上一首 / 播放暂停 / 下一首，进度条可以拖动跳转，音量条调的是系统默认输出设备。
+- 打开「主页」有音乐小组件：2×2 时是完整播放器（上一首 / 播放暂停 / 下一首、可拖动跳转的进度条、系统默认输出设备的音量），2×1 显示封面、歌名、歌手和播放暂停，1×1 只有封面和歌名、点一下切换播放。
 
 **AI 用量**（可选，默认关闭）
 - 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，岛上会多出一个页面图标：左栏是 Codex、Claude Code 的套餐额度卡（每张卡内外双圈：外圈每周、内圈 5 小时），右栏是这台电脑上 omp、Claude Code、Codex 的 token 用量——今天 / 7 天 / 30 天 / 全部、四个数字、按来源叠加的柱图和图例。整页一屏看全，不用滚动。悬停额度卡看重置时间；悬停 Token 或费用数字看它的组成部分。
@@ -220,12 +222,12 @@ MIT — see [LICENSE](LICENSE).
 
 **主页**
 - 「主页」是一块画布：四列两行，小组件各占 1×1、2×1 或 2×2 格（每种小组件支持其中几档）；没放东西的格子就空着。
-- 音乐小组件是完整的播放器：进度条可以拖动跳转，音量条调的是系统默认输出设备的音量。
+- 音乐小组件默认 2×2，是完整的播放器：进度条可以拖动跳转，音量条调的是系统默认输出设备的音量。缩小到 2×1 显示封面、歌名、歌手和播放暂停，1×1 只有封面和歌名、点一下切换播放。
 - 保持唤醒、AI 用量、最近文件、剪贴板最新都以小组件的形式放在这里。AI 用量小组件显示剩余最少的那个工具。
 - 长按小组件（或点铅笔图标）进入编辑：拖到空格、点 ⊖ 移除、拖右下角改尺寸、点虚线「+」格从小组件目录加回一个（格子放满时「+」改到「完成」左边）。点「完成」或按 Esc 结束。把小组件拖出面板，它就固定到桌面。
 
 **工具页**
-- 「工具」页只放动作卡：框选文字、压缩到 1 MB、转成 PDF、转 JPEG、转 Word、解压、缩小图片、打成 zip、隔空投送。四列两行，卡片多了在页内滚动。
+- 「工具」页只放动作卡，默认八张正好两行：框选文字、压缩到 1 MB、转成 PDF、打成 zip、转 JPEG、转 Word、解压、缩小图片。隔空投送等其余动作卡在「+」打开的目录里；加多了超过两行就在页内滚动。
 - 点按动作卡，对托盘里选中的图片或文件执行；也可以把文件直接拖到卡片上。
 - 长按卡片（或点铅笔图标）进入编辑：拖动排序、点 ⊖ 删除、点 + 从目录添加；点「完成」或按 Esc 结束。
 
@@ -277,7 +279,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 ### 可选
 
 - **开机自动启动**：右键菜单栏图标 → 设置… → 通用 →「开机时自动启动」。
-- **系统权限**：右键菜单栏图标 →「开启系统权限」，或 设置… → 系统权限 →「全部开启」。Shelf 会依次打开系统设置里的两页：「辅助功能」（刘海拖放保护）和「屏幕录制」（框选文字）；在每页打开 Shelf 的开关，屏幕录制开好后点「重新打开 Shelf」。两项都可选，日常使用不需要任何授权。从 1.7.0 或更早的版本更新上来时要再开一次，之后的更新会保留授权。
+- **系统权限**：右键菜单栏图标 →「开启系统权限」，或 设置… → 系统权限 →「全部开启」。Shelf 会依次打开系统设置里的两页：「辅助功能」（刘海拖放保护）和「屏幕录制」（框选文字）；在每页打开 Shelf 的开关，屏幕录制开好后点「重新打开 Shelf」。两项都可选，日常使用不需要任何授权。从 1.7.0 或更早的版本更新上来时要再开一次；从 1.9.0 起的正式发布版在之后更新时保留授权，自己编译的构建每次签名都会变，可能要重新开启。
 - **刘海拖放保护**（辅助功能）：拖着东西靠近刘海时，指针会停在托盘的接收区里，不会顶到屏幕最上沿。
 - **框选文字**（屏幕录制）：只截取你框选的那一块，文字在本机识别，不保存截图。
 - **卸载**：右键菜单栏图标 → 退出 Shelf，再把“应用程序”里的 Shelf 移到废纸篓。如果连保存的内容也要删除，删掉 `~/Library/Application Support/Shelf/` 文件夹。
@@ -288,8 +290,8 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 | --- | --- |
 | 打开或收起 | 按 `⌃⌥Space`、单击菜单栏图标，或把鼠标移到刘海上再点一下——打开的是小岛 |
 | 打开某一页 | 点小岛上的页面图标：主页、托盘、剪贴板、工具，开了 AI 用量时还有 AI 用量 |
-| 退回上一层 | 点页面左上角的「‹」，或按 Esc；再按一次 Esc 把小岛收回刘海 |
-| 放东西进来 | 拖着它靠近刘海松开，直接打开「托盘」页；或拖拽时左右晃动指针，放进暂存篮 |
+| 退回上一层 | 按 Esc：先关掉当前页回到小岛，再按一次把小岛收回刘海。点面板外（菜单栏高度内不算）、点「收起」或再按快捷键都直接收起 |
+| 放东西进来 | 拖着它靠近刘海，还没松手「托盘」页就打开了，松手放进去；或拖拽时左右晃动指针，放进暂存篮 |
 | 拿东西出去 | 从托盘拖到任意应用；按住 `⌘` 或 `⇧` 可以一次拖多个 |
 | 把文字复制回来 | 单击文字项，再在任意地方 `⌘V` 粘贴 |
 | 复制图片数据 | 选中一张图片后按 `⌘C`，或右键图片 →「复制图片」，再在目标应用 `⌘V` 粘贴（复制的是图片，不是路径） |
