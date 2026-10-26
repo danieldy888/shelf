@@ -544,7 +544,7 @@ func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
 			disp := displayIDAt(cursor, 0)
 			area := pinArea(disp)
 			edge := pinReleaseEdge(cursor, area)
-			frame := mygo.Rectangle{X: cursor.X - int(d.grabDX), Y: cursor.Y - int(d.grabDY), Width: w, Height: pinCardH}
+			frame := pinFrameUnder(cursor, d.grabDX, d.grabDY, toolColW(spec.Span), toolCellH, w)
 			if edge != pinFree {
 				frame = pinStripFrame(edge, area, cursor.Y) // the 24 pt edge rule, same as pin drags
 			}

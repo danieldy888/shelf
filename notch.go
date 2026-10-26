@@ -780,13 +780,15 @@ func (a *shelf) escape() {
 	}
 	if a.tab == pageHome {
 		if p := a.homePageOf(); p != nil && (p.editing || p.picking) {
+			// 目录中的 Esc 只退回编辑格；编辑态的 Esc 与「完成」同一条路，
+			// 连拖出的预览窗一起收起，浮窗不会留在桌面上。
 			if p.picking {
 				p.picking = false
+				if a.win != nil {
+					a.win.Invalidate()
+				}
 			} else {
-				p.editing, p.press = false, nil
-			}
-			if a.win != nil {
-				a.win.Invalidate()
+				a.resetHomeEdit()
 			}
 			return
 		}

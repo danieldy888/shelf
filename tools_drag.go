@@ -64,16 +64,13 @@ func (p *dragPreview) take() *pinItem {
 // copy still fits the page's content box, where the page draws it and the
 // window must stay out of the way. Both pages share it: the tools grid and
 // the home canvas differ only in where their content box is.
-func (a *shelf) syncDragPreview(pv *dragPreview, id string, span, cardW int, grabDX, grabDY float32, cursor mygo.Point, inside bool) {
+func (a *shelf) syncDragPreview(pv *dragPreview, id string, span, cardW int, grabDX, grabDY, srcW, srcH float32, cursor mygo.Point, inside bool) {
 	if inside || a.winH == 0 {
 		pv.close()
 		return
 	}
 	display := displayIDAt(cursor, 0)
-	frame := pinClamp(mygo.Rectangle{
-		X: cursor.X - int(math.Round(float64(grabDX))), Y: cursor.Y - int(math.Round(float64(grabDY))),
-		Width: cardW, Height: pinCardH,
-	}, pinArea(display))
+	frame := pinClamp(pinFrameUnder(cursor, grabDX, grabDY, srcW, srcH, cardW), pinArea(display))
 	if pv.it == nil {
 		pv.it = &pinItem{owner: a, cardID: id, span: span, cardW: cardW,
 			display: display, edge: pinFree, expanded: true, frame: frame}
@@ -124,5 +121,5 @@ func (p *toolsPage) syncDragPreview(cursor mygo.Point) {
 	if spec.Span == 2 {
 		cardW = pinCardW2
 	}
-	a.syncDragPreview(&p.preview, d.id, spec.Span, cardW, d.grabDX, d.grabDY, cursor, inside)
+	a.syncDragPreview(&p.preview, d.id, spec.Span, cardW, d.grabDX, d.grabDY, w, h, cursor, inside)
 }

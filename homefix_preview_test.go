@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/layout"
 )
@@ -76,10 +77,13 @@ func TestHomeDragOutUsesDragPreview(t *testing.T) {
 	if p.preview.window() != it || len(opened) != 1 {
 		t.Fatalf("the preview followed the pointer by reopening: %d windows", len(opened))
 	}
-	// The window keeps the grab point under the pointer: cursor
-	// (300+476, 40+50) less the 40/30 grabbed inside the card.
-	if it.frame.X != 736 || it.frame.Y != 60 {
-		t.Fatalf("preview frame %+v, want the card grabbed at 40,30 under (776,90)", it.frame)
+	// The window keeps the grab point under the pointer, mapped into the
+	// 84pt card: cursor (300+476, 40+50) less (40/195, 30/174) of 278×84.
+	if it.frame.X != 719 || it.frame.Y != 75 {
+		t.Fatalf("preview frame %+v, want (719,75)", it.frame)
+	}
+	if !insideRect(mygo.Point{X: 776, Y: 90}, it.frame) {
+		t.Fatalf("the pointer is not on the preview card: %+v", it.frame)
 	}
 
 	// Back inside the box: the preview goes away at once.
@@ -147,6 +151,123 @@ func TestHomeDragPreviewClosesOnCancel(t *testing.T) {
 	}
 	if widgetByID(a.toolsLayout().Home, "awake").ID != "awake" {
 		t.Fatalf("the cancelled drag left the canvas: %+v", a.toolsLayout().Home)
+	}
+}
+
+// TestHomeDragPreviewKeepsPointerOnCard is the re-review's second item: a
+// 2×2 widget is 174pt tall and the preview card 84pt, so a grab in its lower
+// half would leave the pointer above the card. The grab is mapped into the
+// card in proportion, and the pointer stays on it.
+func TestHomeDragPreviewKeepsPointerOnCard(t *testing.T) {
+	withPinDisplays(t, pinTestDisplays)
+	oldPreview, oldOpen, oldCursor := pinOpenPreview, pinOpenWindow, cursorPoint
+	pinOpenPreview = func(*pinItem) {}
+	pinOpenWindow = func(*pinItem) {}
+	cursorPoint = func() mygo.Point { return mygo.Point{X: 1000, Y: 500} }
+	t.Cleanup(func() { pinOpenPreview, pinOpenWindow, cursorPoint = oldPreview, oldOpen, oldCursor })
+
+	a, p := musicShelf(t)
+	a.dataDir = t.TempDir()
+	a.settings.AIUsage.Enabled = true
+	a.frame = mygo.Rectangle{X: 300, Y: 40}
+	a.x, a.y = 300, 40
+	a.winH = 1
+	p.editing = true
+	// 用量 2×2 draws no controls: the whole card is the press target.
+	homeReviewLayout(a, layout.Widget{ID: "usage", X: 0, Y: 0, W: 2, H: 2})
+	view := pageTester(p, true)
+	view.Frame()
+	card, ok := view.Find("AI 用量")
+	if !ok {
+		t.Fatalf("usage card missing: %v", view.Texts())
+	}
+	// Grab it in the lower half.
+	x, y := card.X+30, card.Y+150
+	view.Press(x, y)
+	view.Move(x+contentW, y)
+	it := p.preview.window()
+	if it == nil {
+		t.Fatal("no preview outside the content box")
+	}
+	d := p.press
+	if d == nil {
+		t.Fatal("the press ended")
+	}
+	cursor := mygo.Point{X: 300 + int(d.px), Y: 40 + int(d.py)}
+	if !insideRect(cursor, it.frame) {
+		t.Fatalf("the pointer %+v is not on the preview card %+v (grabbed at y=%g of 174)", cursor, it.frame, d.grabDY)
+	}
+
+	// The committed pin keeps the same mapping, so the card does not jump.
+	p.homeDrop(d) // what the release handler does
+	if len(a.pins) != 1 {
+		t.Fatalf("the drag did not pin the widget: %+v", a.pins)
+	}
+	want := pinClamp(pinFrameUnder(cursorPoint(), d.grabDX, d.grabDY,
+		homeSpanW(2), homeSpanH(2), pinCardW2), pinArea(1))
+	if got := a.pins[0].frame; got != want {
+		t.Fatalf("the pin frame %+v does not match the preview's mapping (%+v)", got, want)
+	}
+}
+
+// TestHomeExitEditClosesDragPreview is the re-review's first item: Esc and
+// 完成 both leave editing, and neither may leave the drag preview floating
+// over the desktop — the window takes no mouse, so nothing could remove it.
+func TestHomeExitEditClosesDragPreview(t *testing.T) {
+	for _, exit := range []string{"esc", "done"} {
+		t.Run(exit, func(t *testing.T) {
+			withPinDisplays(t, pinTestDisplays)
+			oldPreview, oldOpen, oldCursor := pinOpenPreview, pinOpenWindow, cursorPoint
+			pinOpenPreview = func(*pinItem) {}
+			pinOpenWindow = func(*pinItem) {}
+			cursorPoint = func() mygo.Point { return mygo.Point{X: 1000, Y: 500} }
+			t.Cleanup(func() { pinOpenPreview, pinOpenWindow, cursorPoint = oldPreview, oldOpen, oldCursor })
+
+			a, p := musicShelf(t)
+			a.dataDir = t.TempDir()
+			a.frame = mygo.Rectangle{X: 300, Y: 40}
+			a.x, a.y = 300, 40
+			a.winH = 1
+			a.tab, a.visible, a.level = pageHome, true, 2
+			p.editing = true
+			homeReviewLayout(a, layout.Widget{ID: "awake", X: 2, Y: 0, W: 1, H: 1})
+			view := pageTester(p, true)
+			view.Frame()
+			card, ok := view.Find("保持唤醒")
+			if !ok {
+				t.Fatalf("awake card missing: %v", view.Texts())
+			}
+			x, y := card.X+20, card.Y+20
+			view.Press(x, y)
+			view.Move(x+contentW, y)
+			if p.preview.window() == nil {
+				t.Fatal("fixture: no preview outside the content box")
+			}
+
+			switch exit {
+			case "esc":
+				a.escape()
+			case "done":
+				shell := ui.NewTester(a.view, sheetW, sheetH)
+				shell.Frame()
+				if err := shell.Click("完成"); err != nil {
+					t.Fatalf("完成 pill missing: %v", err)
+				}
+				shell.Frame()
+			}
+			if p.preview.window() != nil {
+				t.Fatal("leaving editing left the drag preview on the desktop")
+			}
+			if p.editing || p.press != nil {
+				t.Fatalf("editing=%v press=%+v, want editing over", p.editing, p.press)
+			}
+			if got := widgetByID(a.toolsLayout().Home, "awake"); got.X != 2 || got.Y != 0 {
+				t.Fatalf("the cancelled drag moved the widget: %+v", got)
+			}
+			if len(a.pins) != 0 {
+				t.Fatalf("leaving editing pinned the widget: %+v", a.pins)
+			}
+		})
 	}
 }
 

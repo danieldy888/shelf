@@ -169,7 +169,10 @@ func (a *shelf) homeDoneButton(c *ui.Context, live bool) ui.Element {
 			if p.picking {
 				p.picking = false
 			} else {
-				p.editing, p.press = false, nil
+				// Every way out of editing goes through resetHomeEdit: a
+				// drag preview left behind would float over the desktop with
+				// no mouse of its own.
+				a.resetHomeEdit()
 			}
 		}
 	}
@@ -519,7 +522,8 @@ func (p *homePage) syncPreview(d *homePress) {
 		Y: a.frame.Y + int(math.Round(float64(p.viewport.Y+d.py))),
 	}
 	inside := d.px >= 0 && d.px <= contentW && d.py >= 0 && d.py <= contentH
-	a.syncDragPreview(&p.preview, d.id, span, cardW, d.grabDX, d.grabDY, cursor, inside)
+	a.syncDragPreview(&p.preview, d.id, span, cardW, d.grabDX, d.grabDY,
+		homeSpanW(d.orig.W), homeSpanH(d.orig.H), cursor, inside)
 }
 
 // homeInput wires the widget's press: long press to edit, drag to a free
@@ -651,7 +655,7 @@ func (p *homePage) homeDrop(d *homePress) {
 			disp := displayIDAt(cursor, 0)
 			area := pinArea(disp)
 			edge := pinReleaseEdge(cursor, area)
-			frame := mygo.Rectangle{X: cursor.X - int(d.grabDX), Y: cursor.Y - int(d.grabDY), Width: w, Height: pinCardH}
+			frame := pinFrameUnder(cursor, d.grabDX, d.grabDY, homeSpanW(d.orig.W), homeSpanH(d.orig.H), w)
 			if edge != pinFree {
 				frame = pinStripFrame(edge, area, cursor.Y)
 			}

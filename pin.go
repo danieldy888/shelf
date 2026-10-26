@@ -3,6 +3,7 @@
 package main
 
 import (
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -133,6 +134,29 @@ func pinDisplayID(display int64) string {
 func pinParseDisplay(s string) int64 {
 	id, _ := strconv.ParseInt(s, 10, 64)
 	return id
+}
+
+// pinFrameUnder puts a cardW × pinCardH pin card under the pointer, keeping
+// the grab point the user took hold of. The grab is mapped into the card in
+// proportion to the card it came from, so the pointer always sits on the
+// card: a 2×2 widget is 195 × 174 but the pin card is 84pt tall, and an
+// unscaled grab from its lower half would leave the pointer above the card.
+func pinFrameUnder(cursor mygo.Point, grabDX, grabDY, srcW, srcH float32, cardW int) mygo.Rectangle {
+	if srcW <= 0 {
+		srcW = 1
+	}
+	if srcH <= 0 {
+		srcH = 1
+	}
+	gx := float32(cardW) * min(max(grabDX, 0), srcW) / srcW
+	gy := float32(pinCardH) * min(max(grabDY, 0), srcH) / srcH
+	// A grab on the source's last point still lands on the card.
+	gx = min(gx, float32(cardW)-1)
+	gy = min(gy, float32(pinCardH)-1)
+	return mygo.Rectangle{
+		X: cursor.X - int(math.Round(float64(gx))), Y: cursor.Y - int(math.Round(float64(gy))),
+		Width: cardW, Height: pinCardH,
+	}
 }
 
 // pinClamp holds r inside area: a pinned card never sits under the menu
