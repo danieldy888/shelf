@@ -3,10 +3,11 @@
 package main
 
 // Tests for the 系统权限 unified entry: the tray item's count, the Settings
-// group's states, the 全部开启 walk (skipping granted items, moving from
-// Accessibility to screen recording, the relaunch step, stopping), and the
-// relaunch command's arguments. Every probe and request is a seam; no test
-// reads or changes a real permission.
+// group's one row and one switch (all granted, partly missing, walking,
+// relaunching), the guided walk (skipping granted items, Full Disk Access
+// first, the relaunch stage), and the relaunch command's arguments. Every
+// probe, request and System Settings open is a seam; no test reads or
+// changes a real permission.
 
 import (
 	"os"
@@ -21,10 +22,11 @@ import (
 )
 
 type permStubs struct {
-	ax, screen bool
-	titles     bool
-	axRequests int
-	scRequests int
+	fda, ax, screen bool
+	fdaRequests     int
+	axRequests      int
+	scRequests      int
+	paneOpens       int
 }
 
 type fakePermissionTimer struct{ stopped bool }
@@ -68,21 +70,22 @@ func stubPermissions(t *testing.T) (*permStubs, *permissionClock) {
 	t.Helper()
 	st := &permStubs{}
 	clk := &permissionClock{}
-	origAXProbe, origSCProbe := accessibilityProbe, screenCaptureProbe
-	origAXReq, origSCReq := accessibilityRequest, screenCaptureRequest
-	origTitles := screenCaptureWindowTitles
-	origAfter, origDispatch := permissionAfterFunc, permissionDispatch
+	origFDAProbe, origAXProbe, origSCProbe := fullDiskAccessProbe, accessibilityProbe, screenCaptureProbe
+	origFDAReq, origAXReq, origSCReq := fullDiskAccessRequest, accessibilityRequest, screenCaptureRequest
+	origPane, origAfter, origDispatch := openPrivacyPane, permissionAfterFunc, permissionDispatch
+	fullDiskAccessProbe = func() bool { return st.fda }
 	accessibilityProbe = func() bool { return st.ax }
 	screenCaptureProbe = func() bool { return st.screen }
+	fullDiskAccessRequest = func() bool { st.fdaRequests++; return st.fda }
 	accessibilityRequest = func() bool { st.axRequests++; return st.ax }
 	screenCaptureRequest = func() bool { st.scRequests++; return st.screen }
-	screenCaptureWindowTitles = func() bool { return st.titles }
+	openPrivacyPane = func() { st.paneOpens++ }
 	permissionAfterFunc = clk.after
 	permissionDispatch = func(fn func()) { fn() }
 	t.Cleanup(func() {
-		accessibilityProbe, screenCaptureProbe = origAXProbe, origSCProbe
-		accessibilityRequest, screenCaptureRequest = origAXReq, origSCReq
-		screenCaptureWindowTitles = origTitles
+		fullDiskAccessProbe, accessibilityProbe, screenCaptureProbe = origFDAProbe, origAXProbe, origSCProbe
+		fullDiskAccessRequest, accessibilityRequest, screenCaptureRequest = origFDAReq, origAXReq, origSCReq
+		openPrivacyPane = origPane
 		permissionAfterFunc, permissionDispatch = origAfter, origDispatch
 	})
 	return st, clk
@@ -97,23 +100,38 @@ func permissionTrayLabels(t *testing.T) []string {
 	return labels
 }
 
+// permissionRowCaption is the row's state caption in the last frame.
+func permissionRowCaption(t *testing.T, view *ui.Tester) string {
+	t.Helper()
+	for _, want := range []string{"已全部开启（", "还差 ", "第 ", "还差最后一步"} {
+		for _, text := range view.Texts() {
+			if strings.HasPrefix(text, want) {
+				return text
+			}
+		}
+	}
+	t.Fatalf("no permission caption in the frame; texts=%v", view.Texts())
+	return ""
+}
+
 func TestPermissionTrayItemCountsMissing(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		ax, screen  bool
-		want        string
-		wantDisable bool
+		name          string
+		fda, ax, scre bool
+		want          string
+		wantDisable   bool
 	}{
-		{"both missing", false, false, "开启系统权限（还差 2 项）…", false},
-		{"screen missing", true, false, "开启系统权限（还差 1 项）…", false},
-		{"ax missing", false, true, "开启系统权限（还差 1 项）…", false},
-		{"all granted", true, true, "系统权限已全部开启", true},
+		{"all missing", false, false, false, "开启系统权限（还差 3 项）…", false},
+		{"screen missing", true, true, false, "开启系统权限（还差 1 项）…", false},
+		{"full disk missing", false, true, true, "开启系统权限（还差 1 项）…", false},
+		{"two missing", true, false, false, "开启系统权限（还差 2 项）…", false},
+		{"all granted", true, true, true, "系统权限已全部开启", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			st, _ := stubPermissions(t)
-			st.ax, st.screen = tt.ax, tt.screen
+			st.fda, st.ax, st.screen = tt.fda, tt.ax, tt.scre
 			a := &shelf{settings: settings.Default()}
-			var item = a.permissionMenuItem()
+			item := a.permissionMenuItem()
 			if item.Label != tt.want {
 				t.Fatalf("tray label = %q, want %q", item.Label, tt.want)
 			}
@@ -129,53 +147,276 @@ func TestPermissionTrayItemCountsMissing(t *testing.T) {
 	}
 }
 
-func TestSettingsPermissionsSectionIdle(t *testing.T) {
+// The tray item starts the same walk the switch does, over what is missing.
+func TestPermissionTrayItemStartsTheWalk(t *testing.T) {
 	st, _ := stubPermissions(t)
-	_, view := newSettingsShelf(t)
-	if !view.HasText("系统权限") || !view.HasText("ShelfU 需要 2 项系统权限") || !view.HasText("还差 2 项") {
-		t.Fatalf("idle header missing; texts=%v", view.Texts())
+	oldOpen := openSettingsWindow
+	opened := 0
+	openSettingsWindow = func(*shelf) { opened++ }
+	t.Cleanup(func() { openSettingsWindow = oldOpen })
+	a := &shelf{settings: settings.Default()}
+	item := a.permissionMenuItem()
+	if item.Click == nil {
+		t.Fatal("the tray item must start the walk")
 	}
-	for _, want := range []string{"刘海拖放保护 · 辅助功能", "框选文字 · 屏幕录制", "未开启", "全部开启…"} {
-		if !view.HasText(want) {
-			t.Fatalf("idle section missing %q; texts=%v", want, view.Texts())
-		}
+	item.Click(nil, nil)
+	if opened != 1 {
+		t.Fatalf("the tray item did not open the Settings window: %d", opened)
 	}
-	// The old 通用 row is gone, and the 系统权限 group is first.
-	st.ax, st.screen = true, true
-	view.Frame()
-	texts := view.Texts()
-	permAt, generalAt := slices.Index(texts, "系统权限"), slices.Index(texts, "通用")
-	if permAt < 0 || generalAt < 0 || permAt > generalAt {
-		t.Fatalf("系统权限 must precede 通用: perm=%d general=%d", permAt, generalAt)
+	if a.perm.stage != permissionWaiting {
+		t.Fatalf("the tray item did not start the walk: %v", a.perm.stage)
 	}
-	if !view.HasText("已全部开启") || !view.HasText("✓ 已开启") {
-		t.Fatalf("all-granted state missing; texts=%v", view.Texts())
-	}
-	if view.HasText("全部开启…") {
-		t.Fatal("all-granted state still offers 全部开启…")
+	if st.fdaRequests != 1 || st.axRequests != 0 || st.scRequests != 0 {
+		t.Fatalf("the walk did not start with Full Disk Access: fda=%d ax=%d screen=%d",
+			st.fdaRequests, st.axRequests, st.scRequests)
 	}
 }
 
-func TestPermissionFlowSkipsGrantedAndStops(t *testing.T) {
-	st, clk := stubPermissions(t)
-	st.ax, st.screen = true, false
+// One row, one switch, one list: the per-permission rows and their buttons
+// are gone, and the group's note names the whole list.
+func TestSettingsPermissionsSectionIsOneRow(t *testing.T) {
+	_, _ = stubPermissions(t)
+	_, view := newSettingsShelf(t)
+	for _, gone := range []string{
+		"文件访问 · 完整磁盘访问", "刘海拖放保护 · 辅助功能", "框选文字 · 屏幕录制",
+		"全部开启…", "开启…", "✓ 已开启", "未开启", "ShelfU 需要",
+	} {
+		if view.HasText(gone) {
+			t.Fatalf("the per-permission UI still shows %q; texts=%v", gone, view.Texts())
+		}
+	}
+	for _, want := range []string{
+		"系统权限",
+		"一个开关开启全部 3 项：完整磁盘访问（拖入不再弹窗）、辅助功能（刘海拖放保护）、屏幕录制（框选文字）。macOS 要求每一项都由你在系统设置里打开。",
+		"还差 3 项：完整磁盘访问、辅助功能、屏幕录制",
+	} {
+		if !view.HasText(want) {
+			t.Fatalf("the one-row group lacks %q; texts=%v", want, view.Texts())
+		}
+	}
+	// 系统权限 is the heading and the row's title; the switch and its row
+	// carry the same accessible name. What matters is that the group has
+	// exactly one state caption and no per-permission row.
+	captions := 0
+	for _, text := range view.Texts() {
+		if strings.HasPrefix(text, "还差 ") || strings.HasPrefix(text, "已全部开启（") || strings.HasPrefix(text, "第 ") {
+			captions++
+		}
+	}
+	if captions != 1 {
+		t.Fatalf("expected one permission caption, got %d; texts=%v", captions, view.Texts())
+	}
+}
+
+// The switch state follows the probes: on only when everything is granted,
+// off while anything is missing, and the caption names what is left.
+func TestPermissionSwitchStates(t *testing.T) {
+	st, _ := stubPermissions(t)
 	a, view := newSettingsShelf(t)
-	if err := view.Click("全部开启…"); err != nil {
+
+	// All missing: off, and turning it on starts the walk.
+	if got := permissionRowCaption(t, view); got != "还差 3 项：完整磁盘访问、辅助功能、屏幕录制" {
+		t.Fatalf("none-granted caption = %q", got)
+	}
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
 		t.Fatal(err)
 	}
 	view.Frame()
-	if st.axRequests != 0 {
-		t.Fatalf("granted Accessibility was requested: %d", st.axRequests)
+	if st.fdaRequests != 1 || a.perm.stage != permissionWaiting {
+		t.Fatalf("turning the switch on did not start the walk: stage=%v fda=%d", a.perm.stage, st.fdaRequests)
 	}
-	if st.scRequests != 1 {
-		t.Fatalf("screen recording was not requested: %d", st.scRequests)
+	if got := permissionRowCaption(t, view); !strings.HasPrefix(got, "第 1 项，共 3 项：完整磁盘访问 · ") {
+		t.Fatalf("walking caption = %q", got)
 	}
-	if !view.HasText("正在开启：第 1 项，共 1 项") {
-		t.Fatalf("missing count must cover only the missing item; texts=%v", view.Texts())
+	a.stopPermissionFlow()
+	view.Frame()
+
+	// Two missing: still off, and the caption names them in list order.
+	st.fda, st.ax, st.screen = true, false, false
+	view.Frame()
+	if got := permissionRowCaption(t, view); got != "还差 2 项：辅助功能、屏幕录制" {
+		t.Fatalf("partial caption = %q", got)
+	}
+
+	// All granted: on, and the caption says so.
+	st.ax, st.screen = true, true
+	view.Frame()
+	if got := permissionRowCaption(t, view); got != "已全部开启（3/3）" {
+		t.Fatalf("all-granted caption = %q", got)
+	}
+}
+
+// The switch is on only when everything is granted: turning it off in that
+// state cannot revoke anything, so it opens 隐私与安全性 and the row's probe
+// keeps the switch on.
+func TestPermissionSwitchOffOpensPrivacyPane(t *testing.T) {
+	st, _ := stubPermissions(t)
+	st.fda, st.ax, st.screen = true, true, true
+	a, view := newSettingsShelf(t)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if st.paneOpens != 1 {
+		t.Fatalf("turning the switch off opened the pane %d times, want 1", st.paneOpens)
+	}
+	if a.perm.stage != permissionIdle {
+		t.Fatalf("turning the switch off started a walk: %v", a.perm.stage)
+	}
+	if got := permissionRowCaption(t, view); got != "已全部开启（3/3）" {
+		t.Fatalf("the switch did not stay on: caption=%q", got)
+	}
+	if st.fdaRequests+st.axRequests+st.scRequests != 0 {
+		t.Fatal("turning the switch off requested a permission")
+	}
+}
+
+// The walk covers the missing items only, in list order: Full Disk Access,
+// then Accessibility, then screen recording.
+func TestPermissionFlowOrderSkipsGranted(t *testing.T) {
+	st, clk := stubPermissions(t)
+	st.fda, st.ax = true, false
+	a, view := newSettingsShelf(t)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if st.fdaRequests != 0 {
+		t.Fatalf("a granted Full Disk Access was requested: %d", st.fdaRequests)
+	}
+	if st.axRequests != 1 || st.scRequests != 0 {
+		t.Fatalf("the walk did not start at Accessibility: ax=%d screen=%d", st.axRequests, st.scRequests)
+	}
+	if got := permissionRowCaption(t, view); !strings.HasPrefix(got, "第 1 项，共 2 项：辅助功能 · ") {
+		t.Fatalf("walking caption = %q", got)
 	}
 	if !view.HasText("停止") {
 		t.Fatal("the walk must offer 停止")
 	}
+	// A poll while the switch is still off stays on the same step.
+	clk.fireLast(t)
+	view.Frame()
+	if st.scRequests != 0 || !strings.HasPrefix(permissionRowCaption(t, view), "第 1 项，共 2 项：辅助功能") {
+		t.Fatalf("an ungranted poll advanced the walk: screen=%d", st.scRequests)
+	}
+	// The grant lands in System Settings; the poll sees it and moves on.
+	st.ax = true
+	clk.fireLast(t)
+	view.Frame()
+	if st.scRequests != 1 {
+		t.Fatalf("screen recording not requested after Accessibility: %d", st.scRequests)
+	}
+	if got := permissionRowCaption(t, view); !strings.HasPrefix(got, "第 2 项，共 2 项：屏幕录制 · ") {
+		t.Fatalf("second step caption = %q", got)
+	}
+	// The screen step hands over to the relaunch step.
+	clk.fireLast(t)
+	if a.perm.stage != permissionRelaunch {
+		t.Fatalf("the screen step did not reach the relaunch stage: %v", a.perm.stage)
+	}
+	view.Frame()
+	if got := permissionRowCaption(t, view); got != "还差最后一步：重新打开 ShelfU 才生效" {
+		t.Fatalf("relaunch caption = %q", got)
+	}
+	if !view.HasText("重新打开 ShelfU") {
+		t.Fatalf("the relaunch button is missing; texts=%v", view.Texts())
+	}
+	if view.HasText("停止") {
+		t.Fatal("the relaunch stage must replace the switch, not offer 停止 next to it")
+	}
+}
+
+// The Full Disk Access step names the + / drag route, because the pane has
+// no entry for an app that never asked.
+func TestPermissionFlowFullDiskCaption(t *testing.T) {
+	st, clk := stubPermissions(t)
+	st.ax, st.screen = true, true
+	_, view := newSettingsShelf(t)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	want := "第 1 项，共 1 项：完整磁盘访问 · 在「系统设置」里打开 ShelfU，这里会自动往下走（列表里没有就点 +，或把访达里选中的 ShelfU 拖进去）"
+	if got := permissionRowCaption(t, view); got != want {
+		t.Fatalf("Full Disk Access caption = %q, want %q", got, want)
+	}
+	// The other steps do not repeat the Full Disk Access hint.
+	st.fda = true
+	clk.fireLast(t)
+	view.Frame()
+	if !view.HasText("还差最后一步：重新打开 ShelfU 才生效") {
+		t.Fatalf("a Full Disk Access grant must end on the relaunch stage; texts=%v", view.Texts())
+	}
+	if strings.Contains(permissionRowCaption(t, view), "访达") {
+		t.Fatal("the Full Disk Access hint leaked into another stage")
+	}
+}
+
+// A Full Disk Access grant made during the walk ends it on the relaunch
+// stage: a running process may keep its old answer for file access.
+func TestPermissionFlowFullDiskGrantReachesRelaunch(t *testing.T) {
+	st, clk := stubPermissions(t)
+	st.fda, st.ax, st.screen = false, false, false
+	a, view := newSettingsShelf(t)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
+	if st.fdaRequests != 1 {
+		t.Fatalf("Full Disk Access was not requested first: %d", st.fdaRequests)
+	}
+	st.fda = true
+	clk.fireLast(t)
+	view.Frame()
+	// The remaining items are still walked rather than abandoned.
+	if st.axRequests != 1 {
+		t.Fatalf("the walk did not continue after the Full Disk Access grant: ax=%d", st.axRequests)
+	}
+	if a.perm.relaunch != true {
+		t.Fatal("the Full Disk Access grant was not remembered for the relaunch")
+	}
+	st.ax = true
+	clk.fireLast(t)
+	st.screen = true
+	clk.fireLast(t)
+	if a.perm.stage != permissionRelaunch {
+		t.Fatalf("the walk ended at %v, want the relaunch stage", a.perm.stage)
+	}
+	view.Frame()
+	if !view.HasText("还差最后一步：重新打开 ShelfU 才生效") {
+		t.Fatalf("the relaunch stage is not shown; texts=%v", view.Texts())
+	}
+}
+
+// Without screen recording in the walk, the Full Disk Access grant alone
+// still ends on the relaunch stage.
+func TestPermissionFlowFullDiskOnlyEndsOnRelaunch(t *testing.T) {
+	st, clk := stubPermissions(t)
+	st.ax, st.screen = true, true
+	a, view := newSettingsShelf(t)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
+	}
+	st.fda = true
+	clk.fireLast(t)
+	if a.perm.stage != permissionRelaunch {
+		t.Fatalf("a lone Full Disk Access grant ended at %v, want the relaunch stage", a.perm.stage)
+	}
+	view.Frame()
+	if !view.HasText("重新打开 ShelfU") {
+		t.Fatalf("the relaunch button is missing; texts=%v", view.Texts())
+	}
+}
+
+// 停止 ends the walk and leaves no timer behind; a callback already in
+// flight must do nothing.
+func TestPermissionFlowStops(t *testing.T) {
+	st, clk := stubPermissions(t)
+	a, view := newSettingsShelf(t)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
+	}
+	view.Frame()
 	if err := view.Click("停止"); err != nil {
 		t.Fatal(err)
 	}
@@ -186,84 +427,41 @@ func TestPermissionFlowSkipsGrantedAndStops(t *testing.T) {
 		t.Fatalf("停止 left the flow at %v", a.perm.stage)
 	}
 	view.Frame()
-	if !view.HasText("ShelfU 需要 2 项系统权限") || !view.HasText("全部开启…") {
-		t.Fatalf("停止 did not return to the ordinary state; texts=%v", view.Texts())
+	if got := permissionRowCaption(t, view); got != "还差 3 项：完整磁盘访问、辅助功能、屏幕录制" {
+		t.Fatalf("停止 did not return to the ordinary state: %q", got)
 	}
-	// A callback that was already in flight when 停止 ran must do nothing.
 	clk.fireLast(t)
-	if a.perm.stage != permissionIdle || st.scRequests != 1 {
-		t.Fatalf("a stale timer advanced a stopped flow: stage=%v requests=%d", a.perm.stage, st.scRequests)
+	if a.perm.stage != permissionIdle || st.fdaRequests != 1 {
+		t.Fatalf("a stale timer advanced a stopped flow: stage=%v requests=%d", a.perm.stage, st.fdaRequests)
 	}
 }
 
-func TestPermissionFlowAdvancesFromAccessibilityToScreen(t *testing.T) {
+// Turning the pending switch off stops the walk too.
+func TestPermissionSwitchOffWhileWaitingStops(t *testing.T) {
 	st, clk := stubPermissions(t)
 	a, view := newSettingsShelf(t)
-	if err := view.Click("全部开启…"); err != nil {
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
 		t.Fatal(err)
 	}
 	view.Frame()
-	if st.axRequests != 1 || st.scRequests != 0 {
-		t.Fatalf("first step wrong: ax=%d screen=%d", st.axRequests, st.scRequests)
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
+		t.Fatal(err)
 	}
-	if !view.HasText("正在开启：第 1 项，共 2 项") {
-		t.Fatalf("first heading missing; texts=%v", view.Texts())
+	if a.perm.stage != permissionIdle {
+		t.Fatalf("the pending switch did not stop the walk: %v", a.perm.stage)
 	}
-	if !view.HasText("等你在系统设置里打开") {
-		t.Fatalf("the waiting row is missing; texts=%v", view.Texts())
+	if clk.last() == nil || !clk.last().stopped {
+		t.Fatal("the pending switch left its timer armed")
 	}
-	// A poll while the switch is still off must stay on step 1.
-	clk.fireLast(t)
-	view.Frame()
-	if st.scRequests != 0 || !view.HasText("正在开启：第 1 项，共 2 项") {
-		t.Fatalf("an ungranted poll advanced the flow: screen=%d texts=%v", st.scRequests, view.Texts())
-	}
-	// The grant lands in System Settings; the poll sees it and moves on.
-	st.ax = true
-	clk.fireLast(t)
-	view.Frame()
-	if st.scRequests != 1 {
-		t.Fatalf("screen recording not requested after Accessibility: %d", st.scRequests)
-	}
-	if !view.HasText("正在开启：第 2 项，共 2 项") {
-		t.Fatalf("second heading missing; texts=%v", view.Texts())
-	}
-	if !view.HasText("✓ 已开启") {
-		t.Fatalf("the granted Accessibility row is not green; texts=%v", view.Texts())
-	}
-	// The screen step hands over to the relaunch step.
-	clk.fireLast(t)
-	if a.perm.stage != permissionRelaunch {
-		t.Fatalf("screen step did not reach the relaunch stage: %v", a.perm.stage)
-	}
-	view.Frame()
-	if !view.HasText("还差最后一步") || !view.HasText("重新打开 ShelfU") {
-		t.Fatalf("relaunch step missing; texts=%v", view.Texts())
-	}
-}
-
-func TestPermissionFlowRelaunchRowUsesWindowTitles(t *testing.T) {
-	st, _ := stubPermissions(t)
-	a, view := newSettingsShelf(t)
-	a.perm = permissionFlow{stage: permissionRelaunch, ids: []string{screenCapturePermissionID}}
-	st.titles = false
-	view.Frame()
-	if !view.HasText("等你在系统设置里打开") {
-		t.Fatalf("unproven screen grant must stay honest; texts=%v", view.Texts())
-	}
-	// The relaunch poll stores a positive WindowServer answer and repaints.
-	st.titles = true
-	a.permissionTimerFired()
-	view.Frame()
-	if !a.perm.screenGranted || !view.HasText("重新打开后生效") {
-		t.Fatalf("a proven grant must show 重新打开后生效; texts=%v", view.Texts())
+	if st.paneOpens != 0 {
+		t.Fatal("stopping the walk opened the privacy pane")
 	}
 }
 
 func TestSettingsCloseStopsPermissionFlow(t *testing.T) {
 	st, clk := stubPermissions(t)
 	a, view := newSettingsShelf(t)
-	if err := view.Click("全部开启…"); err != nil {
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
 		t.Fatal(err)
 	}
 	if a.perm.stage != permissionWaiting {
@@ -276,21 +474,21 @@ func TestSettingsCloseStopsPermissionFlow(t *testing.T) {
 	if a.perm.stage != permissionIdle {
 		t.Fatalf("closing left the flow at %v", a.perm.stage)
 	}
-	before := st.axRequests
+	before := st.fdaRequests
 	clk.fireLast(t)
-	if st.axRequests != before || a.perm.stage != permissionIdle {
+	if st.fdaRequests != before || a.perm.stage != permissionIdle {
 		t.Fatal("a poll after close still ran")
 	}
 }
 
 func TestPermissionFlowNeverRequestsGrantedItems(t *testing.T) {
 	st, clk := stubPermissions(t)
-	st.ax, st.screen = true, true
+	st.fda, st.ax, st.screen = true, true, true
 	a := &shelf{settings: settings.Default()}
 	a.startPermissionFlow()
-	if a.perm.stage != permissionIdle || st.axRequests != 0 || st.scRequests != 0 {
-		t.Fatalf("all granted must not request anything: stage=%v ax=%d screen=%d",
-			a.perm.stage, st.axRequests, st.scRequests)
+	if a.perm.stage != permissionIdle || st.fdaRequests+st.axRequests+st.scRequests != 0 {
+		t.Fatalf("all granted must not request anything: stage=%v fda=%d ax=%d screen=%d",
+			a.perm.stage, st.fdaRequests, st.axRequests, st.scRequests)
 	}
 	if len(clk.timers) != 0 {
 		t.Fatalf("all granted armed %d timers", len(clk.timers))
@@ -305,35 +503,40 @@ func TestPermissionsSectionWorksWhileSettingsBroken(t *testing.T) {
 	a := &shelf{dataDir: dir, settings: settings.Default(), settingsBroken: true,
 		thumbnails: map[string]*ui.Bitmap{}, thumbPending: map[string]bool{}, appNames: map[string]string{}}
 	view := ui.NewTester(a.settingsView, settingsWidth, settingsHeight)
-	if !view.HasText("全部开启…") || !view.HasText("settings.json 无法读取") {
-		t.Fatalf("permission group is not usable while settings are broken; texts=%v", view.Texts())
+	if !view.HasText("settings.json 无法读取") || !view.HasText("还差 3 项") {
+		t.Fatalf("the permission group is not usable while settings are broken; texts=%v", view.Texts())
 	}
-	if err := view.Click("开启 刘海拖放保护 · 辅助功能"); err != nil {
+	if err := view.Click(permissionRowCaption(t, view)); err != nil {
 		t.Fatal(err)
 	}
-	if st.axRequests != 1 {
-		t.Fatalf("broken settings blocked the permission request: %d", st.axRequests)
-	}
-	if !view.HasText("第一次使用，或在系统设置里关掉过开关时，在这里重新开启。") {
-		t.Fatal("permission footnote is missing")
-	}
-	// The old 通用 row (and its update wording) is gone.
-	if view.HasText("每次更新后重新开启") {
-		t.Fatal("the obsolete 每次更新 wording is still shown")
+	if st.fdaRequests != 1 {
+		t.Fatalf("broken settings blocked the permission request: %d", st.fdaRequests)
 	}
 }
 
-func TestPermissionRowOpensOnePermission(t *testing.T) {
-	st, _ := stubPermissions(t)
-	_, view := newSettingsShelf(t)
-	if err := view.Click("开启 框选文字 · 屏幕录制"); err != nil {
-		t.Fatal(err)
+// The permission list is the one source of titles, order and short names.
+func TestSystemPermissionsList(t *testing.T) {
+	ps := systemPermissions()
+	ids := make([]string, len(ps))
+	shorts := make([]string, len(ps))
+	for i, p := range ps {
+		ids[i] = p.id
+		shorts[i] = p.short
+		if p.title == "" || p.detail == "" || p.gloss == "" {
+			t.Fatalf("permission %q lacks its copy: %+v", p.id, p)
+		}
 	}
-	if st.scRequests != 1 || st.axRequests != 0 {
-		t.Fatalf("row button requested the wrong items: ax=%d screen=%d", st.axRequests, st.scRequests)
+	if !slices.Equal(ids, []string{fullDiskPermissionID, accessibilityPermissionID, screenCapturePermissionID}) {
+		t.Fatalf("permission order = %v", ids)
 	}
-	if st.screen {
-		t.Fatal("stub granted a permission it never had")
+	if !slices.Equal(shorts, []string{"完整磁盘访问", "辅助功能", "屏幕录制"}) {
+		t.Fatalf("short names = %v", shorts)
+	}
+	if got := permissionsFootText(ps); got != "一个开关开启全部 3 项：完整磁盘访问（拖入不再弹窗）、辅助功能（刘海拖放保护）、屏幕录制（框选文字）。macOS 要求每一项都由你在系统设置里打开。" {
+		t.Fatalf("foot text = %q", got)
+	}
+	if p, ok := permissionByID(fullDiskPermissionID); !ok || p.short != "完整磁盘访问" {
+		t.Fatalf("permissionByID(fulldisk) = %+v, %v", p, ok)
 	}
 }
 
@@ -411,7 +614,7 @@ func TestAppBundleForExecutable(t *testing.T) {
 
 func TestRelaunchShelfUsesSameArgsAndQuits(t *testing.T) {
 	st, _ := stubPermissions(t)
-	st.ax, st.screen = true, true
+	st.fda, st.ax, st.screen = true, true, true
 	oldArgs := os.Args
 	os.Args = []string{"/tmp/ShelfU", "--data-dir", "/tmp/data dir"}
 	defer func() { os.Args = oldArgs }()

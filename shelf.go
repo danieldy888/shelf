@@ -77,7 +77,7 @@ type shelf struct {
 	settingsBroken                                              bool           // settings.json unreadable: never overwrite it
 	settingsWin                                                 *mygo.Window   // the 设置 window; nil while closed
 	settingsPrevPID                                             int            // app to hand the keyboard back to when it closes
-	perm                                                        permissionFlow // 系统权限 unified entry's 全部开启 walk; zero = idle
+	perm                                                        permissionFlow // 系统权限 unified entry's guided walk; zero = idle
 	loginOn                                                     bool           // 开机时自动启动，read back each time the window opens
 	loginErr                                                    string         // last SetOpenAtLogin failure, shown inline
 	rn                                                          *renameUI      // 重新命名 window session; nil until first use

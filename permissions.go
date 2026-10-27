@@ -4,14 +4,15 @@ package main
 
 // The one list of system permissions ShelfU needs and the one entry point
 // that walks the user through granting them. The tray menu, the Settings
-// window's 系统权限 group and the 全部开启 flow all read systemPermissions;
+// window's 系统权限 group and the guided flow all read systemPermissions;
 // none of them duplicates a title, an order or a probe.
 //
 // Nothing here changes a permission by itself: the enabled probes are
-// read-only (AXIsProcessTrusted, CGPreflightScreenCaptureAccess), and only
-// the user-initiated request functions reach the existing paths that clear
-// a stale ad-hoc record while the grant is absent and then open the
-// matching System Settings pane.
+// read-only (a TCC.db open for Full Disk Access, AXIsProcessTrusted,
+// CGPreflightScreenCaptureAccess), and only the user-initiated request
+// functions open System Settings, reveal the app in Finder or reach the
+// existing paths that clear a stale ad-hoc record while the grant is
+// absent.
 
 import (
 	"fmt"
@@ -28,14 +29,16 @@ import (
 )
 
 const (
+	fullDiskPermissionID      = "fulldisk"
 	accessibilityPermissionID = "accessibility"
 	screenCapturePermissionID = "screencapture"
 
-	// permissionPollInterval is how often the flow re-reads the
-	// Accessibility grant while the user is in System Settings.
+	// permissionPollInterval is how often the flow re-reads the current
+	// item's probe (Full Disk Access, Accessibility) while the user is in
+	// System Settings.
 	permissionPollInterval = time.Second
 	// permissionScreenHandoff is how long the screen-recording step keeps
-	// its 「正在开启」 heading before it turns into 「还差最后一步」. The
+	// its 「第 n 项」 caption before it turns into 「还差最后一步」. The
 	// request opens the pane first; the pause lets the user see which step
 	// they are on while the pane comes forward.
 	permissionScreenHandoff = 1500 * time.Millisecond
@@ -44,16 +47,18 @@ const (
 // Seams for the headless tests. The probes never prompt; the request
 // functions are the user-initiated paths.
 var (
-	accessibilityProbe = mac.AccessibilityTrusted
+	// Full Disk Access has no read-only query API: the probe opens the
+	// TCC database, which only a granted process may read.
+	fullDiskAccessProbe   = mac.FullDiskAccessGranted
+	fullDiskAccessRequest = mac.RequestFullDiskAccess
+	accessibilityProbe    = mac.AccessibilityTrusted
 	// ScreenCapturePreflight, not ScreenCaptureAllowed: showing state must
 	// never run the stale-record reset that belongs to the request path.
 	screenCaptureProbe   = mac.ScreenCapturePreflight
 	screenCaptureRequest = mac.RequestScreenCapture
-	// screenCaptureWindowTitles is a non-cached, non-prompting hint: when
-	// WindowServer returns other apps' window titles, the screen-recording
-	// grant is in effect even though this process's preflight answer is
-	// cached false. A false answer only means "not proven".
-	screenCaptureWindowTitles = mac.ScreenCaptureGrantedByWindowTitles
+	// openPrivacyPane is all a switched-off permission can do: macOS gives
+	// no app the power to revoke a grant, only the user in System Settings.
+	openPrivacyPane = mac.OpenPrivacySecurityPane
 
 	permissionAfterFunc = func(d time.Duration, fn func()) permissionTimer {
 		return time.AfterFunc(d, fn)
@@ -65,26 +70,45 @@ type permissionTimer interface {
 	Stop() bool
 }
 
-// systemPermission is one row of the unified entry: the probe that reports
+// systemPermission is one item of the unified entry: the probe that reports
 // the live state and the user-initiated request for that one permission.
+// short names it inside a sentence (the row's caption and the group's note),
+// gloss is the one-line reason that note gives for it.
 type systemPermission struct {
 	id      string
 	title   string
+	short   string
+	gloss   string
 	detail  string
-	icon    *ui.SVG
 	enabled func() bool
 	request func() bool
 }
 
 // systemPermissions is the single source of the list, in the order the
-// 全部开启 flow walks it.
+// guided flow walks it: Full Disk Access first, because it is the one the
+// user notices (every drag out of Downloads/Desktop/Documents asks until it
+// is on).
 func systemPermissions() []systemPermission {
 	return []systemPermission{
 		{
+			id:     fullDiskPermissionID,
+			title:  "文件访问 · 完整磁盘访问",
+			short:  "完整磁盘访问",
+			gloss:  "拖入不再弹窗",
+			detail: "从下载、桌面、文稿等文件夹拖入时不再弹窗询问",
+			enabled: func() bool {
+				return fullDiskAccessProbe()
+			},
+			request: func() bool {
+				return fullDiskAccessRequest()
+			},
+		},
+		{
 			id:     accessibilityPermissionID,
 			title:  "刘海拖放保护 · 辅助功能",
+			short:  "辅助功能",
+			gloss:  "刘海拖放保护",
 			detail: "拖文件到刘海时，挡住系统弹出的桌面栏",
-			icon:   accessSymbol,
 			enabled: func() bool {
 				return accessibilityProbe()
 			},
@@ -95,8 +119,9 @@ func systemPermissions() []systemPermission {
 		{
 			id:     screenCapturePermissionID,
 			title:  "框选文字 · 屏幕录制",
+			short:  "屏幕录制",
+			gloss:  "框选文字",
 			detail: "只在你框选时截取所选区域，在本机识别",
-			icon:   ocrSymbol,
 			enabled: func() bool {
 				return screenCaptureProbe()
 			},
@@ -126,9 +151,27 @@ func missingSystemPermissions() []systemPermission {
 	return missing
 }
 
-// accessSymbol is the hand glyph for the Accessibility row, drawn with the
-// same 24pt stroke grid as the other panel symbols.
-var accessSymbol = symbol(`<path d="M8 12V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M11 11V4.5a1.5 1.5 0 0 1 3 0V11"/><path d="M14 11V7a1.5 1.5 0 0 1 3 0v6a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-2.7L3.6 15a1.5 1.5 0 0 1 2.4-1.8L8 14"/>`)
+// permissionShortNames joins the given permissions' short names the way a
+// Chinese sentence lists them: 完整磁盘访问、辅助功能、屏幕录制.
+func permissionShortNames(ps []systemPermission) string {
+	names := make([]string, len(ps))
+	for i, p := range ps {
+		names[i] = p.short
+	}
+	return strings.Join(names, "、")
+}
+
+// permissionsFootText is the note under the group's card: the whole list in
+// one sentence, built from the list itself so a fourth permission could
+// never leave a stale count or a stale name behind.
+func permissionsFootText(ps []systemPermission) string {
+	parts := make([]string, len(ps))
+	for i, p := range ps {
+		parts[i] = p.short + "（" + p.gloss + "）"
+	}
+	return fmt.Sprintf("一个开关开启全部 %d 项：%s。macOS 要求每一项都由你在系统设置里打开。",
+		len(ps), strings.Join(parts, "、"))
+}
 
 // permissionMenuItem is the tray item that replaces the old single
 // permission entry. It counts what is missing at menu-build time, because
@@ -147,9 +190,13 @@ func (a *shelf) permissionMenuItem() *mygo.MenuItem {
 // showPermissions opens (or focuses) the Settings window and immediately
 // starts the guided flow.
 func (a *shelf) showPermissions() {
-	a.openSettings()
+	openSettingsWindow(a)
 	a.startPermissionFlow()
 }
+
+// openSettingsWindow is a seam: opening the window needs a running app loop,
+// so the headless tests stub it and still exercise the click path.
+var openSettingsWindow = func(a *shelf) { a.openSettings() }
 
 // permissionStage is the guided flow's state. The zero value is idle.
 type permissionStage int
@@ -160,21 +207,24 @@ const (
 	// flow is waiting for its grant. Accessibility is polled; the screen
 	// recording step hands over to permissionRelaunch after a pause.
 	permissionWaiting
-	// permissionRelaunch: screen recording was requested, or is already
-	// granted but invisible to the cached preflight, and ShelfU must be
-	// relaunched before the grant takes effect.
+	// permissionRelaunch: a grant that a running process may keep answering
+	// stale for — Full Disk Access or screen recording — was made during the
+	// walk, so ShelfU must be relaunched before it takes effect.
 	permissionRelaunch
 )
 
-// permissionFlow is the state of the 全部开启 walk. ids is the snapshot of
+// permissionFlow is the state of the guided walk. ids is the snapshot of
 // what was missing when the flow started, so a grant landing mid-flow
-// cannot shift the step index.
+// cannot shift the step index. relaunch remembers that a Full Disk Access
+// grant landed while the walk was running: the remaining items are still
+// walked, and the walk then ends on the relaunch stage instead of the
+// ordinary all-granted one.
 type permissionFlow struct {
-	stage         permissionStage
-	ids           []string
-	step          int
-	screenGranted bool
-	timer         permissionTimer
+	stage    permissionStage
+	ids      []string
+	step     int
+	relaunch bool
+	timer    permissionTimer
 }
 
 // stopPermissionFlow ends the walk and leaves no timer behind. Closing the
@@ -236,7 +286,13 @@ func (a *shelf) beginPermissionStep() {
 		}
 		return
 	}
-	// Nothing left: the flow ends in the ordinary all-granted state.
+	// Nothing left: the flow ends in the ordinary all-granted state, or on
+	// the relaunch stage when a Full Disk Access grant landed during it.
+	if a.perm.relaunch {
+		a.perm.stage = permissionRelaunch
+		a.repaintSettings()
+		return
+	}
 	a.stopPermissionFlow()
 	a.repaintSettings()
 }
@@ -255,34 +311,34 @@ func (a *shelf) armPermissionTimer(d time.Duration) {
 // nothing.
 func (a *shelf) permissionTimerFired() {
 	a.perm.timer = nil
-	switch a.perm.stage {
-	case permissionWaiting:
-		p, ok := a.permissionFlowCurrent()
-		if !ok {
-			a.stopPermissionFlow()
-			a.repaintSettings()
-			return
-		}
-		if p.id == screenCapturePermissionID {
-			a.perm.stage = permissionRelaunch
-			a.perm.screenGranted = screenCaptureWindowTitles()
-			a.repaintSettings()
-			a.armPermissionTimer(permissionPollInterval)
-			return
-		}
-		if p.enabled() {
-			a.perm.step++
-			a.beginPermissionStep()
-			return
-		}
-		a.armPermissionTimer(permissionPollInterval)
-	case permissionRelaunch:
-		if !a.perm.screenGranted && screenCaptureWindowTitles() {
-			a.perm.screenGranted = true
-			a.repaintSettings()
-		}
-		a.armPermissionTimer(permissionPollInterval)
+	if a.perm.stage != permissionWaiting {
+		return
 	}
+	p, ok := a.permissionFlowCurrent()
+	if !ok {
+		a.stopPermissionFlow()
+		a.repaintSettings()
+		return
+	}
+	if p.id == screenCapturePermissionID {
+		// The request opened the pane; the grant itself is invisible to this
+		// process's cached preflight, so the walk ends here either way.
+		a.perm.stage = permissionRelaunch
+		a.repaintSettings()
+		return
+	}
+	if !p.enabled() {
+		a.armPermissionTimer(permissionPollInterval)
+		return
+	}
+	if p.id == fullDiskPermissionID {
+		// The grant is live for new opens, but this process may keep its
+		// old answer for file access; the walk goes on and ends on the
+		// relaunch stage.
+		a.perm.relaunch = true
+	}
+	a.perm.step++
+	a.beginPermissionStep()
 }
 
 // relaunchPlan is how the Settings window restarts this exact app after the
@@ -322,18 +378,10 @@ func relaunchPlanFor(exe string, args []string, pid int) relaunchPlan {
 
 // appBundleForExecutable reports the enclosing .app when exe lives at
 // <Bundle>.app/Contents/MacOS/<binary>. It is a pure path check; callers
-// only use it to choose the launch route.
+// only use it to choose the launch route. The Full Disk Access reveal needs
+// the same answer, so the check itself lives in internal/mac.
 func appBundleForExecutable(exe string) (string, bool) {
-	const marker = "/Contents/MacOS/"
-	i := strings.LastIndex(exe, marker)
-	if i <= 0 {
-		return "", false
-	}
-	bundle := exe[:i]
-	if !strings.HasSuffix(bundle, ".app") {
-		return "", false
-	}
-	return bundle, true
+	return mac.AppBundleForExecutable(exe)
 }
 
 func shellQuote(s string) string {
@@ -355,8 +403,9 @@ var (
 )
 
 // relaunchShelf restarts ShelfU with the same arguments so the cached
-// screen-recording answer is re-read. It starts the waiter first and quits
-// only once that succeeded; a failure stays visible in the window.
+// screen-recording preflight and the process's Full Disk Access answer are
+// re-read. It starts the waiter first and quits only once that succeeded; a
+// failure stays visible in the window.
 func (a *shelf) relaunchShelf() {
 	exe, err := relaunchExecutable()
 	if err != nil {
@@ -372,104 +421,106 @@ func (a *shelf) relaunchShelf() {
 	relaunchQuit()
 }
 
-// The palette for the permission rows. Orange matches the panel's warning
-// tone; green is the settings theme's success color.
-var permWarn = ui.Hex("#FF9F0A")
+// permissionsTitle is the group's heading and the title of its one row.
+const permissionsTitle = "系统权限"
 
-// settingsPermissionsSection is the 系统权限 group, first in the window.
-// It is never tied to settings.json, so it keeps working while the file is
-// broken — exactly like the old 刘海拖放保护 row did.
+// settingsPermissionsSection is the 系统权限 group, first in the window: one
+// row, one switch, one list. It is never tied to settings.json, so it keeps
+// working while the file is broken — exactly like the old 刘海拖放保护 row
+// did.
 func (a *shelf) settingsPermissionsSection(c *ui.Context) {
 	permissions := systemPermissions()
-	missing := 0
-	for _, p := range permissions {
-		if !p.enabled() {
-			missing++
-		}
-	}
-	title, caption := fmt.Sprintf("ShelfU 需要 %d 项系统权限", len(permissions)), fmt.Sprintf("还差 %d 项", missing)
-	if missing == 0 {
-		caption = "已全部开启"
-	}
-	if a.perm.stage == permissionWaiting {
-		title = fmt.Sprintf("正在开启：第 %d 项，共 %d 项", a.perm.step+1, len(a.perm.ids))
-		caption = "在「系统设置」里打开 ShelfU 的开关，这里会自动往下走"
-	} else if a.perm.stage == permissionRelaunch {
-		title = "还差最后一步"
-		caption = "屏幕录制要重新打开 ShelfU 才生效"
-	}
-	settingsSection(c, "系统权限", "第一次使用，或在系统设置里关掉过开关时，在这里重新开启。", false, func() {
-		ui.Row(c.Key("perm-head")).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(0, 12).FillWidth().Children(func() {
-			ui.Column(c.Key("perm-head-k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
-				ui.Text(c, title).SingleLine().FontSize(13).FontWeight(600).TextColor(setInk)
-				ui.Text(c, caption).FontSize(11).TextColor(setInk3)
-			})
-			switch a.perm.stage {
-			case permissionRelaunch:
-				settingsAccentButton(c, "relaunch", "重新打开 ShelfU", func() { a.relaunchShelf() })
-			case permissionWaiting:
-				settingsQuietButton(c, "perm-stop", "停止", func() {
-					a.stopPermissionFlow()
-					a.repaintSettings()
-				})
-			default:
-				if missing > 0 {
-					settingsAccentButton(c, "perm-all", "全部开启…", func() { a.startPermissionFlow() })
-				}
-			}
-		})
-		for _, p := range permissions {
-			settingsSep(c, "perm-"+p.id)
-			a.settingsPermissionRow(c, p)
-		}
+	missing := missingSystemPermissions()
+	settingsSection(c, permissionsTitle, permissionsFootText(permissions), false, func() {
+		a.settingsPermissionSwitch(c, permissions, missing)
 	})
 }
 
-func (a *shelf) settingsPermissionRow(c *ui.Context, p systemPermission) {
-	enabled := p.enabled()
-	current, currentOK := a.permissionFlowCurrent()
-	isCurrent := currentOK && current.id == p.id
-	waiting := a.perm.stage == permissionWaiting && isCurrent
-	relaunch := a.perm.stage == permissionRelaunch && p.id == screenCapturePermissionID
-	ui.Row(c.Key("perm-row-"+p.id)).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(0, 12).FillWidth().Children(func() {
-		chip := ui.Column(c.Key("perm-ic-"+p.id)).Size(22, 22).Radius(6).
-			Background(ui.RGBA(255, 255, 255, 0.08)).Center()
-		chip.Children(func() {
-			ui.Icon(c, p.icon).Size(13, 13).TextColor(setInk2)
+// permissionCaption is the row's caption: what is left, or which step of the
+// walk the user is on. Pure apart from the flow's own state.
+func (a *shelf) permissionCaption(permissions, missing []systemPermission) string {
+	switch a.perm.stage {
+	case permissionWaiting:
+		p, ok := a.permissionFlowCurrent()
+		if !ok {
+			break
+		}
+		caption := fmt.Sprintf("第 %d 项，共 %d 项：%s · 在「系统设置」里打开 ShelfU，这里会自动往下走",
+			a.perm.step+1, len(a.perm.ids), p.short)
+		if p.id == fullDiskPermissionID {
+			// Full Disk Access has no list entry for an app that never asked:
+			// the request reveals the bundle in Finder for exactly this.
+			caption += "（列表里没有就点 +，或把访达里选中的 ShelfU 拖进去）"
+		}
+		return caption
+	case permissionRelaunch:
+		return "还差最后一步：重新打开 ShelfU 才生效"
+	}
+	if len(missing) == 0 {
+		return fmt.Sprintf("已全部开启（%d/%d）", len(permissions), len(permissions))
+	}
+	return fmt.Sprintf("还差 %d 项：%s", len(missing), permissionShortNames(missing))
+}
+
+// settingsPermissionSwitch is the group's one row: the title and the state
+// caption on the left, one switch on the right. The switch is on only when
+// every permission is granted; while the walk waits it shows on, because the
+// walk is what is running, and a quiet 停止 sits next to it. The relaunch
+// stage replaces the switch with the accent button: nothing is left to
+// switch until the app has restarted.
+func (a *shelf) settingsPermissionSwitch(c *ui.Context, permissions, missing []systemPermission) {
+	caption := a.permissionCaption(permissions, missing)
+	if a.perm.stage == permissionRelaunch {
+		ui.Row(c.Key("perm-row")).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(0, 12).FillWidth().Children(func() {
+			permissionRowLabel(c, caption)
+			settingsAccentButton(c, "relaunch", "重新打开 ShelfU", func() { a.relaunchShelf() })
 		})
-		ui.Column(c.Key("perm-k-" + p.id)).Gap(2).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, p.title).SingleLine().FontSize(13).TextColor(setInk)
-			ui.Text(c, p.detail).FontSize(11).TextColor(setInk3)
-		})
-		switch {
-		case enabled:
-			ui.Text(c, "✓ 已开启").SingleLine().FontSize(12).TextColor(settingsTheme.Success)
-		case waiting:
-			ui.Row(c.Key("perm-wait-" + p.id)).AlignItems(ui.Center).Gap(5).Children(func() {
-				ui.Box(c.Key("perm-dot-"+p.id)).Size(6, 6).Radius(3).Background(permWarn)
-				ui.Text(c, "等你在系统设置里打开").SingleLine().FontSize(11).TextColor(permWarn)
-			})
-		case relaunch:
-			if a.perm.screenGranted {
-				ui.Text(c, "重新打开后生效").SingleLine().FontSize(11).TextColor(permWarn)
-			} else {
-				ui.Row(c.Key("perm-wait-" + p.id)).AlignItems(ui.Center).Gap(5).Children(func() {
-					ui.Box(c.Key("perm-dot-"+p.id)).Size(6, 6).Radius(3).Background(permWarn)
-					ui.Text(c, "等你在系统设置里打开").SingleLine().FontSize(11).TextColor(permWarn)
+		return
+	}
+	on := len(missing) == 0 || a.perm.stage == permissionWaiting
+	row := ui.ToggleBase(c.Key("toggle-permissions"), &on).FillWidth().AlignItems(ui.Center).
+		Gap(10).MinHeight(48).Padding(0, 12).Label(permissionsTitle)
+	var sw ui.Element
+	row.Children(func() {
+		permissionRowLabel(c, caption)
+		ui.Row(c.Key("perm-ctl")).AlignItems(ui.Center).Gap(8).Children(func() {
+			if a.perm.stage == permissionWaiting {
+				settingsQuietButton(c, "stop", "停止", func() {
+					a.stopPermissionFlow()
+					a.repaintSettings()
 				})
 			}
-		case a.perm.stage == permissionIdle:
-			ui.Row(c.Key("perm-off-" + p.id)).AlignItems(ui.Center).Gap(8).Children(func() {
-				ui.Text(c, "未开启").SingleLine().FontSize(12).TextColor(setInk3)
-				if ui.Button(c, "开启…").FontSize(12).Label("开启 " + p.title).Clicked() {
-					p.request()
-					a.repaintSettings()
-				}
-			})
-		default:
-			ui.Text(c, "未开启").SingleLine().FontSize(12).TextColor(setInk3)
-		}
+			sw = ui.Switch(c, &on).Label(permissionsTitle)
+		})
 	})
+	if row.Changed() || sw.Changed() {
+		a.applyPermissionSwitch(on)
+	}
+}
+
+// permissionRowLabel is the switch row's left column.
+func permissionRowLabel(c *ui.Context, caption string) {
+	ui.Column(c.Key("perm-k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
+		ui.Text(c, permissionsTitle).SingleLine().FontSize(13).TextColor(setInk)
+		ui.Text(c, caption).FontSize(11).TextColor(setInk3)
+	})
+}
+
+// applyPermissionSwitch is what the one switch does. On starts the walk over
+// whatever is missing. Off while the walk waits stops it. Off when everything
+// is granted cannot revoke anything — macOS gives no app that power — so it
+// opens 隐私与安全性 and the row's probe keeps the switch on.
+func (a *shelf) applyPermissionSwitch(on bool) {
+	switch {
+	case on:
+		a.startPermissionFlow()
+	case a.perm.stage == permissionWaiting:
+		a.stopPermissionFlow()
+		a.repaintSettings()
+	default:
+		openPrivacyPane()
+		a.repaintSettings()
+	}
 }
 
 // settingsAccentButton is the mock's compact accent pill used by the
