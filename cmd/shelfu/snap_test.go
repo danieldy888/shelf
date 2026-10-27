@@ -515,6 +515,70 @@ func TestSnapReappliesAFrameTheWindowServerChanged(t *testing.T) {
 	}
 }
 
+// snapPendingConfirm arranges a window whose frame the server immediately
+// changes, leaving the delayed verification pending.
+func snapPendingConfirm(t *testing.T) (*shelf, *fakeSnapWindow, *snapSeams) {
+	t.Helper()
+	a := snapTestShelf()
+	tiled := mac.AXRect{X: 0, Y: 25, Width: 490, Height: 750}
+	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400},
+		move: true, resize: true, tiled: &tiled}
+	s := &snapSeams{fake: f, pid: 4242, trusted: true, down: true,
+		work: mygo.Rectangle{X: 0, Y: 25, Width: 1470, Height: 750}}
+	installSnapSeams(t, s)
+	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
+	f.rect.X -= 60
+	a.snapTick(time.Now(), mygo.Point{X: 690, Y: 10}, false)
+	f.rect.X -= 20
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false)
+	s.down = false
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false)
+	if a.snap.confirm == nil || len(f.moves) != 1 || f.rect.Width != 490 {
+		t.Fatalf("setup: confirm=%v moves=%+v frame=%+v", a.snap.confirm, f.moves, f.rect)
+	}
+	return a, f, s
+}
+
+// A new press while the previous arrangement is still being verified must
+// drop the check, not write the old target back under the new gesture.
+func TestSnapNewPressCancelsPendingVerification(t *testing.T) {
+	a, f, s := snapPendingConfirm(t)
+	s.fake = nil // the new press lands on nothing
+	a.snapPress(false, 0, mygo.Point{X: 900, Y: 500})
+	if a.snap.confirm != nil {
+		t.Fatal("the old verification survived a new press")
+	}
+	if !f.released {
+		t.Fatal("the old window reference leaked")
+	}
+	if len(f.moves) != 1 {
+		t.Fatalf("the new press wrote the old target back: moves=%+v", f.moves)
+	}
+	if f.rect.Width != 490 {
+		t.Fatalf("the window moved on the new press: %+v", f.rect)
+	}
+}
+
+// Turning the feature off ends the session and its pending verification;
+// the monitor must not keep arranging windows.
+func TestSnapSettingOffCancelsPendingVerification(t *testing.T) {
+	a, f, _ := snapPendingConfirm(t)
+	a.dataDir = t.TempDir()
+	a.setSnapWindows(false)
+	if a.settings.SnapWindows {
+		t.Fatal("the setting stayed on")
+	}
+	if a.snap.confirm != nil {
+		t.Fatal("the pending verification survived the setting being switched off")
+	}
+	if !f.released {
+		t.Fatal("the window reference leaked")
+	}
+	if len(f.moves) != 1 || f.rect.Width != 490 {
+		t.Fatalf("the setting switch touched the window: moves=%+v frame=%+v", f.moves, f.rect)
+	}
+}
+
 func TestSnapLeavingTriggerCancels(t *testing.T) {
 	a := snapTestShelf()
 	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400}, move: true, resize: true}

@@ -238,7 +238,7 @@ func (a *shelf) snapPress(inside bool, button int, p mygo.Point) {
 	if button != 0 || inside {
 		return
 	}
-	a.flushSnapConfirm()
+	a.cancelSnapConfirm()
 	a.endSnapSession(false)
 	if a.quitting || !a.settings.SnapWindows || a.notchW <= 0 || a.notchH <= 0 {
 		return
@@ -467,20 +467,6 @@ func (a *shelf) snapConfirmTick(now time.Time) {
 	c.win.MoveResize(c.target, c.resize)
 }
 
-// flushSnapConfirm applies a pending verification at once, before a new
-// session reuses the shelf state, and releases the reference.
-func (a *shelf) flushSnapConfirm() {
-	c := a.snap.confirm
-	if c == nil {
-		return
-	}
-	if f, ok := c.win.Frame(); !ok || !snapFrameNear(f, c.target) {
-		c.win.MoveResize(c.target, c.resize)
-	}
-	c.win.Release()
-	a.snap.confirm = nil
-}
-
 // cancelSnapConfirm drops a pending verification without touching the
 // window (quit path).
 func (a *shelf) cancelSnapConfirm() {
@@ -609,6 +595,7 @@ func (a *shelf) setSnapWindows(on bool) {
 	}
 	if !on {
 		a.endSnapSession(true)
+		a.cancelSnapConfirm()
 	}
 }
 
