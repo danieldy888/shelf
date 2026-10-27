@@ -87,9 +87,6 @@ func snapTicker(t *testing.T, a *shelf) {
 					active, _ := dragState()
 					a.snapTick(now, p, active)
 					a.syncWindowFrame()
-					if a.visible && a.win != nil {
-						a.win.Invalidate()
-					}
 				})
 			}
 		}

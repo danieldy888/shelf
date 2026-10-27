@@ -79,19 +79,21 @@ type snapWindow interface {
 
 // snapState is one window-drag session. Zero is idle.
 type snapState struct {
-	armed    bool
-	press    mygo.Point
-	win      snapWindow
-	start    mac.AXRect // window frame at the press
-	frame    mac.AXRect // latest frame read while dragging
-	move     bool       // the window's position is settable
-	resize   bool       // the window's size is settable
-	trusted  bool       // Accessibility at the press
-	dragging bool       // the press turned out to be a window drag
-	hot      int        // hovered tile, -1 for none
-	panel    bool       // the 排列窗口 panel is (or is closing as) the open panel
-	drawn    bool       // the shell currently drawn is the snap box
-	ghost    *snapGhost
+	armed     bool
+	press     mygo.Point
+	win       snapWindow
+	start     mac.AXRect // window frame at the press
+	frame     mac.AXRect // latest frame read while dragging
+	move      bool       // the window's position is settable
+	resize    bool       // the window's size is settable
+	trusted   bool       // Accessibility at the press
+	dragging  bool       // the press turned out to be a window drag
+	hot       int        // hovered tile, -1 for none
+	panel     bool       // the 排列窗口 panel is (or is closing as) the open panel
+	drawn     bool       // the shell currently drawn is the snap box
+	wasOpen   bool       // the shelf panel was already open when the snap panel took over
+	prevLevel int        // that panel's level, restored when the snap panel leaves
+	ghost     *snapGhost
 }
 
 // Seams for the headless tests and the smoke run.
@@ -105,6 +107,13 @@ var (
 	}
 	snapOwnPID    = mac.OwnPID
 	snapOwnWindow = func(a *shelf, f mac.AXRect) bool { return a.snapOwnWindowFrame(f) }
+	// snapInvalidate repaints the shelf when a tile becomes (or stops
+	// being) the hovered one. A seam so the headless test can count it.
+	snapInvalidate = func(a *shelf) {
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
 	// snapWorkAreaAt picks the display a window lives on; a seam because
 	// Display queries need the running app, headless tests do not have.
 	snapWorkAreaAt = func(p mygo.Point) mygo.Rectangle {
@@ -337,9 +346,15 @@ func (a *shelf) snapTick(now time.Time, p mygo.Point, fileDrag bool) {
 // preview appears, only the permission row.
 func (a *shelf) snapHover(p mygo.Point) {
 	s := &a.snap
+	prev := s.hot
 	s.hot = -1
 	if s.trusted && s.win != nil && s.win.Valid() {
 		s.hot = snapHotSlot(snapPanelRect(a.stripCenter(), a.y+a.sheetTop()), p)
+	}
+	if s.hot != prev {
+		// The hovered tile is the panel's only changing picture while the
+		// user drags another app's window; nothing else redraws it.
+		snapInvalidate(a)
 	}
 	if s.hot < 0 {
 		a.closeGhost()
@@ -356,7 +371,10 @@ func (a *shelf) snapRelease(p mygo.Point) {
 	s := &a.snap
 	hadPanel := s.panel
 	target := -1
-	if s.dragging && s.trusted && s.win != nil && s.win.Valid() {
+	// Only a panel that actually opened, and is still open at the release,
+	// may arrange anything. A hidden 360 × 150 box is not a target: the
+	// drag can end beside the notch without ever opening it.
+	if s.panel && a.visible && s.dragging && s.trusted && s.win != nil && s.win.Valid() {
 		if f, ok := s.win.Frame(); ok {
 			s.frame = f
 		}
@@ -379,8 +397,9 @@ func (a *shelf) snapRelease(p mygo.Point) {
 	}
 	keepForPermission := hadPanel && !s.trusted
 	a.endSnapSession(!keepForPermission)
-	// The result grows out of the notch as a capsule; the panel is folding
-	// while this is posted, so it cannot land in the island's pill.
+	// The result is posted after the panel is gone (or the panel that was
+	// underneath is back): with no shelf panel up it grows out of the notch
+	// as a capsule instead of landing in a pill no one can see.
 	switch {
 	case resizeErr || (target >= 0 && !resize):
 		a.toastStatus("这个窗口不能调整大小", time.Now().Add(4*time.Second), statusInfo)
@@ -407,28 +426,66 @@ func (a *shelf) endSnapSession(hidePanel bool) {
 	}
 }
 
-// openSnapPanel shows the shelf as the 360 × 150 arrangement panel.
+// openSnapPanel shows the shelf as the 360 × 150 arrangement panel. When a
+// panel is already open the snap panel takes it over in place: the level
+// returns to the island and the content becomes the six tiles, with the
+// shell morphing to its own box. show() would refuse (already visible), so
+// this path sets the drawn state and the native frame itself.
 func (a *shelf) openSnapPanel() {
 	s := &a.snap
 	if s.panel {
 		return
 	}
-	s.panel = true
-	s.hot = -1
+	s.panel, s.hot = true, -1
+	if a.visible {
+		s.wasOpen = true
+		s.prevLevel = a.currentLevel()
+		s.drawn = true
+		a.level = 1
+		a.jumpLevel = false
+		a.syncMousePassThrough()
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+		return
+	}
+	s.wasOpen, s.prevLevel = false, 0
 	a.show(false)
 }
 
-// removeSnapPanel folds a snap panel away. drawn stays true until the fold
-// finishes so the shell animates from its own box, not from the island.
+// removeSnapPanel leaves the arrangement panel. A panel the drag opened
+// folds away; one that was already open underneath returns to the level it
+// had (its page is still current, because the snap panel never switched
+// pages). drawn stays true for a fold so the shell animates from its own
+// box, and clears at once when restoring a panel.
 func (a *shelf) removeSnapPanel() {
 	s := &a.snap
 	if !s.panel {
 		return
 	}
 	s.panel = false
-	if a.visible {
-		a.hide(hidePassive)
+	if !a.visible {
+		s.wasOpen, s.prevLevel = false, 0
+		return
 	}
+	if s.wasOpen {
+		level := s.prevLevel
+		s.wasOpen, s.prevLevel = false, 0
+		s.drawn = false
+		a.level = level
+		if a.level < 1 {
+			a.level = 1
+		}
+		// Put the old page back at once; only the shell has to spring
+		// from the 360 × 150 box to its own.
+		a.jumpLevel = true
+		a.syncMousePassThrough()
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+		return
+	}
+	a.hide(hidePassive)
 }
 
 // openSnapPermissions is the panel's 开启 button: the existing single

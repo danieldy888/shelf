@@ -50,28 +50,38 @@ func snapTestShelf() *shelf {
 }
 
 type snapSeams struct {
-	down    bool
-	calls   int
-	fake    *fakeSnapWindow
-	pid     int
-	trusted bool
-	own     bool
-	work    mygo.Rectangle
+	down     bool
+	calls    int
+	fake     *fakeSnapWindow
+	pid      int
+	trusted  bool
+	own      bool
+	repaints *int
+	work     mygo.Rectangle
 }
 
 func installSnapSeams(t *testing.T, s *snapSeams) {
 	t.Helper()
 	oldTrusted, oldPID, oldOwn := accessibilityProbe, snapOwnPID, snapOwnWindow
-	oldAt, oldWork := snapAXWindowAt, snapWorkAreaAt
+	oldAt, oldWork, oldInv := snapAXWindowAt, snapWorkAreaAt, snapInvalidate
 	oldDown := dragLeftDown
 	t.Cleanup(func() {
 		accessibilityProbe, snapOwnPID, snapOwnWindow = oldTrusted, oldPID, oldOwn
-		snapAXWindowAt, snapWorkAreaAt = oldAt, oldWork
+		snapAXWindowAt, snapWorkAreaAt, snapInvalidate = oldAt, oldWork, oldInv
 		dragLeftDown = oldDown
 	})
 	accessibilityProbe = func() bool { return s.trusted }
 	snapOwnPID = func() int { return 999 }
 	snapOwnWindow = func(*shelf, mac.AXRect) bool { return s.own }
+	snapInvalidate = func(a *shelf) {
+		if s.repaints != nil {
+			*s.repaints = *s.repaints + 1
+			return
+		}
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
 	snapAXWindowAt = func(x, y float64) (snapWindow, int, bool) {
 		s.calls++
 		if s.fake == nil {
@@ -311,6 +321,102 @@ func TestSnapOnlyMovesUnresizableWindow(t *testing.T) {
 	}
 	if a.status != "这个窗口不能调整大小" {
 		t.Fatalf("status = %q, want the resize notice", a.status)
+	}
+}
+
+// A release beside the notch must not land on the hidden panel's tiles:
+// without an opened panel there is no target, however the pointer happens
+// to sit over where the panel would have been.
+func TestSnapReleaseNeedsAnOpenPanel(t *testing.T) {
+	a := snapTestShelf()
+	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400}, move: true, resize: true}
+	s := &snapSeams{fake: f, pid: 4242, trusted: true, down: true,
+		work: mygo.Rectangle{X: 0, Y: 25, Width: 1470, Height: 750}}
+	installSnapSeams(t, s)
+	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
+	f.rect.X -= 30
+	f.rect.Y -= 190
+	// (570,110) is outside the trigger, so no panel opens; it lies inside
+	// the hidden panel's 左 1/3 tile.
+	p := mygo.Point{X: 570, Y: 110}
+	a.snapTick(time.Now(), p, false)
+	if !a.snap.dragging || a.visible || a.snap.panel {
+		t.Fatalf("dragging=%v visible=%v panel=%v, want a drag with no panel",
+			a.snap.dragging, a.visible, a.snap.panel)
+	}
+	s.down = false
+	a.snapTick(time.Now(), p, false)
+	if len(f.moves) != 0 {
+		t.Fatalf("a release without an open panel arranged the window: %+v", f.moves)
+	}
+	if a.snap.armed || f.released == false {
+		t.Fatalf("session not finished cleanly: armed=%v released=%v", a.snap.armed, f.released)
+	}
+	if a.status != "" {
+		t.Fatalf("unexpected toast %q", a.status)
+	}
+}
+
+func TestSnapHoverInvalidatesOnChange(t *testing.T) {
+	a := snapTestShelf()
+	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400}, move: true, resize: true}
+	repaints := 0
+	s := &snapSeams{fake: f, pid: 4242, trusted: true, down: true, repaints: &repaints,
+		work: mygo.Rectangle{X: 0, Y: 25, Width: 1470, Height: 750}}
+	installSnapSeams(t, s)
+	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
+	f.rect.X -= 30
+	a.snapTick(time.Now(), mygo.Point{X: 690, Y: 10}, false)
+	if !a.snap.panel {
+		t.Fatal("the panel did not open")
+	}
+	if repaints != 0 {
+		t.Fatalf("opening repainted %d times through the hover path", repaints)
+	}
+	f.rect.X -= 10
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false) // 左半
+	if a.snap.hot != 0 || repaints != 1 {
+		t.Fatalf("hovering 左半: hot=%d repaints=%d, want 0/1", a.snap.hot, repaints)
+	}
+	// Staying on the same tile must not repaint it every tick.
+	f.rect.X -= 1
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false)
+	if repaints != 1 {
+		t.Fatalf("same tile repainted again: %d", repaints)
+	}
+	f.rect.X -= 10
+	a.snapTick(time.Now(), mygo.Point{X: 804, Y: 63}, false) // 右半
+	if a.snap.hot != 2 || repaints != 2 {
+		t.Fatalf("hovering 右半: hot=%d repaints=%d, want 2/2", a.snap.hot, repaints)
+	}
+}
+
+// The panel can take over a shelf panel that is already open: the shell
+// switches to its own box and the six tiles are what is drawn, then the
+// previous level comes back when the drag leaves.
+func TestSnapPanelTakesOverOpenShelf(t *testing.T) {
+	a, view := levelShelf(t)
+	a.visible, a.level = true, 2
+	a.setTab(pageTray)
+	a.snap.trusted = true
+	view.Frame()
+	a.openSnapPanel()
+	if !a.snap.panel || !a.snap.drawn || a.level != 1 || !a.visible {
+		t.Fatalf("take-over: panel=%v drawn=%v level=%d visible=%v",
+			a.snap.panel, a.snap.drawn, a.level, a.visible)
+	}
+	view.Frame()
+	if !view.HasText("排列窗口") || !view.HasText("左半") {
+		t.Fatalf("the snap tiles are not drawn; texts %v", view.Texts())
+	}
+	a.removeSnapPanel()
+	if a.snap.panel || a.snap.drawn || a.level != 2 || !a.visible || a.tab != pageTray {
+		t.Fatalf("restore: panel=%v drawn=%v level=%d visible=%v tab=%s",
+			a.snap.panel, a.snap.drawn, a.level, a.visible, a.tab)
+	}
+	view.Frame()
+	if view.HasText("排列窗口") {
+		t.Fatalf("the snap panel survived the restore; texts %v", view.Texts())
 	}
 }
 

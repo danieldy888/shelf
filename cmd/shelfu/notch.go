@@ -944,6 +944,7 @@ func (a *shelf) hide(exit hideExit) {
 	// Any hide ends the arrangement panel's claim on the shell; its box
 	// stays drawn (snap.drawn) until the fold completes.
 	a.snap.panel = false
+	a.snap.wasOpen, a.snap.prevLevel = false, 0
 	a.closeAt = time.Now()
 	// 收起也复位层级进度：二级收起后 fx.levelK 若停在 1，下一次打开一级
 	// 的第一帧仍会按二级壳开窗（451pt），在菜单栏图标上方压一层透明窗。
