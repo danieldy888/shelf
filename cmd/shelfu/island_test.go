@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/settings"
+	"shelf/internal/store"
 )
 
 // islandShelf is a headless shelf on a 1470 × 956 display whose notch is
@@ -474,5 +475,33 @@ func TestIslandPressOnFinishedDownloadCapsule(t *testing.T) {
 	phones.mouseDown(true, 0, point)
 	if !phones.visible {
 		t.Fatal("a headphone notice on the island no longer opens the shelf")
+	}
+}
+
+// The panel's left-ear download chip is drawn in the island sheet too: the
+// band drops the camera-housing spacer but keeps the chip row.
+func TestIslandSheetShowsDownloadChip(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a := islandShelf(false, settings.ShellStyleNotch)
+	a.store, a.visible, a.level, a.progress = st, true, 2, 1
+	a.settings.LiveActivities.Downloads = true
+	dl := &downloadsModule{host: a, items: []downloadFile{{name: "a.zip", done: 42, total: 100}}}
+	a.dl = dl
+	a.modules = []module{dl}
+	view := ui.NewTester(a.view, 470, 320)
+	view.Frame()
+	if !view.HasText("下载 a.zip") {
+		t.Fatalf("the download chip is missing from the island sheet: %v", view.Texts())
+	}
+	// On the first level the chips stay hidden by design.
+	a.level = 1
+	a.visible = true
+	view.Frame()
+	if view.HasText("下载 a.zip") {
+		t.Fatal("the level-1 island shows the band chips")
 	}
 }
