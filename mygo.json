@@ -6,6 +6,7 @@
     "publicKey": "U392UXk3CKWS5zmlwlygGPnVbOppcJHEMJEeKXXBbAo=",
     "github": "henryyu333/shelfu"
   },
+  "main": "./cmd/shelfu",
   "out": "dist.noindex",
   "buildCommand": "go generate ./...",
   "macos": {

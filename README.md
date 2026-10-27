@@ -177,13 +177,31 @@ Clipboard text is stored in plain text in `~/Library/Application Support/ShelfU/
 
 ## Build from source
 
-Requires Go 1.27 or later and Xcode Command Line Tools:
+Requires Go 1.27 or later and Xcode Command Line Tools. Run the following command from the repository root:
 
 ```sh
 go run github.com/egoist/mygo/cmd/mygo build
 ```
 
 The packaged `ShelfU.app` and a `.dmg` land in a `darwin-arm64` subfolder under the output directory configured in `mygo.json`. ShelfU is written in Go with [MyGo](https://github.com/egoist/mygo). The app icon and the menu-bar icon are not in this repository: a build from source uses the default icon and shows the name in the menu bar.
+
+### Source layout
+
+| Path | Contents |
+| --- | --- |
+| `cmd/shelfu/` | Application entry point, native interface and application tests |
+| `internal/` | macOS integration, storage, settings, layout, document export and AI usage modules |
+| `resources/` | Third-party notices and generated native helper |
+| `docs/` | User manual |
+
+Tests stay beside the code they exercise. Run the non-interactive checks from the repository root:
+
+```sh
+go vet ./...
+go test -race -count=1 ./...
+```
+
+MyGo reads the application package from `mygo.json`; the build command above also builds the native now-playing helper.
 
 ## License
 
@@ -338,13 +356,31 @@ ShelfU 是 Shelf 的新名字。ShelfU 第一次打开时，会把 `~/Library/Ap
 
 ## 从源码构建
 
-需要 Go 1.27 或以上，以及 Xcode Command Line Tools：
+需要 Go 1.27 或以上，以及 Xcode Command Line Tools。在仓库根目录运行以下命令：
 
 ```sh
 go run github.com/egoist/mygo/cmd/mygo build
 ```
 
 打包好的 `ShelfU.app` 和 `.dmg` 在 `mygo.json` 配置的输出目录下的 `darwin-arm64` 子文件夹中。ShelfU 用 Go 和 [MyGo](https://github.com/egoist/mygo) 编写。应用图标和菜单栏图标不在本仓库里：自己从源码构建时用的是默认图标，菜单栏里显示文字名称。
+
+### 源码结构
+
+| 路径 | 内容 |
+| --- | --- |
+| `cmd/shelfu/` | 应用入口、原生界面和应用测试 |
+| `internal/` | macOS 集成、存储、设置、布局、文档导出和 AI 用量模块 |
+| `resources/` | 第三方声明和构建生成的原生辅助模块 |
+| `docs/` | 使用手册 |
+
+测试和它们覆盖的代码放在同一目录。在仓库根目录运行非交互式检查：
+
+```sh
+go vet ./...
+go test -race -count=1 ./...
+```
+
+MyGo 从 `mygo.json` 读取应用入口；上面的构建命令也会生成正在播放功能使用的原生辅助模块。
 
 ## 许可
 
