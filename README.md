@@ -86,6 +86,20 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Press `⌃⌥O`, use the menu-bar icon → 框选文字 (Screen Text), or tap its card, then drag over any part of the screen: the text in it is recognized on this Mac, copied to the clipboard and kept in the Clipboard list, marked 框选文字.
 - Needs Screen Recording permission — see [Optional](#optional).
 
+**Live activities**
+- Plug in the charger and the notch widens for a few seconds: 正在充电 (Charging) on the left, a green level bar and the percentage on the right. It also tells you once when the battery is full, and once at 20 % and 10 % while on battery.
+- Connect Bluetooth headphones and the notch shows their name — for AirPods, the left, right and case levels when macOS reports them — and again when they disconnect.
+- While a browser downloads into Downloads, the notch shows a progress ring and the percentage (or the size so far); when the download finishes, click the notice to put the file on the 托盘 (Tray). Needs Full Disk Access — see [Optional](#optional).
+- Each one can be turned off in Settings → 实时活动 (Live Activities).
+
+**Dynamic Island style**
+- On a display without a notch, ShelfU floats as a Dynamic Island: a small black pill near the top that grows into everything the notch does.
+- On a MacBook you can choose it too: Settings → General → 刘海样式 (Notch Style) → 灵动岛 (Island). The notch style stays the default.
+
+**Arrange windows from the notch**
+- Drag any window by its title bar toward the notch: a panel offers left half, full, right half and left, middle or right third. Hover a tile to see where the window will go, let go to arrange it. Move away to cancel.
+- Uses Accessibility permission; turn it off in Settings → General → 拖窗口到刘海分屏 (Drag Windows to the Notch).
+
 **Quiet by design**
 - One shortcut, `⌃⌥Space`, opens the island or closes the shelf; clicking anywhere else tucks it away, and Esc steps back — a page closes to the island, the island folds into the notch.
 - A settings window holds every option: start at login, clipboard history size, excluded apps, automatic cleanup, now playing, AI usage, updates.
@@ -264,6 +278,20 @@ ShelfU 是住在 Mac 刘海里的工具：它把摄像头周围那块黑色刘�
 **框选屏幕文字**
 - 按 `⌃⌥O`、右键菜单栏图标 →「框选文字」，或点它的卡片，然后在屏幕上框一块区域：里面的文字在本机识别后直接复制到剪贴板，并记进剪贴板页，来源显示「框选文字」。
 - 需要「屏幕录制」权限，见下面的[可选](#可选)。
+
+**实时活动**
+- 插上电源时，刘海向两边变宽几秒：左边是「正在充电」，右边是绿色电量条和电量数字。充满时提醒一次；不插电时，电量降到 20% 和 10% 各提醒一次。
+- 蓝牙耳机连上时，刘海显示耳机名字；AirPods 在系统给出电量时还会显示左耳、右耳和充电盒的电量。断开时也会提示一次。
+- 浏览器往「下载」文件夹下载文件时，刘海显示进度环和百分比（不知道总大小时显示已下载多少）；下载完成后点一下提示，文件就放进「托盘」。需要「完整磁盘访问」，见下面的[可选](#可选)。
+- 每一项都可以在 设置… →「实时活动」里关掉。
+
+**灵动岛样式**
+- 在没有刘海的屏幕上，ShelfU 变成一颗悬浮的灵动岛：屏幕顶部一颗小黑胶囊，刘海能做的事它都能做。
+- MacBook 上也可以选：设置… → 通用 →「刘海样式」→「灵动岛」。默认仍是刘海样式。
+
+**拖窗口到刘海分屏**
+- 拖着任意窗口的标题栏往刘海走，会出现排列面板：左半、全屏、右半、左 1/3、中 1/3、右 1/3。指针停在哪一格就预览窗口会落在哪儿，松手就排好；拖离刘海就取消。
+- 需要「辅助功能」权限；可以在 设置… → 通用 →「拖窗口到刘海分屏」关掉。
 
 **安静、不打扰**
 - 一个快捷键 `⌃⌥Space` 打开小岛或收起；点别处就自动缩回刘海。Esc 一级一级往回退：先关掉当前页回到小岛，再按一次把小岛收回刘海。
