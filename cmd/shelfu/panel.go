@@ -410,9 +410,9 @@ func (a *shelf) view(c *ui.Context) {
 	}
 	// The realtime queue advances here too, so a notice grows the shell on
 	// its own and folds it back when its hold ends.
-	liveEv, liveUp := a.liveNow(now, a.liveAllow())
+	_, liveUp := a.liveNow(now, a.liveAllow())
 	if liveUp {
-		c.After(max(liveEv.deadline.Sub(now), 0) + 10*time.Millisecond)
+		c.After(max(a.live.until.Sub(now), 0) + 10*time.Millisecond)
 	}
 	downloadUp := a.downloadRunning()
 	openTarget, peekTarget := float32(0), float32(0)

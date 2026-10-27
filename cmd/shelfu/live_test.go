@@ -8,9 +8,11 @@ package main
 // silence their activity.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -43,22 +45,56 @@ func TestLiveQueueIsOneAtATime(t *testing.T) {
 	if ev, ok = a.liveNow(now.Add(time.Second), true); !ok || ev.label != "AirPods Pro" {
 		t.Fatalf("second event = %+v ok=%v, want AirPods Pro", ev, ok)
 	}
-	if ev, ok = a.liveNow(now.Add(2500*time.Millisecond), true); ok {
-		t.Fatalf("second event outlived its deadline: %+v", ev)
+	if ev, ok = a.liveNow(now.Add(2500*time.Millisecond), true); !ok || ev.label != "AirPods Pro" {
+		t.Fatalf("the second hold was cut short: %+v ok=%v", ev, ok)
+	}
+	if ev, ok = a.liveNow(now.Add(3*time.Second), true); ok {
+		t.Fatalf("second event outlived its hold: %+v", ev)
 	}
 }
 
-func TestLiveWaitingDoesNotExtendHold(t *testing.T) {
+// A notice queued behind another keeps its whole hold when its turn comes:
+// the reviewer's example is a 5s 电量低 notice followed by a 2s 已断开, which
+// used to expire unseen while it waited.
+func TestLiveQueuedNoticeKeepsItsFullHold(t *testing.T) {
 	a := liveShelf()
 	now := time.Now()
-	a.pushLive(liveEvent{kind: liveCharging, label: "正在充电", pct: 30}, time.Second, now)
-	a.pushLive(liveEvent{kind: liveLow, label: "电量低", pct: 10}, time.Second, now.Add(time.Second))
-	if ev, ok := a.liveNow(now.Add(time.Second), true); !ok || ev.kind != liveLow {
-		t.Fatalf("second event = %+v ok=%v", ev, ok)
+	a.pushLive(liveEvent{kind: liveLow, label: "电量低", pct: 20}, liveHoldLow, now)
+	a.pushLive(liveEvent{kind: liveHeadsetOff, label: "AirPods Pro"}, liveHoldUnplug, now.Add(500*time.Millisecond))
+	if ev, ok := a.liveNow(now, true); !ok || ev.kind != liveLow {
+		t.Fatalf("first event = %+v ok=%v", ev, ok)
 	}
-	// Its hold is measured from arrival: it is gone at arrival + 1s.
-	if ev, ok := a.liveNow(now.Add(2*time.Second), true); ok {
-		t.Fatalf("the waited event stretched its hold: %+v", ev)
+	// At the end of the first hold the queued disconnect still shows, and
+	// its own two seconds start now rather than at arrival.
+	ev, ok := a.liveNow(now.Add(liveHoldLow), true)
+	if !ok || ev.kind != liveHeadsetOff {
+		t.Fatalf("queued disconnect = %+v ok=%v", ev, ok)
+	}
+	if got, want := a.live.until, now.Add(liveHoldLow+liveHoldUnplug); !got.Equal(want) {
+		t.Fatalf("disconnect runs until %v, want %v", got, want)
+	}
+	if _, ok := a.liveNow(now.Add(liveHoldLow+liveHoldUnplug-time.Millisecond), true); !ok {
+		t.Fatal("the disconnect ended before its own hold")
+	}
+	if ev, ok := a.liveNow(now.Add(liveHoldLow+liveHoldUnplug), true); ok {
+		t.Fatalf("the disconnect outlived its hold: %+v", ev)
+	}
+}
+
+// The backlog has a bound: a notice that waited longer than
+// liveQueueMaxWait is stale and never reaches the notch.
+func TestLiveQueueDropsStaleBacklog(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	// The documented bound is 15s.
+	a.pushLive(liveEvent{kind: liveHeadset, label: "AirPods"}, liveHoldHeadset, now.
+		Add(-15*time.Second-time.Second))
+	if ev, ok := a.liveNow(now, true); ok {
+		t.Fatalf("a stale notice was shown: %+v", ev)
+	}
+	a.pushLive(liveEvent{kind: liveHeadset, label: "Sony"}, liveHoldHeadset, now.Add(-15*time.Second))
+	if _, ok := a.liveNow(now, true); !ok {
+		t.Fatal("a notice exactly at the wait bound was dropped")
 	}
 }
 
@@ -483,5 +519,157 @@ func TestLiveHeadsetGlyph(t *testing.T) {
 	}
 	if got, _ := liveHeadsetIcon("ALLENCHAN的AirPods Pro"); got != livePodsSym {
 		t.Fatal("a named AirPods pair did not get the earbuds")
+	}
+}
+
+// Two Bluetooth outputs appearing in one poll each keep their own battery
+// answer: the lookup is judged against that device's connection, not a
+// single module-wide generation.
+func TestAudioBatteryPerDevice(t *testing.T) {
+	a := liveShelf()
+	devs := []mac.AudioOutput{{Name: "扬声器", UID: "built-in"}}
+	m := &audioModule{host: a, list: func() []mac.AudioOutput { return devs }, now: time.Now, known: map[string]string{}}
+	now := time.Now()
+	m.tick(now) // seed
+
+	dispatched := make(chan func(), 4)
+	m.battery = func(name string) []string {
+		switch name {
+		case "AirPods Pro":
+			return []string{"左 80%"}
+		case "Sony WH-1000XM5":
+			return []string{"电量 65%"}
+		}
+		return nil
+	}
+	m.dispatch = func(fn func()) { dispatched <- fn }
+	devs = append(devs,
+		mac.AudioOutput{Name: "AirPods Pro", UID: "airpods", Bluetooth: true},
+		mac.AudioOutput{Name: "Sony WH-1000XM5", UID: "sony", Bluetooth: true})
+	m.next = time.Time{}
+	m.tick(now.Add(time.Second))
+	if len(a.live.queued) != 2 {
+		t.Fatalf("two connections queued %+v", a.live.queued)
+	}
+	var pending []func()
+	deadline := time.After(3 * time.Second)
+	for len(pending) < 2 {
+		select {
+		case fn := <-dispatched:
+			pending = append(pending, fn)
+		case <-deadline:
+			t.Fatalf("only %d battery answers arrived", len(pending))
+		}
+	}
+	for _, fn := range pending {
+		fn()
+	}
+	if got := a.live.queued[0].levels; fmt.Sprint(got) != "[左 80%]" {
+		t.Fatalf("AirPods levels = %v, want its own answer", got)
+	}
+	if got := a.live.queued[1].levels; fmt.Sprint(got) != "[电量 65%]" {
+		t.Fatalf("Sony levels = %v, want its own answer", got)
+	}
+}
+
+// A folder that stays unreadable must not leave a frozen download owning
+// the wings: three consecutive unknown errors (or one missing folder)
+// reset the state, and no 已下载 is invented.
+func TestDownloadPersistentScanFailureClearsWings(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	items := []downloadFile{{temp: "/tmp/a.zip.crdownload", name: "a.zip", target: "/tmp/a.zip", done: 10, mod: now}}
+	var scanErr error
+	m := &downloadsModule{
+		host: a, dir: func() (string, error) { return "/tmp", nil },
+		scan: func(string) ([]downloadFile, error) {
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			return items, nil
+		},
+		allowed: func() bool { return true }, plist: readXMLPlist,
+		now: time.Now, prev: map[string]downloadFile{},
+	}
+	m.tick(now)
+	if !m.active() {
+		t.Fatal("the running download is not active")
+	}
+	scanErr = errors.New("temporary I/O error")
+	// Three consecutive unknown errors are the documented limit.
+	for i := range 2 {
+		m.next = time.Time{}
+		m.tick(now.Add(time.Duration(i+1) * time.Second))
+		if !m.active() {
+			t.Fatalf("tick %d: a transient failure dropped the download", i+1)
+		}
+	}
+	m.next = time.Time{}
+	m.tick(now.Add(3 * time.Second))
+	if m.active() || len(m.items) != 0 {
+		t.Fatalf("persistent failures left the wings frozen: %+v", m.items)
+	}
+	if len(a.live.queued) != 0 {
+		t.Fatalf("a failed scan invented notices: %+v", a.live.queued)
+	}
+}
+
+// A missing folder resets at once, without waiting for the failure cap.
+func TestDownloadMissingFolderResetsAtOnce(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	missing := &os.PathError{Op: "open", Path: "/tmp/nope", Err: syscall.ENOENT}
+	m := &downloadsModule{
+		host: a, dir: func() (string, error) { return "/tmp/nope", nil },
+		scan:    func(string) ([]downloadFile, error) { return nil, missing },
+		allowed: func() bool { return true }, plist: readXMLPlist,
+		now: time.Now, prev: map[string]downloadFile{},
+	}
+	m.items = []downloadFile{{temp: "/tmp/x", name: "x"}}
+	m.seeded = true
+	m.tick(now)
+	if m.active() || m.seeded {
+		t.Fatalf("a missing folder kept its state: items=%+v seeded=%v", m.items, m.seeded)
+	}
+	if len(a.live.queued) != 0 {
+		t.Fatalf("the missing folder invented notices: %+v", a.live.queued)
+	}
+}
+
+// Several downloads finishing in one scan each get their full four seconds;
+// the second used to share the first's deadline and vanish unseen.
+func TestDownloadCompletionsAllQueue(t *testing.T) {
+	dir := t.TempDir()
+	writeLiveFile(t, filepath.Join(dir, "one.zip.crdownload"), []byte("1"))
+	writeLiveFile(t, filepath.Join(dir, "two.zip.crdownload"), []byte("2"))
+	a := liveShelf()
+	now := time.Now()
+	m := &downloadsModule{
+		host: a, dir: func() (string, error) { return dir, nil }, scan: scanDownloadDir,
+		allowed: func() bool { return true }, plist: readXMLPlist,
+		now: time.Now, prev: map[string]downloadFile{},
+	}
+	m.tick(now)
+	for _, name := range []string{"one.zip", "two.zip"} {
+		if err := os.Remove(filepath.Join(dir, name+".crdownload")); err != nil {
+			t.Fatal(err)
+		}
+		writeLiveFile(t, filepath.Join(dir, name), []byte("done"))
+	}
+	m.next = time.Time{}
+	doneAt := now.Add(time.Second)
+	m.tick(doneAt)
+	if len(a.live.queued) != 2 {
+		t.Fatalf("two completed downloads queued %d notices", len(a.live.queued))
+	}
+	if ev, ok := a.liveNow(doneAt, true); !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("first completion = %+v ok=%v", ev, ok)
+	}
+	ev, ok := a.liveNow(doneAt.Add(liveHoldDownload), true)
+	if !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("second completion was dropped: %+v ok=%v", ev, ok)
+	}
+	if ev, ok := a.liveNow(doneAt.Add(2*liveHoldDownload), true); ok {
+		t.Fatalf("the second completion outlived its hold: %+v", ev)
 	}
 }

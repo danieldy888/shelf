@@ -38,13 +38,19 @@ type audioModule struct {
 	seeded bool
 	known  map[string]string // UID → name
 	order  []string          // UIDs in the order they appeared
-	gen    int
+	// gen makes each connection's token unique; connGen is the same
+	// counter kept per device UID, so one device's answer is judged
+	// against its own connection and never against a sibling that
+	// appeared in the same poll.
+	gen     int
+	connGen map[string]int
 }
 
 func newAudioModule(a *shelf) *audioModule {
 	return &audioModule{
 		host: a, list: mac.OutputDevices, battery: readBluetoothLevels,
 		dispatch: mygoRunOnMain, now: time.Now, known: map[string]string{},
+		connGen: map[string]int{},
 	}
 }
 
@@ -53,6 +59,9 @@ func (m *audioModule) tick(now time.Time) {
 		return
 	}
 	m.next = now.Add(audioPollInterval)
+	if m.connGen == nil {
+		m.connGen = map[string]int{}
+	}
 	if m.list == nil {
 		return
 	}
@@ -91,6 +100,7 @@ func (m *audioModule) tick(now time.Time) {
 		if name == "" {
 			continue
 		}
+		delete(m.connGen, key) // a lookup still in flight can no longer land
 		m.host.pushLive(liveEvent{kind: liveHeadsetOff, label: name}, liveHoldUnplug, now)
 	}
 	for _, key := range order {
@@ -100,16 +110,19 @@ func (m *audioModule) tick(now time.Time) {
 		name := cur[key]
 		m.gen++
 		gen := m.gen
+		m.connGen[key] = gen
 		token := fmt.Sprintf("%s#%d", key, gen)
 		m.host.pushLive(liveEvent{kind: liveHeadset, label: name, token: token}, liveHoldHeadset, now)
-		m.lookupBattery(name, token, gen)
+		m.lookupBattery(key, name, token, gen)
 	}
 	m.known, m.order = cur, order
 }
 
 // lookupBattery fills the notice in when system_profiler answers. A late
-// answer for a newer connection is dropped by the generation check.
-func (m *audioModule) lookupBattery(name, token string, gen int) {
+// answer is judged against that device's own connection generation: two
+// devices appearing in one poll each keep their answer, a reconnected
+// device invalidates only its own earlier lookup.
+func (m *audioModule) lookupBattery(uid, name, token string, gen int) {
 	if m.battery == nil {
 		return
 	}
@@ -123,7 +136,7 @@ func (m *audioModule) lookupBattery(name, token string, gen int) {
 			return
 		}
 		dispatch(func() {
-			if m.gen != gen || m.host.quitting {
+			if m.host.quitting || m.connGen[uid] != gen {
 				return
 			}
 			m.host.liveEnrich(token, levels)

@@ -16,12 +16,15 @@ package main
 
 import (
 	"encoding/xml"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -35,6 +38,10 @@ const (
 	// opens the TCC database) is repeated. Granting it in System Settings
 	// starts the watcher within half a minute.
 	fullDiskProbeInterval = 30 * time.Second
+	// downloadScanFailureLimit is how many consecutive read errors of an
+	// unknown kind are tolerated before the frozen download state is
+	// dropped. A missing or non-directory Downloads folder resets at once.
+	downloadScanFailureLimit = 3
 )
 
 // downloadsDir is where browsers leave their temporary files. It is a seam
@@ -69,9 +76,10 @@ type downloadsModule struct {
 	probeAt time.Time
 	canRead bool
 
-	items  []downloadFile
-	prev   map[string]downloadFile
-	seeded bool
+	items    []downloadFile
+	prev     map[string]downloadFile
+	seeded   bool
+	failures int
 }
 
 func newDownloadsModule(a *shelf) *downloadsModule {
@@ -108,14 +116,26 @@ func (m *downloadsModule) tick(now time.Time) {
 	}
 	files, err := m.scan(dir)
 	if err != nil {
-		return // transient: keep what is shown rather than claiming a finish
+		// One transient error may pass; a folder that stays unreadable must
+		// not leave the wings frozen on an old download forever.
+		m.failures++
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) ||
+			m.failures >= downloadScanFailureLimit {
+			m.reset()
+		}
+		return // never diff against a failed scan: no false 已下载
 	}
+	m.failures = 0
 	files = sortDownloads(files)
 	cur := make(map[string]downloadFile, len(files))
 	for _, f := range files {
 		cur[f.temp] = f
 	}
 	if m.seeded {
+		// Collected first and ordered by completion time (then target), so
+		// several downloads finishing in one scan queue in a stable order;
+		// the queue gives each its own four seconds.
+		var done []downloadFile
 		for temp, old := range m.prev {
 			if _, still := cur[temp]; still {
 				continue
@@ -123,6 +143,15 @@ func (m *downloadsModule) tick(now time.Time) {
 			if old.target == "" || !fileExists(old.target) {
 				continue
 			}
+			done = append(done, old)
+		}
+		sort.SliceStable(done, func(i, j int) bool {
+			if !done[i].mod.Equal(done[j].mod) {
+				return done[i].mod.Before(done[j].mod)
+			}
+			return done[i].target < done[j].target
+		})
+		for _, old := range done {
 			m.host.pushLive(liveEvent{
 				kind: liveDownloadDone, label: filepath.Base(old.target), path: old.target,
 			}, liveHoldDownload, now)
@@ -145,6 +174,7 @@ func (m *downloadsModule) reset() {
 		m.host.win.Invalidate()
 	}
 	m.items, m.prev, m.seeded = nil, map[string]downloadFile{}, false
+	m.failures = 0
 }
 
 // active reports whether a download currently owns the wings.

@@ -11,8 +11,11 @@ package main
 //
 // Queue rules, unit-tested:
 //   - one event at a time, in arrival order;
-//   - an event that waited or was hidden while the panel was open keeps its
-//     own deadline (hold measured from arrival) and is dropped unseen;
+//   - every event owns its display duration, and the clock starts when it
+//     reaches the screen, so a notice queued behind another keeps its full
+//     hold;
+//   - a notice that waited longer than liveQueueMaxWait is stale and is
+//     dropped, so a long queue cannot replay an old plug or low battery;
 //   - opening the panel cancels what is queued, so nothing pops afterwards;
 //   - a switch that is off drops its events at the door.
 
@@ -57,6 +60,12 @@ const (
 	liveHoldHeadset  = 3500 * time.Millisecond
 	liveHoldUnplug   = 2 * time.Second
 	liveHoldDownload = 4 * time.Second
+
+	// liveQueueMaxWait bounds how long a notice may wait behind others.
+	// Every event's own hold now starts on screen; without a bound, a
+	// burst (several downloads finishing at once) could replay a plug
+	// from half a minute ago after the newer notices.
+	liveQueueMaxWait = 15 * time.Second
 )
 
 // liveKind names one transient event.
@@ -86,9 +95,10 @@ type liveEvent struct {
 	path   string // downloaded file, for the completion capsule's click
 	token  string // device UID: a late battery reading enriches this event
 	width  float32
-	// deadline is arrival + hold: waiting behind another event or behind a
-	// brief panel opening never extends how long the words can stay.
-	deadline time.Time
+	// hold is how long the event stays once it reaches the screen;
+	// queuedAt is when it arrived, used only to drop a stale backlog.
+	hold     time.Duration
+	queuedAt time.Time
 }
 
 // liveQueue is the one-at-a-time event queue.
@@ -119,7 +129,7 @@ func (a *shelf) pushLive(ev liveEvent, hold time.Duration, now time.Time) {
 	if !a.liveEnabled(ev.kind) || a.visible {
 		return
 	}
-	ev.deadline = now.Add(hold)
+	ev.hold, ev.queuedAt = hold, now
 	baseW, _ := a.anchorSize()
 	ev.width = liveCapsuleWidth(ev, baseW)
 	a.live.queued = append(a.live.queued, ev)
@@ -136,7 +146,7 @@ func (a *shelf) clearLive() {
 
 // liveNow advances the queue and returns the event to draw. allow is false
 // while the panel is open or a file drag owns the notch; nothing is
-// started then, and the shown event is hidden (not cancelled: its deadline
+// started then, and the shown event is hidden (not cancelled: its hold
 // still runs).
 func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 	q := &a.live
@@ -155,13 +165,15 @@ func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 	for len(q.queued) > 0 {
 		ev := q.queued[0]
 		q.queued = q.queued[1:]
-		if !now.Before(ev.deadline) {
-			continue // waited out its own hold unseen
-		}
 		if !a.liveEnabled(ev.kind) {
 			continue // its switch went off after it was queued
 		}
-		q.cur, q.until, q.shown = ev, ev.deadline, true
+		if now.Sub(ev.queuedAt) > liveQueueMaxWait {
+			continue // stale: the backlog outlived what the words meant
+		}
+		// The hold starts now, not at arrival, so waiting behind another
+		// notice never eats this one's own duration.
+		q.cur, q.until, q.shown = ev, now.Add(ev.hold), true
 		return ev, true
 	}
 	return liveEvent{}, false
