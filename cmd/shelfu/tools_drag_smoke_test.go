@@ -84,12 +84,49 @@ func requireOwnMouseTarget(t *testing.T, x, y float64) {
 		primary := mygo.Screen.PrimaryDisplay()
 		hit = mac.WindowAtPoint(x, y, float64(primary.Bounds.Y+primary.Bounds.Height))
 	})
+	// The notch shell takes the mouse only while the pointer is on it, so
+	// WindowServer's answer depends on where the user left the cursor. The
+	// caller is about to click this test-window point: prove the point is
+	// inside one of our frames first, move the pointer there (as clickAt
+	// does), and give the gate's 10 ms poll a beat to re-ask before judging
+	// the native target. Without the move a still pointer keeps the shell
+	// click-through and the click would land on whatever is below.
+	insideOwnFrame := false
+	for _, w := range ownSmokeWindows(t) {
+		if insideRect(p, w.Frame) {
+			insideOwnFrame = true
+			break
+		}
+	}
+	if !insideOwnFrame {
+		t.Fatalf("refusing mouse event at %+v: point is outside every test window", p)
+	}
+	warpPointerTo(t, x, y)
+	time.Sleep(60 * time.Millisecond)
+	onMain(func() {
+		primary := mygo.Screen.PrimaryDisplay()
+		hit = mac.WindowAtPoint(x, y, float64(primary.Bounds.Y+primary.Bounds.Height))
+	})
 	for _, w := range ownSmokeWindows(t) {
 		if w.ID == hit && w.Onscreen && insideRect(p, w.Frame) {
 			return
 		}
 	}
 	t.Fatalf("refusing mouse event at %+v: native target %d is not an onscreen test window", p, hit)
+}
+
+// warpPointerTo moves the real cursor, the same call clickAt makes, so a
+// test that has to click a hover-gated surface does not depend on where
+// the user left the pointer.
+func warpPointerTo(t *testing.T, x, y float64) {
+	t.Helper()
+	lib, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_LAZY)
+	if err != nil {
+		t.Fatalf("CoreGraphics: %v", err)
+	}
+	var warp func(p mac.CGPoint) int32
+	purego.RegisterLibFunc(&warp, lib, "CGWarpMouseCursorPosition")
+	warp(mac.CGPoint{X: x, Y: y})
 }
 
 // A test-owned desktop substitute makes the entire drag path safe, including
