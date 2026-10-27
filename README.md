@@ -5,8 +5,8 @@
 <h1 align="center">ShelfU</h1>
 
 <p align="center">
-  The MacBook notch, turned into a shelf. Drop files, text and screenshots into it, drag them out wherever you need them, and keep your clipboard and music one hover away.<br>
-  把 MacBook 的刘海变成一个随手放东西的托盘：文件、文字、截图往里一放，要用时再拖出来；剪贴板和正在播放的音乐，鼠标移过去就在。
+  A notch tool for the Mac. Files, clipboard, music and everyday tools grow out of the MacBook notch when you need them, and fold back into it when you're done.<br>
+  住在 MacBook 刘海里的工具：文件、剪贴板、音乐和常用小工具，需要时从刘海里长出来，用完就缩回去。
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@
 
 ## What is ShelfU
 
-When you move files between apps, you usually need somewhere to put them for a moment. ShelfU puts that place in the notch. It stays out of sight until you need it: hover the notch or click it, and a small black island grows out — the track that is playing on the left, one icon per page on the right. Drag something onto the notch instead and the tray opens on its own, already waiting for the drop. Click an icon and that page opens from the island, 420 × 250 whatever the page holds, so it fits under your menu bar instead of covering it. Only the black shape on screen takes clicks: the menu bar beside it works as usual. Put things in, take them out, and it goes back into the notch.
+ShelfU is a notch tool for the Mac: it turns the black notch around the camera into a working part of the screen. It stays out of sight until you need it: hover the notch or click it, and a small black island grows out of the notch itself — the track that is playing on the left, one icon per page on the right: 主页 (Home) widgets, the 托盘 (Tray) for files, the 剪贴板 (Clipboard), 工具 (Tools), and AI 用量 (AI Usage) when you turn it on. Drag something onto the notch instead and the tray opens on its own, already waiting for the drop. Click an icon and that page opens from the island, 420 × 250 whatever the page holds, so it fits under your menu bar instead of covering it. Only the black shape on screen takes clicks: the menu bar beside it works as usual. When you are done, it folds back into the notch.
 
 It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and never copies your files — it only remembers where they are.
 
@@ -194,7 +194,7 @@ The code is MIT — see [LICENSE](LICENSE). The ShelfU name, app icon and menu-b
 
 ## ShelfU 是什么
 
-在应用之间搬东西时，总需要一个临时放一下的地方。ShelfU 把这个地方放进了刘海里。平时它不露面；鼠标移到刘海上点一下，一个小黑岛就从刘海里长出来——左边是正在播放的歌，右边每个页面一个图标；如果是拖着东西过来，打开的是「托盘」页，直接等着接收。点图标，那一页就从岛上展开：任何一页都是 420 × 250，所以它停在你的菜单栏下面，不会盖住菜单栏和窗口。屏幕上只有画出来的黑块接鼠标，旁边的菜单栏照常可点。放进去、拿出来，用完它就缩回刘海。
+ShelfU 是住在 Mac 刘海里的工具：它把摄像头周围那块黑色刘海变成屏幕上能用的一部分。平时它不露面；鼠标移到刘海上点一下，一个小黑岛就从刘海本身长出来——左边是正在播放的歌，右边每个页面一个图标：主页的小组件、放文件的「托盘」、「剪贴板」、「工具」，打开 AI 用量后还有「AI 用量」。如果是拖着东西过来，打开的是「托盘」页，直接等着接收。点图标，那一页就从岛上展开：任何一页都是 420 × 250，所以它停在你的菜单栏下面，不会盖住菜单栏和窗口。屏幕上只有画出来的黑块接鼠标，旁边的菜单栏照常可点。用完它就缩回刘海。
 
 它只在菜单栏里，不占 Dock；所有内容都留在你的 Mac 上；放进来的文件不会被复制，ShelfU 只记住它们在哪儿。
 

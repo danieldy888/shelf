@@ -180,7 +180,7 @@ func (a *shelf) ready(show bool) {
 		}
 	})
 	var err error
-	trayOpts := mygo.TrayOptions{IconIsTemplate: true, ToolTip: appName + " · 临时托盘"}
+	trayOpts := mygo.TrayOptions{IconIsTemplate: true, ToolTip: appName + " · 刘海工具"}
 	if dir, derr := mygo.App.Path(mygo.PathResources); derr == nil {
 		trayOpts.Icon = trayIcon(dir)
 	}
