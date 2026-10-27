@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="resources/icon.png" width="128" alt="Shelf icon">
+  <img src="https://github.com/henryyu333/shelfu/releases/download/v1.10.0/ShelfU-icon.png" width="128" alt="ShelfU icon">
 </p>
 
-<h1 align="center">Shelf</h1>
+<h1 align="center">ShelfU</h1>
 
 <p align="center">
   The MacBook notch, turned into a shelf. Drop files, text and screenshots into it, drag them out wherever you need them, and keep your clipboard and music one hover away.<br>
@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/henryyu333/shelf/releases/latest/download/Shelf.dmg"><img src="https://img.shields.io/badge/Download_for_macOS-Shelf.dmg-007AFF?style=for-the-badge&logo=apple&logoColor=white" alt="Download Shelf.dmg for macOS"></a>
+  <a href="https://github.com/henryyu333/shelfu/releases/latest/download/ShelfU.dmg"><img src="https://img.shields.io/badge/Download_for_macOS-ShelfU.dmg-007AFF?style=for-the-badge&logo=apple&logoColor=white" alt="Download ShelfU.dmg for macOS"></a>
 </p>
 
 <p align="center">
-  Apple Silicon · macOS 13+ · Free and open source · <a href="#install">Install guide</a> · <a href="https://github.com/henryyu333/shelf/releases/latest">All downloads</a><br>
-  Apple Silicon 芯片 · macOS 13 或以上 · 免费开源 · <a href="#安装">安装说明</a> · <a href="https://github.com/henryyu333/shelf/releases/latest">全部下载</a>
+  Apple Silicon · macOS 13+ · Free and open source · <a href="#install">Install guide</a> · <a href="https://github.com/henryyu333/shelfu/releases/latest">All downloads</a><br>
+  Apple Silicon 芯片 · macOS 13 或以上 · 免费开源 · <a href="#安装">安装说明</a> · <a href="https://github.com/henryyu333/shelfu/releases/latest">全部下载</a>
 </p>
 
 <p align="center">
@@ -32,9 +32,9 @@
 
 <a id="english"></a>
 
-## What is Shelf
+## What is ShelfU
 
-When you move files between apps, you usually need somewhere to put them for a moment. Shelf puts that place in the notch. It stays out of sight until you need it: hover the notch or click it, and a small black island grows out — the track that is playing on the left, one icon per page on the right. Drag something onto the notch instead and the tray opens on its own, already waiting for the drop. Click an icon and that page opens from the island, 420 × 250 whatever the page holds, so it fits under your menu bar instead of covering it. Only the black shape on screen takes clicks: the menu bar beside it works as usual. Put things in, take them out, and it goes back into the notch.
+When you move files between apps, you usually need somewhere to put them for a moment. ShelfU puts that place in the notch. It stays out of sight until you need it: hover the notch or click it, and a small black island grows out — the track that is playing on the left, one icon per page on the right. Drag something onto the notch instead and the tray opens on its own, already waiting for the drop. Click an icon and that page opens from the island, 420 × 250 whatever the page holds, so it fits under your menu bar instead of covering it. Only the black shape on screen takes clicks: the menu bar beside it works as usual. Put things in, take them out, and it goes back into the notch.
 
 It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and never copies your files — it only remembers where they are.
 
@@ -46,7 +46,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Press Space for Quick Look; right-click to open, reveal in Finder, AirDrop, copy, pin or remove — pictures get an extra "复制图片" (Copy Image) entry that copies the image itself.
 - Convert in place: right-click a picture → 转换为 (Convert To) JPEG, HEIC, PNG or PDF, or recognize its text into a Word document; select several to merge them into one PDF. Right-click a PDF → 转换为 (Convert To) Word (its text) or one image per page. 缩小图片 (Shrink) resizes pictures to 2560, 1600 or 800 px on the long edge. Everything runs on this Mac, the original stays untouched, and results land at the front of the shelf.
 - Tidy files where they sit: right-click a picture → 压缩到 (Compress To) to fit it under 500 KB, 1 MB, 2 MB or 5 MB; right-click a zip, tar, 7z or rar archive → 解压 (Extract); right-click files → 重新命名… (Rename…) to rename a batch the way Finder does — replace text, add text, or name plus number — with a live preview and undo.
-- Other ways in: shake the pointer while dragging to summon a drop basket beside the cursor, or use Services → "添加到 Shelf" (Add to Shelf) in Finder and other apps.
+- Other ways in: shake the pointer while dragging to summon a drop basket beside the cursor, or use Services → "添加到 ShelfU" (Add to ShelfU) in Finder and other apps.
 
 **Clipboard history**
 - Text you copy is kept automatically, along with the app it came from. Screenshots and copied images land on the shelf too.
@@ -89,7 +89,7 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 **Quiet by design**
 - One shortcut, `⌃⌥Space`, opens the island or closes the shelf; clicking anywhere else tucks it away, and Esc steps back — a page closes to the island, the island folds into the notch.
 - A settings window holds every option: start at login, clipboard history size, excluded apps, automatic cleanup, now playing, AI usage, updates.
-- Updates are checked against this repository's GitHub releases. Shelf tells you when one is out and installs it only when you say so.
+- Updates are checked against this repository's GitHub releases. ShelfU tells you when one is out and installs it only when you say so.
 
 <a id="install"></a>
 
@@ -97,39 +97,46 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 
 Requires a Mac with Apple Silicon (M1 or later) running macOS 13 or later. Intel Macs are not supported.
 
-1. Download **[Shelf.dmg](https://github.com/henryyu333/shelf/releases/latest/download/Shelf.dmg)**.
-2. Open the downloaded file and drag **Shelf** onto the **Applications** folder.
-3. Open Shelf from Applications. The first time, macOS will stop it — follow [First launch](#first-launch) below. You only do this once.
-4. Shelf lives in the menu bar, not the Dock. Hover the notch, or press `⌃⌥Space`.
+1. Download **[ShelfU.dmg](https://github.com/henryyu333/shelfu/releases/latest/download/ShelfU.dmg)**.
+2. Open the downloaded file and drag **ShelfU** onto the **Applications** folder.
+3. Open ShelfU from Applications. The first time, macOS will stop it — follow [First launch](#first-launch) below. You only do this once.
+4. ShelfU lives in the menu bar, not the Dock. Hover the notch, or press `⌃⌥Space`.
 
-Prefer a zip? Every release on the [Releases page](https://github.com/henryyu333/shelf/releases/latest) also has a `.zip` of the same version.
+Prefer a zip? Every release on the [Releases page](https://github.com/henryyu333/shelfu/releases/latest) also has a `.zip` of the same version.
 
 <a id="first-launch"></a>
 
-### First launch: "Shelf Not Opened"
+### First launch: "ShelfU Not Opened"
 
-Shelf is free and not notarized by Apple, so macOS asks you to confirm it once. Only do this for a copy you downloaded from this repository.
+ShelfU is free and not notarized by Apple, so macOS asks you to confirm it once. Only do this for a copy you downloaded from this repository.
 
 **macOS 15 or later**
 
-1. Double-click Shelf in Applications. When macOS says Shelf was not opened, click **Done** (not Move to Trash).
+1. Double-click ShelfU in Applications. When macOS says ShelfU was not opened, click **Done** (not Move to Trash).
 2. Open **System Settings → Privacy & Security** and scroll down to **Security**.
-3. Next to "Shelf was blocked to protect your Mac", click **Open Anyway**.
+3. Next to "ShelfU was blocked to protect your Mac", click **Open Anyway**.
 4. Enter your password or use Touch ID, then click **Open Anyway** once more.
 
 **macOS 13 or 14**
 
-Control-click (or right-click) Shelf in Applications, choose **Open**, then click **Open** in the dialog.
+Control-click (or right-click) ShelfU in Applications, choose **Open**, then click **Open** in the dialog.
 
-From then on Shelf opens normally. If macOS ever says the app **is damaged**, don't bypass it — delete it and download it again from the Releases page. Apple's guide: [Safely open apps on your Mac](https://support.apple.com/102445).
+From then on ShelfU opens normally. If macOS ever says the app **is damaged**, don't bypass it — delete it and download it again from the Releases page. Apple's guide: [Safely open apps on your Mac](https://support.apple.com/102445).
 
 ### Optional
 
 - **Start at login**: right-click the menu-bar icon → Settings → General → Open at login.
-- **System permissions**: right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions), or Settings → 系统权限 (System Permissions) → 全部开启 (Turn On All). Shelf opens each System Settings page in turn: Accessibility for notch drop protection, then Screen Recording for 框选文字 (Screen Text). Turn Shelf on in each; when Screen Recording is on, click 重新打开 Shelf (Reopen Shelf). Both are optional; everyday use needs no permissions. Updating from 1.7.0 or earlier asks for them once more. Official releases from 1.9.0 on keep the grants across updates; a build you compile yourself is signed afresh each time and may ask again.
+- **System permissions**: right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions), or Settings → 系统权限 (System Permissions) → 全部开启 (Turn On All). ShelfU opens each System Settings page in turn: Accessibility for notch drop protection, then Screen Recording for 框选文字 (Screen Text). Turn ShelfU on in each; when Screen Recording is on, click 重新打开 ShelfU (Reopen ShelfU). Both are optional; everyday use needs no permissions. Moving from Shelf to ShelfU asks for them once more (see below). Official ShelfU releases keep the grants across later updates; a build you compile yourself is signed afresh each time and may ask again.
 - **Notch drop protection** (Accessibility): while you drag toward the notch, the pointer stays in the drop area instead of hitting the very top edge of the screen.
 - **Screen text** (Screen Recording): only the area you select is captured, text is recognized on this Mac, and the shot is not kept.
-- **Uninstall**: right-click the menu-bar icon → Quit, then move Shelf from Applications to the Trash. To also delete your saved items, remove `~/Library/Application Support/Shelf/`.
+- **Uninstall**: right-click the menu-bar icon → Quit, then move ShelfU from Applications to the Trash. To also delete your saved items, remove `~/Library/Application Support/ShelfU/`.
+
+### Coming from Shelf
+
+ShelfU is the new name of Shelf. The first time ShelfU opens, it copies your saved items from `~/Library/Application Support/Shelf/` to `~/Library/Application Support/ShelfU/`; the old folder stays as it was, and you can delete it once everything is there. macOS treats ShelfU as a new app, so turn its system permissions and Open at login on again.
+
+- **Updating inside Shelf**: after the update is installed, open Shelf from Applications. It renames itself to `ShelfU.app` and opens as ShelfU.
+- **Installing from ShelfU.dmg**: quit Shelf and move `Shelf.app` to the Trash first, so that only ShelfU keeps using your items.
 
 ## Everyday use
 
@@ -163,9 +170,9 @@ The full manual is in [docs/MANUAL.zh-CN.md](docs/MANUAL.zh-CN.md) (Chinese).
 
 ## Privacy
 
-Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network requests are the update check — shortly after launch and then once a day, Shelf asks this repository's latest GitHub release whether a newer version exists — and, only if you enable the optional AI usage page, its quota lookups to the tools' own endpoints (nothing else is sent, and logins are never refreshed). The update request sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
+Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network requests are the update check — shortly after launch and then once a day, ShelfU asks this repository's latest GitHub release whether a newer version exists — and, only if you enable the optional AI usage page, its quota lookups to the tools' own endpoints (nothing else is sent, and logins are never refreshed). The update request sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
 
-Clipboard text is stored in plain text in `~/Library/Application Support/Shelf/`. Recording is always on. To keep an app's copies out, right-click one of its clipboard entries and exclude the app; to copy something you don't want kept, quit Shelf first.
+Clipboard text is stored in plain text in `~/Library/Application Support/ShelfU/`. Recording is always on. To keep an app's copies out, right-click one of its clipboard entries and exclude the app; to copy something you don't want kept, quit ShelfU first.
 
 ## Build from source
 
@@ -175,21 +182,21 @@ Requires Go 1.27 or later and Xcode Command Line Tools:
 go run github.com/egoist/mygo/cmd/mygo build
 ```
 
-The packaged `Shelf.app` and a `.dmg` land in a `darwin-arm64` subfolder under the output directory configured in `mygo.json`. Shelf is written in Go with [MyGo](https://github.com/egoist/mygo).
+The packaged `ShelfU.app` and a `.dmg` land in a `darwin-arm64` subfolder under the output directory configured in `mygo.json`. ShelfU is written in Go with [MyGo](https://github.com/egoist/mygo). The app icon and the menu-bar icon are not in this repository: a build from source uses the default icon and shows the name in the menu bar.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The code is MIT — see [LICENSE](LICENSE). The ShelfU name, app icon and menu-bar icon are not covered by the MIT License.
 
 ---
 
 <a id="简体中文"></a>
 
-## Shelf 是什么
+## ShelfU 是什么
 
-在应用之间搬东西时，总需要一个临时放一下的地方。Shelf 把这个地方放进了刘海里。平时它不露面；鼠标移到刘海上点一下，一个小黑岛就从刘海里长出来——左边是正在播放的歌，右边每个页面一个图标；如果是拖着东西过来，打开的是「托盘」页，直接等着接收。点图标，那一页就从岛上展开：任何一页都是 420 × 250，所以它停在你的菜单栏下面，不会盖住菜单栏和窗口。屏幕上只有画出来的黑块接鼠标，旁边的菜单栏照常可点。放进去、拿出来，用完它就缩回刘海。
+在应用之间搬东西时，总需要一个临时放一下的地方。ShelfU 把这个地方放进了刘海里。平时它不露面；鼠标移到刘海上点一下，一个小黑岛就从刘海里长出来——左边是正在播放的歌，右边每个页面一个图标；如果是拖着东西过来，打开的是「托盘」页，直接等着接收。点图标，那一页就从岛上展开：任何一页都是 420 × 250，所以它停在你的菜单栏下面，不会盖住菜单栏和窗口。屏幕上只有画出来的黑块接鼠标，旁边的菜单栏照常可点。放进去、拿出来，用完它就缩回刘海。
 
-它只在菜单栏里，不占 Dock；所有内容都留在你的 Mac 上；放进来的文件不会被复制，Shelf 只记住它们在哪儿。
+它只在菜单栏里，不占 Dock；所有内容都留在你的 Mac 上；放进来的文件不会被复制，ShelfU 只记住它们在哪儿。
 
 ## 亮点
 
@@ -199,7 +206,7 @@ MIT — see [LICENSE](LICENSE).
 - 按空格快速查看；右键可以打开、在 Finder 中显示、隔空投送、复制（图片多一项「复制图片」，复制图片数据本身）、置顶或移除。
 - 图片和 PDF 可以直接转换：右键图片 →「转换为」JPEG、HEIC、PNG、PDF，或识别图里的文字生成 Word，多张还能合并成一个 PDF；大图可以一键缩小；右键 PDF 可以提取文字生成 Word，或每页存成一张图片。文件和文件夹可以压缩成 zip。全部在本机完成，原文件不动，做好的文件放在托盘最前面。
 - 文件整理也能就地完成：右键图片 →「压缩到」500 KB / 1 MB / 2 MB / 5 MB 以内；右键 zip、tar、7z、rar 压缩包 →「解压」；右键托盘里的文件 →「重新命名…」，像 Finder 一样替换文字、添加文字或按序号命名，改之前先预览，改完可以撤销。
-- 还有别的放法：拖着东西时左右晃动指针，光标旁会出现一个暂存篮；也可以在 Finder 或其他应用里右键 →「服务」→「添加到 Shelf」。
+- 还有别的放法：拖着东西时左右晃动指针，光标旁会出现一个暂存篮；也可以在 Finder 或其他应用里右键 →「服务」→「添加到 ShelfU」。
 
 **剪贴板记录**
 - 复制过的文字会自动收好，并记住来自哪个应用；截图和复制的图片也会进托盘。
@@ -250,39 +257,46 @@ MIT — see [LICENSE](LICENSE).
 
 需要 Apple Silicon 芯片（M1 或更新）的 Mac，系统 macOS 13 或以上。不支持 Intel 芯片的 Mac。
 
-1. 下载 **[Shelf.dmg](https://github.com/henryyu333/shelf/releases/latest/download/Shelf.dmg)**。
-2. 打开下载好的文件，把 **Shelf** 拖到 **Applications（应用程序）** 文件夹上。
-3. 从“应用程序”里打开 Shelf。第一次打开会被系统拦下，按下面的[第一次打开](#第一次打开)操作即可，只需要做一次。
-4. Shelf 在屏幕顶部的菜单栏里，不在 Dock 上。把鼠标移到刘海上，或按 `⌃⌥Space`。
+1. 下载 **[ShelfU.dmg](https://github.com/henryyu333/shelfu/releases/latest/download/ShelfU.dmg)**。
+2. 打开下载好的文件，把 **ShelfU** 拖到 **Applications（应用程序）** 文件夹上。
+3. 从“应用程序”里打开 ShelfU。第一次打开会被系统拦下，按下面的[第一次打开](#第一次打开)操作即可，只需要做一次。
+4. ShelfU 在屏幕顶部的菜单栏里，不在 Dock 上。把鼠标移到刘海上，或按 `⌃⌥Space`。
 
-想要 zip 压缩包？[Releases 页面](https://github.com/henryyu333/shelf/releases/latest)的每个版本里也有同一版本的 `.zip`。
+想要 zip 压缩包？[Releases 页面](https://github.com/henryyu333/shelfu/releases/latest)的每个版本里也有同一版本的 `.zip`。
 
 <a id="第一次打开"></a>
 
-### 第一次打开：提示“未打开 Shelf”
+### 第一次打开：提示“未打开 ShelfU”
 
-Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认一次。请只对从本仓库下载的版本这样做。
+ShelfU 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认一次。请只对从本仓库下载的版本这样做。
 
 **macOS 15 或更新**
 
-1. 在“应用程序”里双击 Shelf。系统提示未打开时，点 **完成**（不要点“移到废纸篓”）。
+1. 在“应用程序”里双击 ShelfU。系统提示未打开时，点 **完成**（不要点“移到废纸篓”）。
 2. 打开 **系统设置 → 隐私与安全性**，往下滚动到 **安全性**。
-3. 在“已阻止 Shelf 以保护 Mac”旁边，点 **仍要打开**。
+3. 在“已阻止 ShelfU 以保护 Mac”旁边，点 **仍要打开**。
 4. 输入开机密码或用触控 ID 确认，再点一次 **仍要打开**。
 
 **macOS 13 或 14**
 
-在“应用程序”里按住 Control 点按（或右键点按）Shelf，选 **打开**，再在弹窗里点 **打开**。
+在“应用程序”里按住 Control 点按（或右键点按）ShelfU，选 **打开**，再在弹窗里点 **打开**。
 
 之后就能正常打开了。如果系统提示 App **已损坏**，不要绕过，删掉后从 Releases 页面重新下载。Apple 官方说明：[在 Mac 上安全地打开 App](https://support.apple.com/zh-cn/102445)。
 
 ### 可选
 
 - **开机自动启动**：右键菜单栏图标 → 设置… → 通用 →「开机时自动启动」。
-- **系统权限**：右键菜单栏图标 →「开启系统权限」，或 设置… → 系统权限 →「全部开启」。Shelf 会依次打开系统设置里的两页：「辅助功能」（刘海拖放保护）和「屏幕录制」（框选文字）；在每页打开 Shelf 的开关，屏幕录制开好后点「重新打开 Shelf」。两项都可选，日常使用不需要任何授权。从 1.7.0 或更早的版本更新上来时要再开一次；从 1.9.0 起的正式发布版在之后更新时保留授权，自己编译的构建每次签名都会变，可能要重新开启。
+- **系统权限**：右键菜单栏图标 →「开启系统权限」，或 设置… → 系统权限 →「全部开启」。ShelfU 会依次打开系统设置里的两页：「辅助功能」（刘海拖放保护）和「屏幕录制」（框选文字）；在每页打开 ShelfU 的开关，屏幕录制开好后点「重新打开 ShelfU」。两项都可选，日常使用不需要任何授权。从 Shelf 换到 ShelfU 时要再开一次（见下）；ShelfU 的正式发布版在之后更新时保留授权，自己编译的构建每次签名都会变，可能要重新开启。
 - **刘海拖放保护**（辅助功能）：拖着东西靠近刘海时，指针会停在托盘的接收区里，不会顶到屏幕最上沿。
 - **框选文字**（屏幕录制）：只截取你框选的那一块，文字在本机识别，不保存截图。
-- **卸载**：右键菜单栏图标 → 退出 Shelf，再把“应用程序”里的 Shelf 移到废纸篓。如果连保存的内容也要删除，删掉 `~/Library/Application Support/Shelf/` 文件夹。
+- **卸载**：右键菜单栏图标 → 退出 ShelfU，再把“应用程序”里的 ShelfU 移到废纸篓。如果连保存的内容也要删除，删掉 `~/Library/Application Support/ShelfU/` 文件夹。
+
+### 从 Shelf 升级
+
+ShelfU 是 Shelf 的新名字。ShelfU 第一次打开时，会把 `~/Library/Application Support/Shelf/` 里保存的内容复制到 `~/Library/Application Support/ShelfU/`；旧文件夹保持原样，确认内容都在以后可以删掉。macOS 会把 ShelfU 当成一个新应用，所以系统权限和「开机时自动启动」要重新打开一次。
+
+- **在 Shelf 里应用内更新**：更新装好后，在“应用程序”里打开 Shelf。它会自己改名为 `ShelfU.app` 并以 ShelfU 打开。
+- **用 ShelfU.dmg 安装**：先退出 Shelf，把 `Shelf.app` 移到废纸篓，只让 ShelfU 使用你的内容。
 
 ## 日常使用
 
@@ -318,7 +332,7 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 
 一切都留在你的 Mac 上：不用注册账号，没有遥测，没有云同步。联网请求只有两类：检查更新（启动后不久一次、之后每天一次，向本仓库 GitHub 上的最新 Release 询问有没有新版本，请求里只带一个标准的 User-Agent 头）；以及可选的 AI 用量页的额度查询——只有打开它才会发生，查询用本机已保存的登录信息，只发给工具自己的官方地址，不会发给任何其他地方，也不会刷新登录。「自动检查更新」可以在 设置… → 通用 里关闭；关闭后仍可在菜单里手动检查。
 
-剪贴板文字以明文保存在 `~/Library/Application Support/Shelf/`。剪贴板记录始终开启。不想记录某个应用复制的内容，右键它的剪贴板条目把应用排除；要复制不希望被保存的内容时，先退出 Shelf 再复制。
+剪贴板文字以明文保存在 `~/Library/Application Support/ShelfU/`。剪贴板记录始终开启。不想记录某个应用复制的内容，右键它的剪贴板条目把应用排除；要复制不希望被保存的内容时，先退出 ShelfU 再复制。
 
 ## 从源码构建
 
@@ -328,8 +342,8 @@ Shelf 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确认
 go run github.com/egoist/mygo/cmd/mygo build
 ```
 
-打包好的 `Shelf.app` 和 `.dmg` 在 `mygo.json` 配置的输出目录下的 `darwin-arm64` 子文件夹中。Shelf 用 Go 和 [MyGo](https://github.com/egoist/mygo) 编写。
+打包好的 `ShelfU.app` 和 `.dmg` 在 `mygo.json` 配置的输出目录下的 `darwin-arm64` 子文件夹中。ShelfU 用 Go 和 [MyGo](https://github.com/egoist/mygo) 编写。应用图标和菜单栏图标不在本仓库里：自己从源码构建时用的是默认图标，菜单栏里显示文字名称。
 
 ## 许可
 
-MIT — 见 [LICENSE](LICENSE)。
+代码采用 MIT 许可，见 [LICENSE](LICENSE)。ShelfU 的名称、应用图标和菜单栏图标不在 MIT 许可范围内。
