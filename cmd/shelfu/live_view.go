@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -68,33 +69,20 @@ func (a *shelf) powerWings(c *ui.Context, shellW, shellH, k float32, ev liveEven
 	})
 }
 
-// levelBar is the 66 × 6 charge track: the tone at 20% for the track, the
-// solid tone with a soft 6pt halo for the fill.
+// levelBar is the 66 × 6 charge track: the tone at 20% for the track, and
+// the solid tone for the fill inside a real blurred box shadow (6pt, half
+// opacity) — the design's soft halo, not a stack of outlines.
 func levelBar(c *ui.Context, pct int, col ui.Color) {
 	track := ui.Box(c.Key("live-level")).Width(liveBarW).Height(liveBarH).Radius(liveBarH / 2).
 		Background(col.Alpha(0.2))
-	track.Draw(func(p *ui.Painter, r ui.Rect) {
+	track.Children(func() {
 		frac := min(max(float32(pct)/100, 0), 1)
 		if frac <= 0 {
 			return
 		}
-		w := r.W * frac
-		// Three passes fake the design's 6pt glow without an effect layer:
-		// a wide faint halo, a tighter one, then the solid fill.
-		for _, pass := range []struct {
-			grow  float32
-			alpha float32
-		}{{6, 0.14}, {3, 0.24}, {0, 1}} {
-			x, y := r.X-pass.grow, r.Y-pass.grow
-			ww, hh := w+2*pass.grow, r.H+2*pass.grow
-			rr := min(hh/2, (r.H+2*pass.grow)/2)
-			path := liveRoundPath(x, y, ww, hh, rr)
-			c := col
-			if pass.alpha < 1 {
-				c = col.Alpha(pass.alpha)
-			}
-			p.FillPath(path, c)
-		}
+		ui.Box(c.Key("live-level-fill")).Width(max(1.5, liveBarW*frac)).Height(liveBarH).
+			Radius(liveBarH/2).Background(col).
+			Shadow(0, 0, 6, 0, col.Alpha(0.5))
 	})
 }
 
@@ -177,6 +165,16 @@ func (a *shelf) downloadWings(c *ui.Context, shellW, shellH, k float32, dl downl
 	})
 }
 
+// liveHeadsetIcon picks the notice's glyph: AirPods (by name) use the
+// earbuds, every other headset the over-ear headphones from the design
+// preview's PHONES symbol.
+func liveHeadsetIcon(label string) (*ui.SVG, float32) {
+	if strings.Contains(strings.ToLower(label), "airpods") {
+		return livePodsSym, 18
+	}
+	return livePhonesSym, 17
+}
+
 // liveCapsule draws the headphone / download-done notice in the band under
 // the notch. The completion capsule's body is clickable: it drops the file
 // into the tray and opens the tray page.
@@ -194,7 +192,8 @@ func (a *shelf) liveCapsule(c *ui.Context, shellW, shellH, k float32, ev liveEve
 		body.Children(func() {
 			switch ev.kind {
 			case liveHeadset:
-				ui.Icon(c, livePodsSym).Size(18, 16).TextColor(ink)
+				glyph, gw := liveHeadsetIcon(ev.label)
+				ui.Icon(c, glyph).Size(gw, 16).TextColor(ink)
 				ui.Text(c, ev.label).SingleLine().FontSize(12).FontWeight(600).TextColor(ink).
 					Shrink(1).MinWidth(0).Ellipsis("…")
 				for _, lv := range ev.levels {
