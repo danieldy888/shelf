@@ -31,7 +31,7 @@ var (
 	appVersionProbe      = mygo.App.Version
 )
 
-// settingsTheme is the one dark theme the window repaints with: Shelf's UI
+// settingsTheme is the one dark theme the window repaints with: ShelfU's UI
 // lives on the pure black notch shell, so Settings is always dark no matter
 // the system appearance. It carries the DESIGN.md palette: system-blue
 // accent, white-alpha surfaces and the compact metrics of the mock's
@@ -129,7 +129,7 @@ func (a *shelf) openSettings() {
 		Content: ui.View(a.settingsView),
 	})
 	// The title bar follows the window's own dark chrome whatever the system
-	// appearance is, matching the mock's dark "Shelf 设置" window.
+	// appearance is, matching the mock's dark "ShelfU 设置" window.
 	mac.SetWindowAppearance(w.NativeHandle(), true)
 	w.SetBounds(frame)
 	w.OnClosed(a.settingsClosed)
@@ -257,7 +257,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 						Background(ui.RGBA(255, 69, 58, 0.12)).
 						Border(0.5, ui.RGBA(255, 69, 58, 0.35)).Children(func() {
 						ui.Text(c, "settings.json 无法读取").FontSize(12).FontWeight(600).TextColor(settingsTheme.Danger)
-						ui.Text(c, "以下设置已按默认值运行，且被锁定以免覆盖原文件。请备份并修复数据文件夹中的 settings.json 后重新打开 Shelf。").
+						ui.Text(c, "以下设置已按默认值运行，且被锁定以免覆盖原文件。请备份并修复数据文件夹中的 settings.json 后重新打开 ShelfU。").
 							FontSize(11).TextColor(setInk3)
 					})
 				}

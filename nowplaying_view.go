@@ -72,9 +72,9 @@ func (m *nowPlayingModule) peekWings(c *ui.Context, w, h, k float32) bool {
 	if !ok || !m.showsPlayer() {
 		return false
 	}
-	label := "展开 Shelf"
+	label := "展开 ShelfU"
 	if st.Title != "" {
-		label = "正在播放：" + st.Title + " · 展开 Shelf"
+		label = "正在播放：" + st.Title + " · 展开 ShelfU"
 	}
 	wings := ui.Row(c.Key("np-wings")).Width(w).Height(h).
 		Padding(0, npWingsPad, npWingsBody, npWingsPad).AlignItems(ui.Center).

@@ -139,7 +139,7 @@ func TestPeekFoldHoverStillGetsTheWings(t *testing.T) {
 	if !grew {
 		t.Fatal("a hover after the drag never morphed toward the wings' size")
 	}
-	if _, ok := view.Find("正在播放：Fashion Killa · 展开 Shelf"); !ok {
+	if _, ok := view.Find("正在播放：Fashion Killa · 展开 ShelfU"); !ok {
 		t.Fatal("the hover wings never appeared over the notch")
 	}
 }

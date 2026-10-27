@@ -21,7 +21,7 @@ import (
 )
 
 // ocrRow asserts the newest store item is the recognized text, captured
-// from Shelf's own recognition.
+// from ShelfU's own recognition.
 func ocrRow(t *testing.T, a *shelf, want string) store.Item {
 	t.Helper()
 	if len(a.store.Items) == 0 {

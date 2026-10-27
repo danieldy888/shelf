@@ -13,7 +13,7 @@ package mac
 // 用户在本进程第一次预检之后才打开开关时，预检仍是 false。此时若照旧清
 // 记录，删掉的正是刚给的授权。所以只在没有反面证据时才清 ——
 // WindowServer 是否会交出别的 app 的窗口标题不缓存，它是「授权已经生效」
-// 的直接证据；有它就不清，由界面提示「重新打开 Shelf 后生效」。
+// 的直接证据；有它就不清，由界面提示「重新打开 ShelfU 后生效」。
 import (
 	"os/exec"
 	"sync"
@@ -70,7 +70,7 @@ func ScreenCapturePreflight() bool {
 // at most once per process, and only while nothing proves the grant is
 // already live. WindowServer returning other apps' window titles is that
 // proof: the reset would delete the grant the user just made, so it never
-// runs then; the panel tells the user to reopen Shelf instead.
+// runs then; the panel tells the user to reopen ShelfU instead.
 func ScreenCaptureAllowed() bool {
 	if ScreenCapturePreflight() {
 		return true

@@ -101,7 +101,7 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
 	// An incoming system drag shrinks the resident strip to the notch's
-	// menu-bar band: outside it Shelf only shows a widened band-height
+	// menu-bar band: outside it ShelfU only shows a widened band-height
 	// hint, inside it the shell grows 「松开放入」. The frame always
 	// covers the shape being aimed at (plus ears) and the shell actually
 	// drawn, so the morph, a fold remnant and the Spaces edge guard stay
@@ -417,7 +417,7 @@ func (a *shelf) overlayAcceptsMouse() bool {
 	// the frame already covers it (desiredFrame follows the level), while a
 	// still pointer produces no move event to re-ask with. So the shape the
 	// state settles at counts too: a press that lands where the shell is
-	// about to be must reach Shelf, not the window underneath.
+	// about to be must reach ShelfU, not the window underneath.
 	tw, th, tl := a.settledShell()
 	return a.overShellShape(p, tw, th, tl, a.fx.shakeX)
 }
@@ -443,7 +443,7 @@ func (a *shelf) settledShell() (w, h, levelK float32) {
 }
 
 // The pointer gate's sources are installed once per process and fan out to
-// every overlay that follows the pointer: Shelf owns one, and the smoke
+// every overlay that follows the pointer: ShelfU owns one, and the smoke
 // harness builds one per test. A watch bound to the first shelf left every
 // other window's flag stale — its gate could only change on the next frame,
 // never on a move.

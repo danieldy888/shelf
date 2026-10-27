@@ -1,10 +1,10 @@
 {
-  "name": "Shelf",
-  "identifier": "local.y3.shelf",
+  "name": "ShelfU",
+  "identifier": "local.y3.shelfu",
   "version": "1.9.1",
   "updates": {
     "publicKey": "U392UXk3CKWS5zmlwlygGPnVbOppcJHEMJEeKXXBbAo=",
-    "github": "henryyu333/shelf"
+    "github": "henryyu333/shelfu"
   },
   "out": "dist.noindex",
   "buildCommand": "go generate ./...",
@@ -16,9 +16,9 @@
       "NSHighResolutionCapable": true,
       "NSServices": [
         {
-          "NSMenuItem": { "default": "添加到 Shelf" },
+          "NSMenuItem": { "default": "添加到 ShelfU" },
           "NSMessage": "addToShelf",
-          "NSPortName": "Shelf",
+          "NSPortName": "ShelfU",
           "NSRequiredContext": {},
           "NSSendTypes": ["NSStringPboardType", "public.utf8-plain-text"],
           "NSSendFileTypes": ["public.file-url", "public.item"]

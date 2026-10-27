@@ -1,6 +1,6 @@
 //go:build darwin
 
-// Package mac holds the AppKit/CoreGraphics calls Shelf needs and the mygo
+// Package mac holds the AppKit/CoreGraphics calls ShelfU needs and the mygo
 // public API does not expose: pasteboard change counters, the system drag
 // session probe, the pressed-button state, per-file icons and the Mission
 // Control drag guard.

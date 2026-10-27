@@ -4,14 +4,12 @@ package main
 
 import (
 	"bytes"
-	"image"
-	"image/color"
 	"image/png"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
-	"golang.org/x/image/draw"
 
 	"shelf/internal/mac"
 	"shelf/internal/store"
@@ -138,19 +136,25 @@ func (a *shelf) dropStaleThumbnails() {
 	}
 }
 
-func trayIcon() []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := image.NewUniform(color.NRGBA{A: 255})
-	for _, r := range []image.Rectangle{
-		image.Rect(5, 6, 7, 26), image.Rect(25, 6, 27, 26), image.Rect(5, 24, 27, 26),
-		image.Rect(7, 17, 12, 19), image.Rect(20, 17, 25, 19), image.Rect(12, 19, 20, 21),
-		image.Rect(15, 4, 17, 15), image.Rect(11, 11, 21, 13),
-	} {
-		draw.Draw(img, r, ink, image.Point{}, draw.Src)
-	}
-	var b bytes.Buffer
-	if err := png.Encode(&b, img); err != nil {
+// trayIconFile is the menu-bar template icon in the app's resources.
+const trayIconFile = "tray.png"
+
+// trayIcon loads the menu-bar icon from the resource directory dir. The
+// image is black-and-transparent so macOS can tint it as a template; a
+// missing or unreadable file returns nil and the tray then shows its title
+// instead, which keeps the menu-bar item clickable.
+func trayIcon(dir string) []byte {
+	if dir == "" {
 		return nil
 	}
-	return b.Bytes()
+	b, err := os.ReadFile(filepath.Join(dir, trayIconFile))
+	if err != nil {
+		return nil
+	}
+	// A file that is not a PNG would make the tray fail to install; the
+	// title fallback is better than a menu-bar item that never appears.
+	if _, err := png.DecodeConfig(bytes.NewReader(b)); err != nil {
+		return nil
+	}
+	return b
 }

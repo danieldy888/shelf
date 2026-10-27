@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	appName = "Shelf"
+	appName = "ShelfU"
 	// Carbon 全局快捷键，不需要辅助功能权限。
 	trayShortcut = "Ctrl+Alt+Space"
 	// 打开剪贴板搜索：显示托盘、切到剪贴板标签并把焦点放进搜索框。
@@ -15,7 +15,7 @@ const (
 	ocrShortcut = "Ctrl+Alt+O"
 	// searchLabel 是搜索框的无障碍名称（也是测试定位用的标签）。
 	searchLabel = "搜索剪贴板"
-	// dropBandPadX 是刘海投放带的左右余量：拖拽时 Shelf 只在「刘海宽
+	// dropBandPadX 是刘海投放带的左右余量：拖拽时 ShelfU 只在「刘海宽
 	// + 两侧余量 × 投放带高」这一条里接拖放与响应鼠标。投放带高度
 	// 是菜单栏加 guardDropPad：拖放守卫把光标夹到带底这一行，落点
 	// 必须在菜单栏下方、仍在窗口内。

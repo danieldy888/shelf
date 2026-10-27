@@ -77,7 +77,7 @@ func objcData(b []byte) objc.ID {
 // Snapshot every pasteboard item with all of its UTI -> data pairs, not
 // just the formats mygo.Clipboard understands: mygo rewrites unknown types
 // like org.nspasteboard.ConcealedType, and restoring without that marker
-// could let a running Shelf record what was on the board. Restore writes
+// could let a running ShelfU record what was on the board. Restore writes
 // the same raw NSPasteboardItems back.
 func snapshotClipboard(t *testing.T) {
 	t.Helper()
@@ -147,7 +147,7 @@ func objcGoStr(s objc.ID) string {
 }
 
 // The smoke writer adds a concealed marker atomically with the real PNG
-// data so an installed Shelf's history does not collect test fixtures.
+// data so an installed ShelfU's history does not collect test fixtures.
 // The real key dispatch, copy logic, and general pasteboard remain in use.
 type fix2PrivateClipboard struct{}
 

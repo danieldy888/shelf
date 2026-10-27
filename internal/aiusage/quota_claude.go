@@ -40,7 +40,7 @@ const (
 
 // FetchClaude reads Claude Code's OAuth credentials (login Keychain first,
 // then the credentials file) and asks Anthropic for the subscription's usage
-// windows. An expired token returns QuotaExpired without any request — Shelf
+// windows. An expired token returns QuotaExpired without any request — ShelfU
 // never refreshes tokens, because refreshing would rotate Claude Code's own
 // session and could sign it out. FetchedAt is stamped when the response
 // arrives so a Retry-After delay counts from receipt; ctx cancellation

@@ -349,7 +349,7 @@ func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
 				frame, targetH, moving = a.win.Bounds(), a.panelH(), a.fx.openMoving
 				point = mygo.Point{X: a.stripCenter(), Y: a.y + targetH + 2}
 				receiver = mygo.NewWindow(mygo.WindowOptions{
-					Title: "Shelf bottom-edge click receiver", Width: 40, Height: 40,
+					Title: "ShelfU bottom-edge click receiver", Width: 40, Height: 40,
 					Hidden: true, Frameless: true, DisableShadow: true, Panel: true, SkipTaskbar: true,
 					Content: ui.View(func(c *ui.Context) { ui.Text(c, "Receiver") }),
 				})
@@ -387,10 +387,10 @@ func TestSmokeSettledPanelBottomMarginPassesThrough(t *testing.T) {
 				t.Errorf("settled native frame %+v retains overshoot room: panelH=%d moving=%v", frame, targetH, moving)
 			}
 			if insideHit != shelfNum || outsideHit != receiverNum {
-				t.Errorf("bottom edge at y=%d: inside target=%d want Shelf=%d; y=%d target=%d want receiver=%d",
+				t.Errorf("bottom edge at y=%d: inside target=%d want ShelfU=%d; y=%d target=%d want receiver=%d",
 					frame.Y+targetH, insideHit, shelfNum, point.Y, outsideHit, receiverNum)
 			}
-			t.Logf("native frame=%+v panelH=%d point=(%d,%d) Shelf=%d receiver=%d inside_hit=%d outside_hit=%d",
+			t.Logf("native frame=%+v panelH=%d point=(%d,%d) ShelfU=%d receiver=%d inside_hit=%d outside_hit=%d",
 				frame, targetH, point.X, point.Y, shelfNum, receiverNum, insideHit, outsideHit)
 		})
 	}

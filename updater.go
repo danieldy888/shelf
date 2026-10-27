@@ -116,7 +116,7 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 	// A check is a check: a manual one counts toward the daily schedule too.
 	a.updateNext = nextAutoCheck(time.Now(), err == nil)
 	if err != nil {
-		log.Printf("Shelf: 检查更新失败：%v", err)
+		log.Printf("ShelfU: 检查更新失败：%v", err)
 		if user {
 			if errors.Is(err, mygo.ErrUpdatesDisabled) {
 				a.toastStatus("此构建未启用自动更新（开发构建或未签名的安装）", time.Now().Add(8*time.Second), statusInfo)
@@ -141,7 +141,7 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 		return
 	}
 	a.update, a.updateInstalled, a.updateProgress = up, false, 0
-	log.Printf("Shelf: 发现新版本 v%s", up.Version)
+	log.Printf("ShelfU: 发现新版本 v%s", up.Version)
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -156,7 +156,7 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 // installUpdate runs when the user chooses 安装更新: the signed archive (or
 // delta) downloads and replaces the bundle in the background while the
 // footer shows progress. The new version takes over at the next launch or
-// through 重新启动 Shelf 完成更新.
+// through 重新启动 ShelfU 完成更新.
 func (a *shelf) installUpdate() {
 	up := a.update
 	if up == nil || a.updateInstalling || a.updateInstalled {
@@ -194,12 +194,12 @@ func (a *shelf) installUpdate() {
 func (a *shelf) installedUpdate(up *mygo.Update, err error) {
 	a.updateInstalling, a.updateProgress = false, 0
 	if err != nil {
-		log.Printf("Shelf: 安装更新失败：%v", err)
+		log.Printf("ShelfU: 安装更新失败：%v", err)
 		a.toastStatus("安装更新失败："+err.Error(), time.Now().Add(8*time.Second), statusErr)
 	} else {
 		a.updateInstalled = true
-		log.Printf("Shelf: 更新 v%s 已安装，重启后生效", up.Version)
-		a.toastStatus(fmt.Sprintf("v%s 已安装 · 重新启动 Shelf 后生效", up.Version), time.Now().Add(8*time.Second), statusOK)
+		log.Printf("ShelfU: 更新 v%s 已安装，重启后生效", up.Version)
+		a.toastStatus(fmt.Sprintf("v%s 已安装 · 重新启动 ShelfU 后生效", up.Version), time.Now().Add(8*time.Second), statusOK)
 	}
 }
 
@@ -209,7 +209,7 @@ func (a *shelf) installedUpdate(up *mygo.Update, err error) {
 func (a *shelf) updateMenu() *mygo.MenuItem {
 	switch {
 	case a.updateInstalled:
-		return &mygo.MenuItem{Label: "重新启动 Shelf 完成更新", Click: func(*mygo.MenuItem, *mygo.Window) {
+		return &mygo.MenuItem{Label: "重新启动 ShelfU 完成更新", Click: func(*mygo.MenuItem, *mygo.Window) {
 			relaunchApp()
 		}}
 	case a.updateInstalling:
@@ -242,7 +242,7 @@ func (a *shelf) updateStatus() string {
 		}
 		return fmt.Sprintf("正在下载更新 v%s…", a.update.Version)
 	case a.updateInstalled:
-		return fmt.Sprintf("v%s 已安装 · 重新启动 Shelf 后生效", a.update.Version)
+		return fmt.Sprintf("v%s 已安装 · 重新启动 ShelfU 后生效", a.update.Version)
 	case a.update != nil:
 		return fmt.Sprintf("发现新版本 v%s · 从菜单栏图标的菜单安装", a.update.Version)
 	}

@@ -562,7 +562,7 @@ func TestOpeningFrameUsesThePanelSpring(t *testing.T) {
 
 // TestCapsuleTakesMouseOnlyOverItsBody: while a completion capsule is up,
 // the strip accepts the mouse over the drawn shape — a press there must
-// reach Shelf — and passes it through over the frame's margins.
+// reach ShelfU — and passes it through over the frame's margins.
 func TestCapsuleTakesMouseOnlyOverItsBody(t *testing.T) {
 	a := motionShelf()
 	a.winH = 1 // pretend a live native surface

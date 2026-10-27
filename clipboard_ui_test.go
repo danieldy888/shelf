@@ -526,10 +526,10 @@ type failClip struct{}
 func (failClip) writeText(string) error  { return errors.New("pasteboard full") }
 func (failClip) writeImage([]byte) error { return errors.New("pasteboard full") }
 
-// Shelf 自己在前台（键盘搜索开着）时，复制不记来源。
+// ShelfU 自己在前台（键盘搜索开着）时，复制不记来源。
 func TestCaptureSourceSkipsShelfItself(t *testing.T) {
 	if got := captureSource(42, 42, "local.y3u.shelf"); got != "" {
-		t.Fatalf("Shelf frontmost recorded a source: %q", got)
+		t.Fatalf("ShelfU frontmost recorded a source: %q", got)
 	}
 	if got := captureSource(10, 42, "com.example.App"); got != "com.example.App" {
 		t.Fatalf("real source dropped: %q", got)
@@ -715,7 +715,7 @@ func TestClipboardNewerChangeSupersedesPending(t *testing.T) {
 	}
 }
 
-// skipCurrent 连等待中的变化一起清掉：Shelf 自己写剪贴板后不再回头收它。
+// skipCurrent 连等待中的变化一起清掉：ShelfU 自己写剪贴板后不再回头收它。
 func TestClipboardSkipCurrentClearsPending(t *testing.T) {
 	a, m, board := clipModuleShelf(t)
 	now := time.Unix(1_700_000_000, 0)

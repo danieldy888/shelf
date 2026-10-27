@@ -288,7 +288,7 @@ func joinOCRLines(lines []string) string {
 }
 
 // copyRecognizedText is 「识别文字并复制」: the recognized text of one
-// image goes on the clipboard (copyText, so Shelf never records its own
+// image goes on the clipboard (copyText, so ShelfU never records its own
 // copy). A recognized item answers immediately; while the recognizer is
 // busy elsewhere the request is queued and the copy lands when it
 // finishes; a fresh one starts right away.

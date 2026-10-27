@@ -180,8 +180,8 @@ func TestAwakeFailureUsesTheCapsule(t *testing.T) {
 // pmset prints an empty `named:` for non-ASCII names, so the hold's name
 // must be plain ASCII to stay visible in `pmset -g assertions`.
 func TestAwakeAssertionNameIsASCII(t *testing.T) {
-	if awakeAssertionName != "Shelf Stay Awake" {
-		t.Fatalf("assertion name = %q, want %q", awakeAssertionName, "Shelf Stay Awake")
+	if awakeAssertionName != "ShelfU Stay Awake" {
+		t.Fatalf("assertion name = %q, want %q", awakeAssertionName, "ShelfU Stay Awake")
 	}
 	for i, r := range awakeAssertionName {
 		if r > 127 {

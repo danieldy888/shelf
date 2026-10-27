@@ -86,7 +86,7 @@ func (m *clipboardModule) tick(now time.Time) {
 		if a.store == nil {
 			return
 		}
-		// 记录复制发生的瞬间哪个应用在最前。Shelf 自己处于前台（搜索面板
+		// 记录复制发生的瞬间哪个应用在最前。ShelfU 自己处于前台（搜索面板
 		// 拿了键盘）时不记来源；被用户排除的应用整条跳过。
 		m.record(now, m.board.sourceApp())
 		return
@@ -162,7 +162,7 @@ func (a *shelf) warmClipApp(bundle string) {
 }
 
 // skipCurrent marks the clipboard's current contents as handled; used after
-// Shelf itself writes to the clipboard so the copy is not recorded again.
+// ShelfU itself writes to the clipboard so the copy is not recorded again.
 // A change still pending from before the write is dropped with it.
 // Safe on a nil module in shelves that have not started monitoring yet.
 func (m *clipboardModule) skipCurrent() {

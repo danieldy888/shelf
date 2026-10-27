@@ -106,7 +106,7 @@ func newSmokePointerBackdrop(t *testing.T, r mygo.Rectangle) *mygo.Window {
 	t.Helper()
 	var w *mygo.Window
 	onMain(func() {
-		w = mygo.NewWindow(mygo.WindowOptions{Title: "Shelf pointer test arena", Hidden: true,
+		w = mygo.NewWindow(mygo.WindowOptions{Title: "ShelfU pointer test arena", Hidden: true,
 			Width: r.Width, Height: r.Height, X: r.X, Y: r.Y, Frameless: true, Panel: true,
 			SkipTaskbar: true, DisableShadow: true, Content: ui.View(func(c *ui.Context) {
 				ui.Box(c).Fill().Background(ui.Hex("#253445"))

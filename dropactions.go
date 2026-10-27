@@ -295,7 +295,7 @@ func (a *shelf) dropZoneShow() (on bool, need int) {
 // board, refetched only when its changeCount moved; classification rides
 // the same cache. Once the flag falls the cached files keep answering for
 // dropHoldGrace — or until the drop is consumed — so the release frame
-// still builds the cells it needs. Shelf's own drag-out, a drag carrying
+// still builds the cells it needs. ShelfU's own drag-out, a drag carrying
 // no files, and a release outside the panel all answer nil. The debug pin
 // SHELF_DEBUG_DROP_FILES skips the monitor: it makes the shelf build the
 // drop zone for a fixed file list, for screenshots and smoke tests.

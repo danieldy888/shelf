@@ -8,7 +8,7 @@ package main
 // page icons can be compared across the three crops for one x.
 // Run with SHELF_BASKET_SMOKE=1; the PNGs land in /tmp/shelf-noback. The
 // test instance uses the smoke data dir and never touches
-// ~/Library/Application Support/Shelf.
+// ~/Library/Application Support/ShelfU.
 
 import (
 	"fmt"

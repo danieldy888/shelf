@@ -269,7 +269,7 @@ func TestPeekWingsShowCoverAndBarsOnly(t *testing.T) {
 			}
 		}
 	}
-	const label = "正在播放：夜曲 · 展开 Shelf"
+	const label = "正在播放：夜曲 · 展开 ShelfU"
 	if _, ok := view.Find(label); !ok {
 		t.Fatalf("the wings lack their accessibility label; texts %v", view.Texts())
 	}
@@ -305,7 +305,7 @@ func TestPeekWingsShowCoverAndBarsOnly(t *testing.T) {
 }
 
 // The wings' label drops the track when there is nothing to name, so the
-// automation surface still reads 「展开 Shelf」.
+// automation surface still reads 「展开 ShelfU」.
 func TestPeekWingsLabelWithoutATitle(t *testing.T) {
 	a := &shelf{
 		settings:     settings.Settings{IslandNowPlaying: true},
@@ -316,7 +316,7 @@ func TestPeekWingsLabelWithoutATitle(t *testing.T) {
 	}
 	a.np = &nowPlayingModule{host: a, have: true, last: mac.NowPlayingState{Playing: true}}
 	view := ui.NewTester(a.view, sheetW, sheetH)
-	if _, ok := view.Find("展开 Shelf"); !ok {
+	if _, ok := view.Find("展开 ShelfU"); !ok {
 		t.Fatalf("the untitled wings must still be labeled; texts %v", view.Texts())
 	}
 	if view.HasText("正在播放") {

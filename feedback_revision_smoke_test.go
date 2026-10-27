@@ -37,7 +37,7 @@ func TestCollapsedMarginsReachUnderlyingWindow(t *testing.T) {
 			frame := a.win.Bounds()
 			point = mygo.Point{X: frame.X + 2, Y: a.y + a.notchH + 12}
 			cursorPoint = func() mygo.Point { return point }
-			receiver = mygo.NewWindow(mygo.WindowOptions{Title: "Shelf click receiver", Width: 40, Height: 40, Hidden: true, Frameless: true, DisableShadow: true, Panel: true, SkipTaskbar: true, Content: ui.View(func(c *ui.Context) { ui.Text(c, "Receiver") })})
+			receiver = mygo.NewWindow(mygo.WindowOptions{Title: "ShelfU click receiver", Width: 40, Height: 40, Hidden: true, Frameless: true, DisableShadow: true, Panel: true, SkipTaskbar: true, Content: ui.View(func(c *ui.Context) { ui.Text(c, "Receiver") })})
 			h := receiver.NativeHandle()
 			mac.SetWindowFrame(h, point.X-10, point.Y-10, 40, 40)
 			receiver.ShowInactive()

@@ -132,7 +132,7 @@ func TestPermissionTrayItemCountsMissing(t *testing.T) {
 func TestSettingsPermissionsSectionIdle(t *testing.T) {
 	st, _ := stubPermissions(t)
 	_, view := newSettingsShelf(t)
-	if !view.HasText("系统权限") || !view.HasText("Shelf 需要 2 项系统权限") || !view.HasText("还差 2 项") {
+	if !view.HasText("系统权限") || !view.HasText("ShelfU 需要 2 项系统权限") || !view.HasText("还差 2 项") {
 		t.Fatalf("idle header missing; texts=%v", view.Texts())
 	}
 	for _, want := range []string{"刘海拖放保护 · 辅助功能", "框选文字 · 屏幕录制", "未开启", "全部开启…"} {
@@ -186,7 +186,7 @@ func TestPermissionFlowSkipsGrantedAndStops(t *testing.T) {
 		t.Fatalf("停止 left the flow at %v", a.perm.stage)
 	}
 	view.Frame()
-	if !view.HasText("Shelf 需要 2 项系统权限") || !view.HasText("全部开启…") {
+	if !view.HasText("ShelfU 需要 2 项系统权限") || !view.HasText("全部开启…") {
 		t.Fatalf("停止 did not return to the ordinary state; texts=%v", view.Texts())
 	}
 	// A callback that was already in flight when 停止 ran must do nothing.
@@ -237,7 +237,7 @@ func TestPermissionFlowAdvancesFromAccessibilityToScreen(t *testing.T) {
 		t.Fatalf("screen step did not reach the relaunch stage: %v", a.perm.stage)
 	}
 	view.Frame()
-	if !view.HasText("还差最后一步") || !view.HasText("重新打开 Shelf") {
+	if !view.HasText("还差最后一步") || !view.HasText("重新打开 ShelfU") {
 		t.Fatalf("relaunch step missing; texts=%v", view.Texts())
 	}
 }
@@ -338,7 +338,7 @@ func TestPermissionRowOpensOnePermission(t *testing.T) {
 }
 
 func TestRelaunchPlanUsesLaunchServicesInsideBundle(t *testing.T) {
-	plan := relaunchPlanFor("/Applications/Shelf App.app/Contents/MacOS/Shelf",
+	plan := relaunchPlanFor("/Applications/ShelfU App.app/Contents/MacOS/ShelfU",
 		[]string{"--data-dir", "/tmp/a b", "--show"}, 4321)
 	if plan.Exec != "/bin/sh" || len(plan.Args) != 2 || plan.Args[0] != "-c" {
 		t.Fatalf("relaunch plan is not a shell waiter: %+v", plan)
@@ -346,7 +346,7 @@ func TestRelaunchPlanUsesLaunchServicesInsideBundle(t *testing.T) {
 	script := plan.Args[1]
 	for _, want := range []string{
 		"kill -0 4321", "sleep 0.1", "sleep 0.3",
-		"exec /usr/bin/open -n '/Applications/Shelf App.app'",
+		"exec /usr/bin/open -n '/Applications/ShelfU App.app'",
 		"--args '--data-dir' '/tmp/a b' '--show'",
 	} {
 		if !strings.Contains(script, want) {
@@ -364,11 +364,11 @@ func TestRelaunchPlanUsesLaunchServicesInsideBundle(t *testing.T) {
 }
 
 func TestRelaunchPlanFallsBackOutsideBundle(t *testing.T) {
-	plan := relaunchPlanFor("/tmp/Shelf", []string{"--data-dir", "/tmp/a b"}, 4321)
+	plan := relaunchPlanFor("/tmp/ShelfU", []string{"--data-dir", "/tmp/a b"}, 4321)
 	script := plan.Args[1]
 	for _, want := range []string{
 		"kill -0 4321",
-		"exec '/tmp/Shelf' '--data-dir' '/tmp/a b'",
+		"exec '/tmp/ShelfU' '--data-dir' '/tmp/a b'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("fallback script lacks %q:\n%s", want, script)
@@ -395,11 +395,11 @@ func TestAppBundleForExecutable(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"/Applications/Shelf.app/Contents/MacOS/Shelf", "/Applications/Shelf.app", true},
+		{"/Applications/ShelfU.app/Contents/MacOS/ShelfU", "/Applications/ShelfU.app", true},
 		{"/tmp/a b/My App.app/Contents/MacOS/My App", "/tmp/a b/My App.app", true},
-		{"/tmp/Shelf", "", false},
+		{"/tmp/ShelfU", "", false},
 		{"/tmp/Not.app/tool", "", false},
-		{"/Contents/MacOS/Shelf", "", false},
+		{"/Contents/MacOS/ShelfU", "", false},
 		{"", "", false},
 	} {
 		got, ok := appBundleForExecutable(tt.exe)
@@ -413,10 +413,10 @@ func TestRelaunchShelfUsesSameArgsAndQuits(t *testing.T) {
 	st, _ := stubPermissions(t)
 	st.ax, st.screen = true, true
 	oldArgs := os.Args
-	os.Args = []string{"/tmp/Shelf", "--data-dir", "/tmp/data dir"}
+	os.Args = []string{"/tmp/ShelfU", "--data-dir", "/tmp/data dir"}
 	defer func() { os.Args = oldArgs }()
 	origExe, origStart, origQuit := relaunchExecutable, relaunchStart, relaunchQuit
-	relaunchExecutable = func() (string, error) { return "/tmp/Shelf", nil }
+	relaunchExecutable = func() (string, error) { return "/tmp/ShelfU", nil }
 	var got relaunchPlan
 	relaunchStart = func(p relaunchPlan) error { got = p; return nil }
 	quit := false

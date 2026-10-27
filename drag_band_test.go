@@ -239,7 +239,7 @@ func TestDropBandFrameFollowsTheDrawnPill(t *testing.T) {
 	}
 }
 
-// Shelf's own drag-out keeps the resident strip — no band, no hint.
+// ShelfU's own drag-out keeps the resident strip — no band, no hint.
 func TestOwnDragKeepsTheNormalStrip(t *testing.T) {
 	a := dragShelf()
 	a.ownDrag = true

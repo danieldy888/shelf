@@ -497,7 +497,7 @@ func (a *shelf) view(c *ui.Context) {
 	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。阈值与上面
 	// 的静止吸附一致（亚点级），收起最后一段平滑落位、看不出跳变。
 	idle := a.win != nil && !a.visible && a.progress <= 0.01 && openK <= 0.002 && !a.peeking && peekK <= 0.002
-	// Shelf's own drag-out never lands back on the shelf: the drop would
+	// ShelfU's own drag-out never lands back on the shelf: the drop would
 	// add a second item pointing at the same file. Without a target the
 	// drag ends as if cancelled — nothing is added, the panel stays open
 	// and 拖出后从托盘移除 does not fire.
@@ -1390,7 +1390,7 @@ func (a *shelf) updatePill(c *ui.Context, note string) {
 		panelLabel(c, nil, note, 11, 0).TextColor(ink)
 		switch {
 		case a.updateInstalled:
-			if ui.Button(c, "重新启动").Label("重新启动 Shelf 完成更新").Clicked() {
+			if ui.Button(c, "重新启动").Label("重新启动 ShelfU 完成更新").Clicked() {
 				relaunchApp()
 			}
 		case a.update != nil && !a.updateInstalling:
@@ -1485,7 +1485,7 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	}
 	notchH := float32(max(32, a.notchH))
 	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Clip().
-		AlignItems(ui.Center).Label("展开 Shelf")
+		AlignItems(ui.Center).Label("展开 ShelfU")
 	pill.Children(func() {
 		ui.Column(c.Key("peek-body")).Width(pw).Height(ph).Opacity(min(max(peekK, 0), 1)).Children(func() {
 			ui.Box(c.Key("peek-notch")).Height(notchH)
@@ -1524,7 +1524,7 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, _ /* openK */, peekK,
 	cw, ch := f.capsule(baseW, baseH)
 	col := f.color()
 	textW := cw - fbDot - fbGap - 2*fbPadX
-	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label("展开 Shelf · " + f.text)
+	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label("展开 ShelfU · " + f.text)
 	if shake != 0 {
 		box.Translate(shake, 0)
 	}

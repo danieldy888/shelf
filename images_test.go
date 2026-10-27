@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -160,5 +161,32 @@ func TestDecodeThumbMalformedEXIFFallsBackToNormal(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The menu-bar item draws what the resource directory ships: the file's
+// bytes go to the tray unchanged, so macOS does the template tinting.
+func TestTrayIconLoadsTheResourceFile(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 45, 36))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, trayIconFile), buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := trayIcon(dir); !bytes.Equal(got, buf.Bytes()) {
+		t.Fatalf("trayIcon returned %d bytes, want the file's %d", len(got), buf.Len())
+	}
+}
+
+// A missing icon is not an error: the tray then shows its title so the
+// menu-bar item stays visible and clickable.
+func TestTrayIconWithoutFile(t *testing.T) {
+	if got := trayIcon(t.TempDir()); got != nil {
+		t.Errorf("trayIcon of an empty directory = %d bytes, want nil", len(got))
+	}
+	if got := trayIcon(""); got != nil {
+		t.Errorf("trayIcon of an unknown directory = %d bytes, want nil", len(got))
 	}
 }

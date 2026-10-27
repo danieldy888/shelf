@@ -241,7 +241,7 @@ func StartDragGuard(region DragGuardRegion) (func(), error) {
 		return nil, err
 	}
 	if !axIsProcessTrusted() {
-		return nil, errors.New("Shelf 尚未获得辅助功能授权")
+		return nil, errors.New("ShelfU 尚未获得辅助功能授权")
 	}
 	if dragGuardArmed.Load() != nil {
 		return nil, errors.New("mac: a drag guard is already active")

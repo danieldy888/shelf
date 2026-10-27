@@ -664,7 +664,7 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 			if job.target == toExtract {
 				verb, name = "解压失败", filepath.Base(o.src)
 			}
-			log.Printf("Shelf: %s %s：%v", verb, name, o.err)
+			log.Printf("ShelfU: %s %s：%v", verb, name, o.err)
 			continue
 		}
 		if o.noText {

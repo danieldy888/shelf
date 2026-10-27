@@ -2,7 +2,7 @@
 
 package main
 
-// The one list of system permissions Shelf needs and the one entry point
+// The one list of system permissions ShelfU needs and the one entry point
 // that walks the user through granting them. The tray menu, the Settings
 // window's 系统权限 group and the 全部开启 flow all read systemPermissions;
 // none of them duplicates a title, an order or a probe.
@@ -161,7 +161,7 @@ const (
 	// recording step hands over to permissionRelaunch after a pause.
 	permissionWaiting
 	// permissionRelaunch: screen recording was requested, or is already
-	// granted but invisible to the cached preflight, and Shelf must be
+	// granted but invisible to the cached preflight, and ShelfU must be
 	// relaunched before the grant takes effect.
 	permissionRelaunch
 )
@@ -294,7 +294,7 @@ type relaunchPlan struct {
 
 // relaunchPlanFor builds a detached /bin/sh wait-then-launch: the new
 // process starts only after pid exits, so the single-instance flock is free
-// and the user never sees the 「Shelf 已在运行」 dialog. Inside an app
+// and the user never sees the 「ShelfU 已在运行」 dialog. Inside an app
 // bundle the launch goes through LaunchServices (`open -n`), which is what
 // gives the restarted process the app's registered identity and TCC
 // responsibility — the screen-recording grant this relaunch exists for
@@ -354,7 +354,7 @@ var (
 	relaunchQuit = mygo.App.Quit
 )
 
-// relaunchShelf restarts Shelf with the same arguments so the cached
+// relaunchShelf restarts ShelfU with the same arguments so the cached
 // screen-recording answer is re-read. It starts the waiter first and quits
 // only once that succeeded; a failure stays visible in the window.
 func (a *shelf) relaunchShelf() {
@@ -387,16 +387,16 @@ func (a *shelf) settingsPermissionsSection(c *ui.Context) {
 			missing++
 		}
 	}
-	title, caption := fmt.Sprintf("Shelf 需要 %d 项系统权限", len(permissions)), fmt.Sprintf("还差 %d 项", missing)
+	title, caption := fmt.Sprintf("ShelfU 需要 %d 项系统权限", len(permissions)), fmt.Sprintf("还差 %d 项", missing)
 	if missing == 0 {
 		caption = "已全部开启"
 	}
 	if a.perm.stage == permissionWaiting {
 		title = fmt.Sprintf("正在开启：第 %d 项，共 %d 项", a.perm.step+1, len(a.perm.ids))
-		caption = "在「系统设置」里打开 Shelf 的开关，这里会自动往下走"
+		caption = "在「系统设置」里打开 ShelfU 的开关，这里会自动往下走"
 	} else if a.perm.stage == permissionRelaunch {
 		title = "还差最后一步"
-		caption = "屏幕录制要重新打开 Shelf 才生效"
+		caption = "屏幕录制要重新打开 ShelfU 才生效"
 	}
 	settingsSection(c, "系统权限", "第一次使用，或在系统设置里关掉过开关时，在这里重新开启。", false, func() {
 		ui.Row(c.Key("perm-head")).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(0, 12).FillWidth().Children(func() {
@@ -406,7 +406,7 @@ func (a *shelf) settingsPermissionsSection(c *ui.Context) {
 			})
 			switch a.perm.stage {
 			case permissionRelaunch:
-				settingsAccentButton(c, "relaunch", "重新打开 Shelf", func() { a.relaunchShelf() })
+				settingsAccentButton(c, "relaunch", "重新打开 ShelfU", func() { a.relaunchShelf() })
 			case permissionWaiting:
 				settingsQuietButton(c, "perm-stop", "停止", func() {
 					a.stopPermissionFlow()

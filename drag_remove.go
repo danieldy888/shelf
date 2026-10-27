@@ -11,7 +11,7 @@ import (
 // 拖出后从托盘移除 (the removeAfterDrag setting): items dragged out of the
 // tray and dropped somewhere leave the tray at once, but are only taken
 // off the shelf leaveGrace later. A screenshot or converted file lives in
-// Shelf's own folder and is deleted with its item, and the app it was
+// ShelfU's own folder and is deleted with its item, and the app it was
 // dropped on may still be about to read it; the grace keeps it there
 // until then. Pinned items stay.
 

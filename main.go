@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -21,7 +22,21 @@ import (
 )
 
 func main() {
-	dataDir := flag.String("data-dir", "", "本地数据目录（默认 Library/Application Support/Shelf）")
+	// mygo starts this same binary with MYGO_GENERATE set to write the
+	// TypeScript client, on every `mygo build` and `mygo dev`. That run must
+	// not touch the data directory (it would create an empty one and block
+	// the migration of the old one), rename a bundle, or open a store.
+	if generatingClient() {
+		mygo.App.SetName(appName)
+		if err := mygo.App.Run(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	// A bundle an in-app update left at Shelf.app moves to ShelfU.app and
+	// reopens from there before anything reads the data directory.
+	selfRenameBundle()
+	dataDir := flag.String("data-dir", "", "本地数据目录（默认 Library/Application Support/ShelfU）")
 	show := flag.Bool("show", false, "启动时显示托盘")
 	flag.Parse()
 	if *dataDir == "" {
@@ -29,40 +44,47 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		// The default directory is the renamed app's; the old one is copied
+		// over once. A --data-dir the user gave is never migrated into.
+		if oldRoot, lerr := store.LegacyRoot(); lerr == nil {
+			migrated, merr := migrateDataRoot(oldRoot, root)
+			switch {
+			case errors.Is(merr, errLegacyRootLocked):
+				log.Printf("%s: %v", appName, merr)
+				exitWithDialog("旧版 Shelf 仍在运行",
+					"旧版 Shelf 正在使用它的数据目录，本次没有迁移任何内容，也没有创建新的数据目录。\n\n"+
+						"请先在旧版 Shelf 的菜单栏图标里选择「退出 Shelf」，再重新打开 "+appName+"。\n\n"+
+						"旧数据目录："+oldRoot+"\n新数据目录："+root)
+				return
+			case merr != nil:
+				log.Printf("%s: 数据迁移失败：%v", appName, merr)
+				exitWithDialog("无法迁移数据",
+					"旧数据目录保持原样，本次启动已停止，以免以空数据启动；新数据目录尚未创建。\n\n"+
+						"旧数据目录："+oldRoot+"\n新数据目录："+root+"\n\n"+merr.Error())
+				return
+			case migrated:
+				log.Printf("%s: 数据已从 %s 迁移到 %s，旧目录保留为备份", appName, oldRoot, root)
+			}
+		}
 		*dataDir = root
 	}
 	s, err := store.Open(*dataDir)
 	if err != nil {
 		// 历史未成功打开时不创建托盘、快捷键或监控，也不改写原件。
-		log.Printf("Shelf: %v", err)
-		message := "无法读取 Shelf 历史"
+		log.Printf("%s: %v", appName, err)
+		message := "无法读取 " + appName + " 历史"
 		detail := "历史文件保持原样，本次启动已停止。请先备份并检查数据目录中的 state.json。\n\n数据目录：" + *dataDir + "\n\n" + err.Error()
 		if errors.Is(err, store.ErrLocked) {
-			message = "Shelf 已在运行"
+			message = appName + " 已在运行"
 			detail = "同一个数据目录同时只能被一个实例使用，本实例将退出，不会改动已有历史。\n\n数据目录：" + *dataDir
 		}
-		mygo.App.SetName(appName)
-		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
-		mygo.App.WhenReady(func() {
-			go func() {
-				_, _ = mygo.Dialog.Message(mygo.MessageOptions{
-					Type:    mygo.MessageError,
-					Title:   appName,
-					Message: message,
-					Detail:  detail,
-				})
-				mygo.App.Quit()
-			}()
-		})
-		if runErr := mygo.App.Run(); runErr != nil {
-			log.Fatal(runErr)
-		}
+		exitWithDialog(message, detail)
 		return
 	}
 	if s != nil {
 		if merr := s.MigrationError(); merr != nil {
 			// 备份失败时存储已停止写入；这里只做启动日志，界面状态在 ready 中显示。
-			log.Printf("Shelf: 迁移前备份失败，已停止写入以免覆盖可恢复原件：%v", merr)
+			log.Printf("ShelfU: 迁移前备份失败，已停止写入以免覆盖可恢复原件：%v", merr)
 		}
 	}
 	prefs, perr := settings.Load(*dataDir)
@@ -116,6 +138,35 @@ func main() {
 	}
 }
 
+// generatingClient reports whether mygo started this binary to write the
+// TypeScript client (MYGO_GENERATE), as mygo build, mygo dev and mygo
+// generate do.
+func generatingClient() bool {
+	return os.Getenv("MYGO_GENERATE") != ""
+}
+
+// exitWithDialog shows one error dialog and quits: the startup path that
+// cannot open a usable data directory never creates a tray, shortcuts or
+// monitors, and never writes to the files it could not read.
+func exitWithDialog(message, detail string) {
+	mygo.App.SetName(appName)
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	mygo.App.WhenReady(func() {
+		go func() {
+			_, _ = mygo.Dialog.Message(mygo.MessageOptions{
+				Type:    mygo.MessageError,
+				Title:   appName,
+				Message: message,
+				Detail:  detail,
+			})
+			mygo.App.Quit()
+		}()
+	})
+	if err := mygo.App.Run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func (a *shelf) ready(show bool) {
 	a.newNotchWindow()
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool, button int) {
@@ -129,7 +180,16 @@ func (a *shelf) ready(show bool) {
 		}
 	})
 	var err error
-	a.tray, err = mygo.NewTray(mygo.TrayOptions{Icon: trayIcon(), IconIsTemplate: true, ToolTip: "Shelf · 临时托盘"})
+	trayOpts := mygo.TrayOptions{IconIsTemplate: true, ToolTip: appName + " · 临时托盘"}
+	if dir, derr := mygo.App.Path(mygo.PathResources); derr == nil {
+		trayOpts.Icon = trayIcon(dir)
+	}
+	if len(trayOpts.Icon) == 0 {
+		// No icon file: the title keeps the menu-bar item visible and
+		// clickable.
+		trayOpts.Title = appName
+	}
+	a.tray, err = mygo.NewTray(trayOpts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -206,7 +266,7 @@ func (a *shelf) ready(show bool) {
 	a.installServices()
 	a.pinRestore()
 	a.startMonitoring()
-	log.Print("Shelf ready")
+	log.Print("ShelfU ready")
 }
 
 // newNotchWindow creates the persistent notch window: one transparent,
@@ -238,7 +298,7 @@ func (a *shelf) newNotchWindow() {
 // the current settings.
 func (a *shelf) trayMenu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "显示 / 收起 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
+		{Label: "显示 / 收起 ShelfU", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
 		a.permissionMenuItem(),
 		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
 		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
@@ -252,7 +312,7 @@ func (a *shelf) trayMenu() *mygo.Menu {
 		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		a.updateMenu(),
 		mygo.Separator(),
-		{Label: "退出 Shelf", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+		{Label: "退出 ShelfU", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
 }
 

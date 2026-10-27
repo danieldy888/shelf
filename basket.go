@@ -32,7 +32,7 @@ const (
 )
 
 // basketState is the floating drop card. The window is created lazily on
-// the first shake and destroyed on close, so Shelf without a shake costs
+// the first shake and destroyed on close, so ShelfU without a shake costs
 // no extra overlay.
 //
 // Closing goes through closing + a render, never straight to Destroy from
@@ -221,7 +221,7 @@ func (a *shelf) basketView(c *ui.Context) {
 			label := "放到这里"
 			switch {
 			case a.basket.dropped:
-				label = "已放入 Shelf"
+				label = "已放入 ShelfU"
 			case a.basket.failed:
 				label = "放入失败"
 			}
@@ -237,7 +237,7 @@ func (a *shelf) basketView(c *ui.Context) {
 			case a.basket.failed || a.basket.dropped:
 				// 完成/失败态不再显示拖入提示副标题。
 			default:
-				ui.Text(c, "松开即放入 Shelf").SingleLine().FontSize(11).TextColor(ink3)
+				ui.Text(c, "松开即放入 ShelfU").SingleLine().FontSize(11).TextColor(ink3)
 			}
 		})
 	})

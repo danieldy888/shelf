@@ -70,7 +70,7 @@ func TestIdleOverlayLetsClicksThrough(t *testing.T) {
 }
 
 // While the completion capsule is up, WindowServer must hand presses on
-// the drawn capsule to Shelf and let everything beside it — the frame's
+// the drawn capsule to ShelfU and let everything beside it — the frame's
 // transparent shake/growth margin — fall to whatever is underneath.
 // Acceptance is pointer-gated per frame, so the cursor is parked where
 // the press lands first. Run with SHELF_BASKET_SMOKE=1.
@@ -110,7 +110,7 @@ func TestCapsuleTakesClicksOnlyOnItsBody(t *testing.T) {
 		} {
 			hit := mac.WindowAtPoint(p[0], float64(a.dispBounds.Y)+p[1]-float64(a.y), screenH)
 			if hit != shelf {
-				t.Errorf("click inside the capsule body missed Shelf at %v (hit %d)", p, hit)
+				t.Errorf("click inside the capsule body missed ShelfU at %v (hit %d)", p, hit)
 			}
 		}
 	})
@@ -137,7 +137,7 @@ func TestCapsuleTakesClicksOnlyOnItsBody(t *testing.T) {
 			hit = mac.WindowAtPoint(float64(px), float64(a.dispBounds.Y)+float64(py)-float64(a.y), screenH)
 		})
 		if hit == shelf {
-			t.Errorf("click on the capsule's margin hit Shelf at %v", p)
+			t.Errorf("click on the capsule's margin hit ShelfU at %v", p)
 		}
 	}
 	onMain(func() {
@@ -148,7 +148,7 @@ func TestCapsuleTakesClicksOnlyOnItsBody(t *testing.T) {
 }
 
 // While the failure capsule is shaking, the hit box must follow the drawn
-// offset: a press where the capsule currently is reaches Shelf; a press
+// offset: a press where the capsule currently is reaches ShelfU; a press
 // where it was (the unshifted box) falls through. Run with
 // SHELF_BASKET_SMOKE=1.
 func TestShakingCapsuleHitBoxFollowsTheOffset(t *testing.T) {
@@ -186,7 +186,7 @@ func TestShakingCapsuleHitBoxFollowsTheOffset(t *testing.T) {
 		r := a.peekPillRect() // re-read: the shake may have moved the box
 		hit := mac.WindowAtPoint(float64(r.X+r.Width/2), float64(a.dispBounds.Y)+float64(r.Y+r.Height/2)-float64(a.y), screenH)
 		if hit != shelf {
-			t.Errorf("a press on the shaking capsule missed Shelf (hit %d, shake=%.1f)", hit, a.fx.shakeX)
+			t.Errorf("a press on the shaking capsule missed ShelfU (hit %d, shake=%.1f)", hit, a.fx.shakeX)
 		}
 	})
 	onMain(func() {
@@ -199,7 +199,7 @@ func TestShakingCapsuleHitBoxFollowsTheOffset(t *testing.T) {
 // Task D: during an incoming system drag the resident window must shrink
 // to the notch's menu-bar band — WindowServer must see points below the
 // menu bar at the notch's own X hit whatever is underneath (or nothing),
-// never Shelf. Only inside the band may the drop surface exist.
+// never ShelfU. Only inside the band may the drop surface exist.
 // Run with SHELF_BASKET_SMOKE=1.
 func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 	a := redesignShelf(t)
@@ -243,24 +243,24 @@ func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 
 	screenH := float64(a.dispBounds.Y + a.dispBounds.Height)
 	// Below the menu bar at the notch's own centre X — before the drag
-	// ever enters the band, WindowServer must find anything-but-Shelf
+	// ever enters the band, WindowServer must find anything-but-ShelfU
 	// there, at 8pt and 20pt below the bar alike.
 	belowX := float64(a.stripCenter())
 	for _, dy := range []float64{8, 20} {
 		py := float64(a.dispBounds.Y) + float64(a.y) + float64(barH) + dy
 		if hit := mac.WindowAtPoint(belowX, py, screenH); hit == shelf {
-			t.Errorf("WindowAtPoint %.0f,%.0f hit Shelf %.0fpt below the bar before band entry", belowX, py, dy)
+			t.Errorf("WindowAtPoint %.0f,%.0f hit ShelfU %.0fpt below the bar before band entry", belowX, py, dy)
 		}
 	}
-	// Inside the band at the strip's centre, Shelf's surface is present
+	// Inside the band at the strip's centre, ShelfU's surface is present
 	// (Spaces-edge protection requires the drop to land on a window).
 	bandHit := mac.WindowAtPoint(belowX, float64(a.dispBounds.Y)+float64(a.y)+float64(barH)/2, screenH)
 	if bandHit != shelf {
-		t.Errorf("WindowAtPoint inside the band hit %d, want Shelf %d", bandHit, shelf)
+		t.Errorf("WindowAtPoint inside the band hit %d, want ShelfU %d", bandHit, shelf)
 	}
 	// Entering the band grows the frame past the menu bar so the guard's
 	// landing row stays inside the window: the pill and the landing row
-	// both hit Shelf, not the apps underneath.
+	// both hit ShelfU, not the apps underneath.
 	onMain(func() {
 		point = mygo.Point{X: a.stripCenter(), Y: a.notchY + a.notchH - 1}
 		a.inBand, a.dropHot = true, true
@@ -275,7 +275,7 @@ func TestDragBandKeepsShelfInTheMenuBar(t *testing.T) {
 	}
 	landHit := mac.WindowAtPoint(belowX, landingY, screenH)
 	if landHit != shelf {
-		t.Errorf("WindowAtPoint on the guard landing row hit %d, want Shelf %d", landHit, shelf)
+		t.Errorf("WindowAtPoint on the guard landing row hit %d, want ShelfU %d", landHit, shelf)
 	}
 	// Leaving the band again folds the window back to the menu-bar strip.
 	onMain(func() {
