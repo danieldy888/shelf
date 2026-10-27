@@ -42,6 +42,11 @@ const (
 	// (14 + 66 + 10 + 22 = 112) and both sides stay symmetric.
 	liveWingW   = 112
 	liveWingPad = 14
+	// islandLiveWingW is the same side on the island: its whole shell has
+	// pixels, so the content no longer has to fit inside one visible wing
+	// beside a camera housing, and the design preview's 88pt is enough
+	// (120 + 2×88 wide, 30 + 4 high).
+	islandLiveWingW = 88
 	// liveBarW/liveBarH are the charge bar's size (Droppy's).
 	liveBarW = 66
 	liveBarH = 6
@@ -115,7 +120,8 @@ func (a *shelf) pushLive(ev liveEvent, hold time.Duration, now time.Time) {
 		return
 	}
 	ev.deadline = now.Add(hold)
-	ev.width = liveCapsuleWidth(ev, float32(max(180, a.notchW)))
+	baseW, _ := a.anchorSize()
+	ev.width = liveCapsuleWidth(ev, baseW)
 	a.live.queued = append(a.live.queued, ev)
 	if a.win != nil {
 		a.win.Invalidate()
@@ -172,7 +178,8 @@ func (a *shelf) liveEnrich(token string, levels []string) {
 			return false
 		}
 		ev.levels = levels
-		ev.width = liveCapsuleWidth(*ev, float32(max(180, a.notchW)))
+		baseW, _ := a.anchorSize()
+		ev.width = liveCapsuleWidth(*ev, baseW)
 		return true
 	}
 	changed := false
@@ -191,15 +198,15 @@ func (a *shelf) liveEnrich(token string, levels []string) {
 
 // liveShape is the shell the event needs: the wide wings or a capsule.
 func (a *shelf) liveShape(ev liveEvent) (w, h float32) {
-	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
+	baseW, baseH := a.anchorSize()
 	if ev.kind.wings() {
-		return baseW + 2*liveWingW, baseH + npWingsBody
+		return baseW + 2*float32(a.liveWingW()), baseH + npWingsBody
 	}
 	w = ev.width
 	if w <= 0 {
 		w = liveCapsuleWidth(ev, baseW)
 	}
-	return w, baseH + fbBody
+	return w, float32(a.capsuleBodyH())
 }
 
 // liveDownloadDoneShape is the completion capsule's box, computed from the
@@ -340,8 +347,8 @@ func (a *shelf) downloadRunning() bool {
 
 // liveShapeForDownload is the wings box for a running download.
 func (a *shelf) downloadShape() (w, h float32) {
-	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
-	return baseW + 2*liveWingW, baseH + npWingsBody
+	baseW, baseH := a.anchorSize()
+	return baseW + 2*float32(a.liveWingW()), baseH + npWingsBody
 }
 
 // liveStatusLine is the one-line description used for accessibility and

@@ -349,3 +349,58 @@ func TestIslandSmokeScreenshots(t *testing.T) {
 		t.Fatalf("notch wings = %.0fx%.0f, want wider than the island's 224 and %d high", nw, nh, max(32, a.notchH)+npWingsBody)
 	}
 }
+
+// TestIslandLiveSmokeShots renders A's three activities on the island:
+// the charging wings (296 × 34: 120 + 2×88), the headphone capsule and the
+// finished-download capsule (36pt, contents centred). They are posted
+// through the same queue the modules use, with long holds so the shot
+// lands inside them.
+func TestIslandLiveSmokeShots(t *testing.T) {
+	if os.Getenv("SHELF_BASKET_SMOKE") != "1" {
+		t.Skip("set SHELF_BASKET_SMOKE=1 to run the native island smoke test")
+	}
+	a := redesignShelf(t)
+	islandStyle(t, a, settings.ShellStyleIsland)
+	newIslandArena(t, islandArena(a))
+	onMain(func() {
+		a.settings.LiveActivities = settings.LiveActivitySettings{Charging: true, Headphones: true, Downloads: true}
+	})
+	onMain(func() {
+		a.pushLive(liveEvent{kind: liveCharging, label: "正在充电", pct: 80}, 6*time.Second, time.Now())
+	})
+	time.Sleep(650 * time.Millisecond)
+	islandShot(t, a, "live-charging", 80*time.Millisecond)
+	var w, h float32
+	onMain(func() { w, h = a.fx.w, a.fx.h })
+	if w != 296 || h != 34 {
+		t.Fatalf("island charging shell = %.0fx%.0f, want 296x34", w, h)
+	}
+	onMain(func() { a.clearLive(); a.win.Invalidate() })
+	time.Sleep(500 * time.Millisecond)
+
+	onMain(func() {
+		a.pushLive(liveEvent{kind: liveHeadset, label: "AirPods Pro",
+			levels: []string{"左 80%", "右 78%", "盒 50%"}}, 6*time.Second, time.Now())
+	})
+	time.Sleep(650 * time.Millisecond)
+	islandShot(t, a, "live-headphones", 80*time.Millisecond)
+	onMain(func() { w, h = a.fx.w, a.fx.h })
+	if h != islandCapsuleH || w < 330 {
+		t.Fatalf("island headphone shell = %.0fx%.0f, want a >=330pt 36pt capsule", w, h)
+	}
+	onMain(func() { a.clearLive(); a.win.Invalidate() })
+	time.Sleep(500 * time.Millisecond)
+
+	onMain(func() {
+		a.pushLive(liveEvent{kind: liveDownloadDone, label: "设计稿-v3.zip"}, 6*time.Second, time.Now())
+	})
+	time.Sleep(650 * time.Millisecond)
+	islandShot(t, a, "live-download-done", 80*time.Millisecond)
+	onMain(func() { w, h = a.fx.w, a.fx.h })
+	if h != islandCapsuleH || w < 280 {
+		t.Fatalf("island download-done shell = %.0fx%.0f, want a 36pt capsule", w, h)
+	}
+	onMain(func() { a.clearLive(); a.win.Invalidate() })
+	time.Sleep(400 * time.Millisecond)
+	islandStyle(t, a, settings.ShellStyleNotch)
+}

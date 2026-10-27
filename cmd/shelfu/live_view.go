@@ -181,12 +181,19 @@ func liveHeadsetIcon(label string) (*ui.SVG, float32) {
 func (a *shelf) liveCapsule(c *ui.Context, shellW, shellH, k float32, ev liveEvent) {
 	w := ev.width
 	if w <= 0 {
-		w = liveCapsuleWidth(ev, float32(max(180, a.notchW)))
+		baseW, _ := a.anchorSize()
+		w = liveCapsuleWidth(ev, baseW)
+	}
+	// 刘海的提示条长在下沿 22pt 的带里；灵动岛是完整的 36 高胶囊，
+	// 内容垂直居中（没有摄像头要避让）。
+	rowH, justify := float32(fbBody), ui.End
+	if a.island {
+		rowH, justify = float32(a.capsuleBodyH()), ui.Center
 	}
 	clip := ui.Column(c.Key("live-capsule")).Width(shellW).Height(shellH).Clip().
-		Justify(ui.End).AlignItems(ui.Center)
+		Justify(justify).AlignItems(ui.Center).Margin(float32(a.sheetTop()), 0, 0, 0)
 	clip.Children(func() {
-		body := ui.Row(c.Key("live-cap-body")).Width(w).Height(fbBody).Gap(fbGap).
+		body := ui.Row(c.Key("live-cap-body")).Width(w).Height(rowH).Gap(fbGap).
 			Justify(ui.Center).AlignItems(ui.Center).Opacity(min(max(k*k, 0), 1)).
 			Label(ev.statusLine())
 		body.Children(func() {

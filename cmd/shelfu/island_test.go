@@ -3,7 +3,9 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -404,5 +406,73 @@ func TestIdleMouseAcceptancePerStyle(t *testing.T) {
 	cursorPoint = func() mygo.Point { return mygo.Point{X: 735, Y: islandTopGap - 3} }
 	if island.overlayAcceptsMouse() {
 		t.Fatal("the gap above the island capsule took a press")
+	}
+}
+
+// The realtime activities keep A's notch geometry there, and use the
+// island's continuous pill on the island: 88pt per side (the preview's
+// value; no camera gap to route around), a 36pt capsule, and the same
+// queue the power/audio/download modules push to.
+func TestIslandLiveShapes(t *testing.T) {
+	a := islandShelf(false, settings.ShellStyleNotch)
+	if a.liveWingW() != islandLiveWingW {
+		t.Fatalf("island wing = %d, want %d", a.liveWingW(), islandLiveWingW)
+	}
+	if w, h := a.liveShape(liveEvent{kind: liveCharging, label: "正在充电", pct: 80}); w != 296 || h != 34 {
+		t.Fatalf("island charging shape = %.0fx%.0f, want 296x34", w, h)
+	}
+	if w, h := a.liveShape(liveEvent{kind: liveLow, label: "电量低", pct: 10}); w != 296 || h != 34 {
+		t.Fatalf("island low-battery shape = %.0fx%.0f, want 296x34", w, h)
+	}
+	done := liveEvent{kind: liveDownloadDone, label: "设计稿-v3.zip"}
+	a.pushLive(done, time.Second, time.Now())
+	if w, h := a.liveShape(done); h != islandCapsuleH || w < 280 || w > fbMaxW {
+		t.Fatalf("island download-done shape = %.0fx%.0f, want a 36pt capsule", w, h)
+	}
+	if w, h := a.liveShape(liveEvent{kind: liveHeadset, label: "AirPods Pro", levels: []string{"左 80%", "右 78%", "盒 50%"}}); h != 36 || w < 330 {
+		t.Fatalf("island headphone shape = %.0fx%.0f, want a >=330pt 36pt capsule", w, h)
+	}
+
+	n := islandShelf(true, settings.ShellStyleNotch)
+	if n.liveWingW() != liveWingW {
+		t.Fatalf("notch wing = %d, want %d", n.liveWingW(), liveWingW)
+	}
+	if w, h := n.liveShape(liveEvent{kind: liveCharging, label: "正在充电", pct: 80}); w != 180+2*liveWingW || h != 36 {
+		t.Fatalf("notch charging shape = %.0fx%.0f, want %dx36", w, h, 180+2*liveWingW)
+	}
+	if _, h := n.liveShape(liveEvent{kind: liveHeadset, label: "AirPods Pro"}); h != 32+fbBody {
+		t.Fatalf("notch headphone capsule %.0f high, want %d", h, 32+fbBody)
+	}
+	if w, h := n.downloadShape(); w != 180+2*liveWingW || h != 36 {
+		t.Fatalf("notch download shape = %.0fx%.0f", w, h)
+	}
+	if w, h := a.downloadShape(); w != 296 || h != 34 {
+		t.Fatalf("island download shape = %.0fx%.0f, want 296x34", w, h)
+	}
+}
+
+// A finished-download capsule is a button on the island too: the shell's
+// own open-on-press must not swallow the press before the view can add the
+// file. Other live capsules still open the shelf.
+func TestIslandPressOnFinishedDownloadCapsule(t *testing.T) {
+	point := mygo.Point{X: 735, Y: islandTopGap + 18}
+	done := islandShelf(false, settings.ShellStyleNotch)
+	done.settings.LiveActivities.Downloads = true
+	done.live = liveQueue{shown: true, until: time.Now().Add(time.Minute),
+		cur: liveEvent{kind: liveDownloadDone, label: "a.zip", path: filepath.Join(t.TempDir(), "a.zip")}}
+	done.fx.w, done.fx.h, done.peekProgress = 280, islandCapsuleH, 1
+	done.mouseDown(true, 0, point)
+	if done.visible {
+		t.Fatal("the shell opened instead of leaving the finished-download press to its view")
+	}
+
+	phones := islandShelf(false, settings.ShellStyleNotch)
+	phones.settings.LiveActivities.Headphones = true
+	phones.live = liveQueue{shown: true, until: time.Now().Add(time.Minute),
+		cur: liveEvent{kind: liveHeadset, label: "AirPods Pro"}}
+	phones.fx.w, phones.fx.h, phones.peekProgress = 330, islandCapsuleH, 1
+	phones.mouseDown(true, 0, point)
+	if !phones.visible {
+		t.Fatal("a headphone notice on the island no longer opens the shelf")
 	}
 }

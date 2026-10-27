@@ -265,6 +265,16 @@ func (a *shelf) peekSize() (w, h float32) {
 	return baseW + 40, baseH + peekBody
 }
 
+// liveWingW is how far each side grows for charging and downloads: the
+// notch's camera housing forces the right-hand content into one visible
+// wing (112), while the island's continuous pill uses the preview's 88.
+func (a *shelf) liveWingW() int {
+	if a.island {
+		return islandLiveWingW
+	}
+	return liveWingW
+}
+
 // wingsSize is the hover wings' size: the anchor plus npWingsW on each
 // side, and npWingsBody below it. Wide notches keep their width and gain
 // the same wings; the island's 120pt capsule grows to 224 × 34.
@@ -349,8 +359,10 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	// The idle island is a click target of its own: its window takes the
 	// press only while the pointer is on the capsule, and a press that
 	// slipped through to the window underneath still opens the shelf — the
-	// capsule is always visible, unlike the notch's hidden band.
-	if a.island && !a.visible && a.overShell(p) {
+	// capsule is always visible, unlike the notch's hidden band. A finished
+	// download's capsule is a button of its own; its view must receive the
+	// press, so it is never swallowed here.
+	if a.island && !a.visible && !a.liveClickable(time.Now()) && a.overShell(p) {
 		a.show(false)
 		return
 	}

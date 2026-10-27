@@ -804,7 +804,9 @@ func (a *shelf) bandRow(c *ui.Context, island bool) {
 				act.chip(c)
 			}
 		})
-		if a.notchW > 0 && !a.focusMode {
+		if a.notchW > 0 && !a.focusMode && !a.island {
+			// The camera housing splits the band only when the shell is the
+			// notch shape; the island floats below it with no gap to cut.
 			ui.Box(c.Key("band-housing")).Width(float32(a.notchW + 2*6)).Shrink(0)
 		}
 		ui.Row(c.Key("band-right")).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
@@ -1501,7 +1503,8 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			return // the event ended: the fold shows only the shrinking shell
 		}
 		pw, ph := a.liveShape(liveEv)
-		clip := ui.Column(c.Key("live-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+		clip := ui.Column(c.Key("live-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center).
+			Margin(float32(a.sheetTop()), 0, 0, 0)
 		clip.Children(func() { a.liveView(c, pw, ph, peekK, liveEv) })
 		return
 	case peekLiveCapsule:
@@ -1515,7 +1518,8 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			return
 		}
 		pw, ph := a.downloadShape()
-		clip := ui.Column(c.Key("dl-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+		clip := ui.Column(c.Key("dl-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center).
+			Margin(float32(a.sheetTop()), 0, 0, 0)
 		clip.Children(func() { a.downloadWings(c, pw, ph, peekK, a.dl.progress()) })
 		return
 	case peekWings:
