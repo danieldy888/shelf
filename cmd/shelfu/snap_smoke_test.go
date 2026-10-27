@@ -112,6 +112,10 @@ func TestSnapSmokeDragToNotch(t *testing.T) {
 		a.visible, a.peeking = false, false
 		a.progress, a.animationFrom = 0, 0
 		a.snap = snapState{}
+		// The production monitor arms the notch drag guard on every tick;
+		// start the same active filter so the drag crosses the real
+		// corridor clamp on its way to the tiles.
+		a.syncDragGuard()
 	})
 	d := mygo.Screen.PrimaryDisplay()
 	work := d.WorkArea
@@ -130,6 +134,7 @@ func TestSnapSmokeDragToNotch(t *testing.T) {
 			if a.visible {
 				a.hide(hidePassive)
 			}
+			a.stopDragGuard()
 			w.Close()
 		})
 	})
