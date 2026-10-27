@@ -126,9 +126,10 @@ From then on ShelfU opens normally. If macOS ever says the app **is damaged**, d
 ### Optional
 
 - **Start at login**: right-click the menu-bar icon → Settings → General → Open at login.
-- **System permissions**: right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions), or Settings → 系统权限 (System Permissions) → 全部开启 (Turn On All). ShelfU opens each System Settings page in turn: Accessibility for notch drop protection, then Screen Recording for 框选文字 (Screen Text). Turn ShelfU on in each; when Screen Recording is on, click 重新打开 ShelfU (Reopen ShelfU). Both are optional; everyday use needs no permissions. Moving from Shelf to ShelfU asks for them once more (see below). Official ShelfU releases keep the grants across later updates; a build you compile yourself is signed afresh each time and may ask again.
-- **Notch drop protection** (Accessibility): while you drag toward the notch, the pointer stays in the drop area instead of hitting the very top edge of the screen.
-- **Screen text** (Screen Recording): only the area you select is captured, text is recognized on this Mac, and the shot is not kept.
+- **System permissions**: Settings → 系统权限 (System Permissions) has one switch, or right-click the menu-bar icon → 开启系统权限 (Turn On System Permissions). Turning it on walks you through three System Settings pages in turn: Full Disk Access, Accessibility, then Screen Recording. Turn ShelfU on in each (on the Full Disk Access page, press + and choose ShelfU, or drag in the ShelfU that Finder shows), and ShelfU moves to the next one by itself; at the end, click 重新打开 ShelfU (Reopen ShelfU). macOS requires you to switch on each one yourself. Moving from Shelf to ShelfU asks for them once more (see below). Official ShelfU releases keep the grants across later updates; a build you compile yourself is signed afresh each time and may ask again.
+- **Full Disk Access**: files dragged in from Downloads, Desktop, Documents or iCloud Drive no longer bring up a "ShelfU would like to access files…" dialog.
+- **Accessibility** (notch drop protection): while you drag toward the notch, the pointer stays in the drop area instead of hitting the very top edge of the screen.
+- **Screen Recording** (Screen Text): only the area you select is captured, text is recognized on this Mac, and the shot is not kept.
 - **Uninstall**: right-click the menu-bar icon → Quit, then move ShelfU from Applications to the Trash. To also delete your saved items, remove `~/Library/Application Support/ShelfU/`.
 
 ### Coming from Shelf
@@ -286,9 +287,10 @@ ShelfU 是免费软件，没有经过 Apple 公证，所以 macOS 会让你确�
 ### 可选
 
 - **开机自动启动**：右键菜单栏图标 → 设置… → 通用 →「开机时自动启动」。
-- **系统权限**：右键菜单栏图标 →「开启系统权限」，或 设置… → 系统权限 →「全部开启」。ShelfU 会依次打开系统设置里的两页：「辅助功能」（刘海拖放保护）和「屏幕录制」（框选文字）；在每页打开 ShelfU 的开关，屏幕录制开好后点「重新打开 ShelfU」。两项都可选，日常使用不需要任何授权。从 Shelf 换到 ShelfU 时要再开一次（见下）；ShelfU 的正式发布版在之后更新时保留授权，自己编译的构建每次签名都会变，可能要重新开启。
-- **刘海拖放保护**（辅助功能）：拖着东西靠近刘海时，指针会停在托盘的接收区里，不会顶到屏幕最上沿。
-- **框选文字**（屏幕录制）：只截取你框选的那一块，文字在本机识别，不保存截图。
+- **系统权限**：设置… → 系统权限 里只有一个开关；也可以右键菜单栏图标 →「开启系统权限」。打开开关后，ShelfU 依次打开系统设置里的三页：「完整磁盘访问」「辅助功能」「屏幕录制」。在每页打开 ShelfU 的开关（「完整磁盘访问」这一页要点 + 选 ShelfU，或把访达里选中的 ShelfU 拖进列表），ShelfU 会自动走到下一项；最后点「重新打开 ShelfU」。macOS 要求每一项都由你自己打开。从 Shelf 换到 ShelfU 时要再开一次（见下）；ShelfU 的正式发布版在之后更新时保留授权，自己编译的构建每次签名都会变，可能要重新开启。
+- **完整磁盘访问**：从「下载」「桌面」「文稿」或 iCloud 云盘拖文件进来时，不再弹出「ShelfU 想要取用……中的文件」。
+- **辅助功能**（刘海拖放保护）：拖着东西靠近刘海时，指针会停在托盘的接收区里，不会顶到屏幕最上沿。
+- **屏幕录制**（框选文字）：只截取你框选的那一块，文字在本机识别，不保存截图。
 - **卸载**：右键菜单栏图标 → 退出 ShelfU，再把“应用程序”里的 ShelfU 移到废纸篓。如果连保存的内容也要删除，删掉 `~/Library/Application Support/ShelfU/` 文件夹。
 
 ### 从 Shelf 升级
