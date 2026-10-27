@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/henryyu333/shelfu/releases/download/v1.10.0/ShelfU-icon.png" width="128" alt="ShelfU icon">
+  <img src="https://github.com/henryyu333/shelfu/releases/download/v1.10.1/ShelfU-icon.png" width="128" alt="ShelfU icon">
 </p>
 
 <h1 align="center">ShelfU</h1>
