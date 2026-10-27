@@ -35,7 +35,8 @@ func secondaryShelfNegative() *shelf {
 		x:          -1920 + (1920-sheetW)/2,
 		y:          -1080,
 		notchX:     -1920 + (1920-180)/2, notchY: -1080, notchW: 180, notchH: 32,
-		hasNotch: false, // external panels have no camera housing: fallback box
+		hasNotch: false, // external panels have no camera housing: always the island
+		island:   true, islandTop: islandTopGap,
 	}
 }
 
@@ -61,9 +62,9 @@ func TestSecondaryDisplayKeepsStripAtItsOwnTop(t *testing.T) {
 			}
 			a.visible = true
 			panel := a.desiredFrame()
-			sw, _ := sheetFrame()
-			if panel.Y != a.dispBounds.Y || panel.Width != sw || panel.Height != sheetH {
-				t.Fatalf("expanded panel %+v lost the display-top anchor", panel)
+			sw, _ := a.frameRoom(sheetW, float32(sheetH+a.sheetTop()))
+			if panel.Y != a.dispBounds.Y || panel.Width != sw || panel.Height != sheetH+a.sheetTop() {
+				t.Fatalf("expanded panel %+v lost the display-top anchor, want %dx%d", panel, sw, sheetH+a.sheetTop())
 			}
 			if panel.X+panel.Width/2 != cx {
 				t.Fatalf("expanded panel %+v not centred on notch %d", panel, cx)
@@ -75,7 +76,7 @@ func TestSecondaryDisplayKeepsStripAtItsOwnTop(t *testing.T) {
 func TestSecondaryDisplayTriggersStayOnTheirDisplay(t *testing.T) {
 	a := secondaryShelfBelow()
 	// Points inside the secondary display's own top zone hit.
-	if !a.overNotch(mygo.Point{X: 736, Y: 1440 + 20}) {
+	if !a.overAnchor(mygo.Point{X: 736, Y: 1440 + 20}) {
 		t.Fatal("hover inside the secondary display's notch band ignored")
 	}
 	if !a.dropBand(mygo.Point{X: 736, Y: 1440 + 20}) {
@@ -83,7 +84,7 @@ func TestSecondaryDisplayTriggersStayOnTheirDisplay(t *testing.T) {
 	}
 	// The same local coordinates on the PRIMARY display must not fire —
 	// this is exactly where an unflipped Y would ghost-trigger.
-	if a.overNotch(mygo.Point{X: 736, Y: 20}) {
+	if a.overAnchor(mygo.Point{X: 736, Y: 20}) {
 		t.Fatal("primary-screen point hovered a notch 1440pt away")
 	}
 	if a.dropBand(mygo.Point{X: 736, Y: 20}) {
@@ -93,7 +94,7 @@ func TestSecondaryDisplayTriggersStayOnTheirDisplay(t *testing.T) {
 	if a.dropBand(mygo.Point{X: 736, Y: 1439}) {
 		t.Fatal("point on the other display armed the drop band")
 	}
-	if a.overNotch(mygo.Point{X: 736, Y: 1439}) {
+	if a.overAnchor(mygo.Point{X: 736, Y: 1439}) {
 		t.Fatal("point on the other display hovered the notch")
 	}
 }
@@ -101,16 +102,25 @@ func TestSecondaryDisplayTriggersStayOnTheirDisplay(t *testing.T) {
 func TestNegativeCoordinateDisplayTriggers(t *testing.T) {
 	a := secondaryShelfNegative()
 	cx := a.notchX + a.notchW/2 // -1050
-	if !a.dropBand(mygo.Point{X: cx, Y: -1080}) {
-		t.Fatal("cursor on the display's top edge must arm the drop band")
+	if !a.dropBand(mygo.Point{X: cx, Y: -1080 + islandTopGap}) {
+		t.Fatal("cursor on the island's top row must arm the drop band")
 	}
-	if !a.overNotch(mygo.Point{X: cx, Y: -1080 + 16}) {
-		t.Fatal("cursor in the notch band must hover")
+	if !a.overAnchor(mygo.Point{X: cx, Y: -1080 + 16}) {
+		t.Fatal("cursor on the island capsule must hover")
+	}
+	// The island floats 7pt below the top edge: the rows above it are the
+	// menu bar's, not its own, but the capsule is still the drop band's
+	// entry edge.
+	if !a.dropBand(mygo.Point{X: cx, Y: -1080 + islandTopGap}) {
+		t.Fatal("the island's top row must be the band's entry edge")
+	}
+	if a.dropBand(mygo.Point{X: cx, Y: -1080}) {
+		t.Fatal("the gap above the floating island must not enter the band")
 	}
 	// The primary display occupies Y≥0 and the display ends at Y=0; nothing
 	// outside its bounds may touch this shelf's triggers.
 	for _, p := range []mygo.Point{{X: cx, Y: 0}, {X: cx, Y: -1081}, {X: 500, Y: -1050}} {
-		if a.dropBand(p) || a.overNotch(p) {
+		if a.dropBand(p) || a.overAnchor(p) {
 			t.Fatalf("point %+v outside the display fired a trigger", p)
 		}
 	}
@@ -120,10 +130,10 @@ func TestSecondaryDisplayPeekPillFollowsNotch(t *testing.T) {
 	a := secondaryShelfNegative()
 	pill := a.peekPillRect()
 	cx := a.notchX + a.notchW/2
-	if pill.Y != a.y || pill.X != cx-pill.Width/2 {
-		t.Fatalf("peek pill %+v not anchored under the notch at (%d,%d)", pill, cx, a.y)
+	if pill.Y != a.y+islandTopGap || pill.X != cx-pill.Width/2 {
+		t.Fatalf("peek pill %+v not anchored on the island at (%d,%d)", pill, cx, a.y+islandTopGap)
 	}
-	if !a.overPeekPill(mygo.Point{X: cx, Y: a.y + 10}) {
+	if !a.overPeekPill(mygo.Point{X: cx, Y: a.y + islandTopGap + 10}) {
 		t.Fatal("pill click point rejected on a negative-Y display")
 	}
 	if a.overPeekPill(mygo.Point{X: cx, Y: 10}) {
@@ -145,21 +155,22 @@ func TestDragGuardRegionOnSecondaryDisplays(t *testing.T) {
 			strip := a.desiredFrame()
 			g := a.dragGuardRegion()
 			cx := a.stripCenter()
-			bandW := max(180, a.notchW) + 2*dropBandPadX
+			bandW := a.bandW()
+			_, baseH := a.anchorSize()
 			if g.Y != strip.Y || g.X != cx-bandW/2 || g.Width != bandW {
-				t.Fatalf("guard %+v not centred on the notch band %+v", g, strip)
+				t.Fatalf("guard %+v not centred on the anchor band %+v", g, strip)
 			}
 			if g.Y+g.Height > strip.Y+strip.Height {
 				t.Fatalf("guard landing below the drop strip: %+v vs %+v", g, strip)
 			}
-			if g.Height != menuBandH(a.notchH)-1 {
-				t.Fatalf("unentered corridor %dpt high, want menu-bar %d", g.Height, menuBandH(a.notchH)-1)
+			if g.Height != a.sheetTop()+a.menuBand()-1 {
+				t.Fatalf("unentered corridor %dpt high, want %d", g.Height, a.sheetTop()+a.menuBand()-1)
 			}
 			a.dragging, a.inBand = true, true
 			g = a.dragGuardRegion()
 			strip = a.desiredFrame()
-			if g.Height != dropBandH(a.notchH)-1 {
-				t.Fatalf("in-band corridor %dpt high, want landing %d", g.Height, dropBandH(a.notchH)-1)
+			if g.Height != a.sheetTop()+dropBandH(int(baseH))-1 {
+				t.Fatalf("in-band corridor %dpt high, want landing %d", g.Height, a.sheetTop()+dropBandH(int(baseH))-1)
 			}
 			if g.Y+g.Height > strip.Y+strip.Height {
 				t.Fatalf("in-band landing below the grown strip: %+v vs %+v", g, strip)

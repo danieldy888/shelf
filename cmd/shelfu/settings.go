@@ -376,6 +376,22 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 			settingsToggleCap(c, "autocheck", "自动检查更新", "只连接 GitHub，安装前会先问你", setInk3,
 				a.settings.AutoCheckUpdates, a.setAutoCheckUpdates)
 		})
+		settingsSep(c, "shellstyle")
+		ui.Column(c.Key("shellstyle")).Disabled(a.settingsBroken).FillWidth().Children(func() {
+			settingsRowCap(c, "shellstyle", "刘海样式", "没有刘海的屏幕总是显示为灵动岛", func() {
+				style := 0
+				if a.settings.ShellStyle.Normalized() == settings.ShellStyleIsland {
+					style = 1
+				}
+				if sg := ui.Segmented(c, &style, "刘海", "灵动岛").Label("刘海样式"); sg.Changed() {
+					next := settings.ShellStyleNotch
+					if style == 1 {
+						next = settings.ShellStyleIsland
+					}
+					a.setShellStyle(next)
+				}
+			})
+		})
 	})
 }
 

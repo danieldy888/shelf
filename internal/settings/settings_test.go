@@ -122,7 +122,8 @@ func TestAIUsageLoad(t *testing.T) {
 
 func TestSaveRoundTrips(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}
+	want := Settings{RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"},
+		ShellStyle: ShellStyleIsland}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
@@ -168,5 +169,33 @@ func TestInvalidFileIsNeverRewritten(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != string(bad) {
 		t.Fatalf("invalid settings.json was overwritten: %q", got)
+	}
+}
+
+// shellStyle is new in this version: a file without it keeps the hardware
+// notch shape, and only the exact "island" value switches the style —
+// hand-edited junk must not choose something the app cannot draw.
+func TestShellStyleLoad(t *testing.T) {
+	for _, tt := range []struct {
+		raw  string
+		want ShellStyle
+	}{
+		{`{}`, ShellStyleNotch},
+		{`{"shellStyle": "island"}`, ShellStyleIsland},
+		{`{"shellStyle": "notch"}`, ShellStyleNotch},
+		{`{"shellStyle": "ISLAND"}`, ShellStyleNotch},
+		{`{"shellStyle": ""}`, ShellStyleNotch},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, FileName), []byte(tt.raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.raw, err)
+		}
+		if s.ShellStyle != tt.want {
+			t.Fatalf("%s loaded shellStyle %q, want %q", tt.raw, s.ShellStyle, tt.want)
+		}
 	}
 }

@@ -44,6 +44,15 @@ func (a *shelf) dropBandX(p mygo.Point) bool {
 	if a.notchW <= 0 || a.notchH <= 0 {
 		return false
 	}
+	if a.island {
+		// The band follows the floating capsule: the same horizontal
+		// reach around it, from its top edge down to the guard's landing
+		// row below it. Rows above the capsule stay the menu bar's.
+		r := a.islandRect()
+		_, baseH := a.anchorSize()
+		return p.X >= r.X-dropBandPadX && p.X < r.X+r.Width+dropBandPadX &&
+			p.Y >= r.Y && p.Y < r.Y+dropBandH(int(baseH))
+	}
 	return p.X >= a.notchX-dropBandPadX && p.X < a.notchX+a.notchW+dropBandPadX &&
 		p.Y >= a.notchY && p.Y < a.notchY+dropBandH(a.notchH)
 }
@@ -53,7 +62,7 @@ func (a *shelf) dropBandX(p mygo.Point) bool {
 // the bar from underneath never counts as entering — ordinary windows
 // live there and a drag gliding past them must not wake the panel.
 func (a *shelf) dropBand(p mygo.Point) bool {
-	return a.dropBandX(p) && p.Y < a.notchY+menuBandH(a.notchH)
+	return a.dropBandX(p) && p.Y < a.sheetTop()+a.y+a.menuBand()
 }
 
 // updateDragBand applies the enter/hold state machine to a.inBand:
@@ -77,13 +86,18 @@ func (a *shelf) updateDragBand(p mygo.Point, active bool) {
 // inside the window that just grew for it. Drags that never entered are
 // never pushed onto rows below the bar.
 func (a *shelf) dragGuardRegion() mac.DragGuardRegion {
-	h := menuBandH(a.notchH) - 1
+	_, baseH := a.anchorSize()
+	h := a.menuBand() - 1
 	if a.inBand {
-		h = dropBandH(a.notchH) - 1
+		h = dropBandH(int(baseH)) - 1
 	}
+	// The corridor starts at the display's top edge so the Spaces gesture
+	// stays blocked, but its landing row is inside the shell: with the
+	// island that is its capsule (or the grown drop pill in-band), never a
+	// row below it where the cursor could not reach the drop target.
 	return mac.DragGuardRegion{
-		X: a.stripCenter() - (max(180, a.notchW)+2*dropBandPadX)/2, Y: a.y,
-		Width: max(180, a.notchW) + 2*dropBandPadX, Height: h,
+		X: a.stripCenter() - a.bandW()/2, Y: a.y,
+		Width: a.bandW(), Height: a.sheetTop() + h,
 	}
 }
 
@@ -226,7 +240,7 @@ func (a *shelf) monitorDrag(now time.Time) {
 	} else {
 		a.shake.reset()
 	}
-	overNotch := a.overNotch(p)
+	overAnchor := a.overAnchor(p)
 	a.updateDragBand(p, active)
 	// pinTick runs before the peek logic below so holdPeek and the fold
 	// both see the pinReturning this tick computed; its fileDrag flag is
@@ -239,11 +253,11 @@ func (a *shelf) monitorDrag(now time.Time) {
 	// be able to rest on them without the shell folding shut under it.
 	// pinReturning holds the 松开放回 pill for the whole put-back zone,
 	// which reaches past the pill's own body.
-	holdPeek := overNotch || a.pinReturning || (a.peeking && a.overPeekPill(p))
+	holdPeek := overAnchor || a.pinReturning || (a.peeking && a.overPeekPill(p))
 	// Dragging or hovering reveals the pill; only a click or a real incoming
 	// drag in the trigger zone can open the full panel.
 	if active || holdPeek {
-		if !a.suppressed || overNotch {
+		if !a.suppressed || overAnchor {
 			a.setPeek(true)
 		}
 	}

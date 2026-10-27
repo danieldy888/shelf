@@ -34,6 +34,9 @@ type Settings struct {
 	// RemoveAfterDrag takes an item off the tray once it was dragged out
 	// and dropped; pinned items stay.
 	RemoveAfterDrag bool `json:"removeAfterDrag"`
+	// ShellStyle is the closed shelf's outer shape on a screen with a
+	// camera housing. Screens without one always draw the island.
+	ShellStyle ShellStyle `json:"shellStyle"`
 	// AIUsage is the AI 用量 page: off by default; each source (quota and
 	// local usage) can be switched separately.
 	AIUsage AIUsageSettings `json:"aiUsage"`
@@ -50,6 +53,25 @@ type LiveActivitySettings struct {
 	Charging   bool `json:"charging"`
 	Headphones bool `json:"headphones"`
 	Downloads  bool `json:"downloads"`
+}
+
+// ShellStyle picks the closed shelf's outer shape on a screen with a
+// camera housing. A screen without one always draws the island, whatever
+// this says ("notch" is the default).
+type ShellStyle string
+
+const (
+	ShellStyleNotch  ShellStyle = "notch"
+	ShellStyleIsland ShellStyle = "island"
+)
+
+// Normalized maps an unknown or empty value (an older settings.json, a
+// hand edit) to the default style.
+func (s ShellStyle) Normalized() ShellStyle {
+	if s == ShellStyleIsland {
+		return ShellStyleIsland
+	}
+	return ShellStyleNotch
 }
 
 // AIUsageSettings is the aiUsage object in settings.json. Enabled turns
@@ -76,6 +98,7 @@ func Default() Settings {
 		IslandNowPlaying: true,
 		AutoCheckUpdates: true,
 		RemoveAfterDrag:  false,
+		ShellStyle:       ShellStyleNotch,
 		LiveActivities: LiveActivitySettings{
 			Charging:   true,
 			Headphones: true,
@@ -125,6 +148,7 @@ func Load(dir string) (Settings, error) {
 	if s.ClipboardLimit < 1 {
 		s.ClipboardLimit = defaultClipboardLimit
 	}
+	s.ShellStyle = s.ShellStyle.Normalized()
 	return s, nil
 }
 

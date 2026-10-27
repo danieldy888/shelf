@@ -112,6 +112,7 @@ func main() {
 			a.tray.Destroy()
 		}
 		a.flushLeaving(time.Now().Add(time.Second)) // dragged-out items leave for good
+		a.closeIdleIslands()
 		a.store.Close()
 	})
 	mygo.App.WhenReady(func() {

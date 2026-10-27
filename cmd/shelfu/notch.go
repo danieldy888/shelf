@@ -24,16 +24,20 @@ func (a *shelf) place(p mygo.Point) {
 		a.win.SetOpacity(1)
 	}
 	a.syncDragGuard()
+	a.syncIdleIslands()
 }
 
 func (a *shelf) placeAt(p mygo.Point) {
 	d := mygo.Screen.DisplayNearestPoint(p)
 	a.dispBounds = d.Bounds
+	a.dispID = d.ID
 	nx, ny, nw, nh, hasNotch := mac.NotchRect(d.ID)
 	a.notchX, a.notchY, a.notchW, a.notchH, a.hasNotch = nx, ny, nw, nh, hasNotch
 	a.topInset = nh
-	// The panel, the peek pill and the strip share one axis: the notch's
-	// centre. A different centre made the expansion jump sideways.
+	a.applyShellStyle()
+	// The panel, the peek pill and the strip share one axis: the anchor's
+	// centre (the notch, or the display centre on a screen without one).
+	// A different centre made the expansion jump sideways.
 	a.x = d.Bounds.X + (d.Bounds.Width-sheetW)/2
 	if a.notchW > 0 {
 		a.x = a.notchX + a.notchW/2 - sheetW/2
@@ -41,10 +45,13 @@ func (a *shelf) placeAt(p mygo.Point) {
 	a.y = d.Bounds.Y
 }
 
-// overNotch 只认实测刘海几何：光标真正进入刘海热区（notchX/notchY 为原点，
-// 四周留 hover 余量）才为真。显示器未匹配时 notchW 为 0，刘海交互整体禁用，
-// 不会在屏幕左上角凭空出现一个悬停/触发区。
-func (a *shelf) overNotch(p mygo.Point) bool {
+// overAnchor 只认实测几何：光标真正进入锚点热区（刘海，或者灵动岛的
+// 空闲胶囊；四周留 hover 余量）才为真。显示器未匹配时 notchW 为 0，交互
+// 整体禁用，不会在屏幕左上角凭空出现一个悬停/触发区。
+func (a *shelf) overAnchor(p mygo.Point) bool {
+	if a.island {
+		return a.overIsland(p)
+	}
 	return a.notchW > 0 && a.notchH > 0 &&
 		p.X >= a.notchX-notchHoverPadX && p.X <= a.notchX+a.notchW+notchHoverPadX &&
 		p.Y >= a.notchY && p.Y <= a.notchY+a.notchH+notchHoverPadY
@@ -59,20 +66,21 @@ func (a *shelf) overNotch(p mygo.Point) bool {
 // flanks by that much on each side, and no frame may clip the arc.
 func (a *shelf) desiredFrame() mygo.Rectangle {
 	closing := !a.visible && a.fx.openK > 0
+	top := a.sheetTop()
+	ears := a.earWidth()
 	if a.visible || closing {
-		top := a.sheetTop()
 		if closing {
 			// Follow the drawn shell through its fold, with room for the
-			// ears and two points below the bottom curve.
-			w := int(math.Ceil(float64(a.fx.w))) + 2*earR
+			// corners and two points below the bottom curve.
+			w := int(math.Ceil(float64(a.fx.w))) + 2*ears
 			h := int(a.fx.h+0.5) + top + 2
 			if a.fb.up(time.Now()) {
 				// Folding into the capsule: the shell may grow wider or
 				// taller than the panel sliver it starts from. No glow
 				// reaches past it anymore, so the room is the shell plus
-				// its ears, shake and overshoot only.
-				w = max(w, capsuleFrameW())
-				h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+2)
+				// its corners, shake and overshoot only.
+				w = max(w, a.capsuleFrameW())
+				h = max(h, top+a.capsuleBodyH()+2)
 			}
 			return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 		}
@@ -90,8 +98,8 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		if a.currentLevel() == 1 {
 			tw, th = islandW, islandH
 		}
-		w, roomH := openFrameRoom(tw, float32(th+float32(top)))
-		w = max(w, int(math.Ceil(float64(a.fx.w)))+2*earR)
+		w, roomH := a.frameRoom(tw, float32(th+float32(top)))
+		w = max(w, int(math.Ceil(float64(a.fx.w)))+2*ears)
 		// Once settled the height is the shell's exact box, so its
 		// transparent margin cannot swallow clicks below.
 		h := max(int(math.Ceil(float64(th)))+top, int(math.Ceil(float64(a.fx.h)))+top)
@@ -100,23 +108,21 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
-	// An incoming system drag shrinks the resident strip to the notch's
-	// menu-bar band: outside it ShelfU only shows a widened band-height
-	// hint, inside it the shell grows 「松开放入」. The frame always
-	// covers the shape being aimed at (plus ears) and the shell actually
-	// drawn, so the morph, a fold remnant and the Spaces edge guard stay
-	// covered — and the wings/capsule's taller frames are never held
-	// through a drag.
+	// An incoming system drag shrinks the resident strip to the anchor's
+	// band: outside it ShelfU only shows a widened band-height hint, inside
+	// it the shell grows 「松开放入」. The frame always covers the shape
+	// being aimed at (plus corners) and the shell actually drawn, so the
+	// morph, a fold remnant and the Spaces edge guard stay covered — and
+	// the wings/capsule's taller frames are never held through a drag.
 	if a.dragging && !a.ownDrag {
-		bandH := max(32, a.notchH)
-		w := max(180, a.notchW) + 2*dropBandPadX
-		h := bandH
+		w := a.bandW()
+		h := top + a.menuBand()
 		pw, ph := a.peekSize()
-		w = max(w, int(math.Ceil(float64(pw)))+2*earR)
-		h = max(h, int(math.Ceil(float64(ph))))
+		w = max(w, int(math.Ceil(float64(pw)))+2*ears)
+		h = max(h, top+int(math.Ceil(float64(ph))))
 		if a.fx.peek {
-			w = max(w, int(math.Ceil(float64(a.fx.w)))+2*earR)
-			h = max(h, int(math.Ceil(float64(a.fx.h)))+1)
+			w = max(w, int(math.Ceil(float64(a.fx.w)))+2*ears)
+			h = max(h, top+int(math.Ceil(float64(a.fx.h)))+1)
 		}
 		if a.inBand {
 			// The cursor is inside the band (entered through the menu
@@ -124,9 +130,10 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 			// while the shell is still the small hint — a suppressed
 			// drag grows the window too, so the clamped cursor never
 			// leaves its surface. Before entry the window stays
-			// menu-bar high; the guard's push lands on the bar's last
+			// band-high; the guard's push lands on the band's last
 			// row, which is already inside this frame.
-			h = max(h, dropBandH(a.notchH))
+			_, baseH := a.anchorSize()
+			h = max(h, top+dropBandH(int(baseH)))
 		}
 		return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 	}
@@ -150,16 +157,16 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		// (Bounce 0.15); the strip keeps headroom so no frame is clipped.
 		pw, ph = pw*(1+openOvershoot), ph*(1+openOvershoot)
 	}
-	w := int(math.Ceil(float64(pw))) + 2*earR
-	h := int(math.Ceil(float64(ph)))
+	w := int(math.Ceil(float64(pw))) + 2*ears
+	h := top + int(math.Ceil(float64(ph)))
 	if a.capsuleUp(time.Now()) || a.fb.drawn {
 		// The completion capsule is another peek shape: while it shows, the
 		// strip holds room for it at the widest the text can make it, plus
-		// its ears, shake and grow-out overshoot. The shape grows out of
-		// the notch in ~160ms, well inside the tick that resizes the strip,
-		// so no frame is cut.
-		w = max(w, capsuleFrameW())
-		h = max(h, int(float32(max(32, a.notchH))+fbBody+0.5)+2)
+		// its corners, shake and grow-out overshoot. The shape grows out in
+		// ~160ms, well inside the tick that resizes the strip, so no frame
+		// is cut.
+		w = max(w, a.capsuleFrameW())
+		h = max(h, top+a.capsuleBodyH()+2)
 	}
 	return mygo.Rectangle{X: a.stripCenter() - w/2, Y: a.y, Width: w, Height: h}
 }
@@ -222,7 +229,7 @@ func (a *shelf) windowGeometryChanged() {
 // flight, otherwise a bulge carrying a chevron. The glyphs sit wholly
 // below the hardware notch: nothing drawn inside it is visible.
 func (a *shelf) peekSize() (w, h float32) {
-	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
+	baseW, baseH := a.anchorSize()
 	if a.pinReturning {
 		// A pinned card held over the notch wins over the capsule and
 		// the wings: the release reads this same zone, so the affordance
@@ -234,13 +241,13 @@ func (a *shelf) peekSize() (w, h float32) {
 		// The completion capsule takes the peek shape while the panel is
 		// closed: it is what the shell grows into, whether or not a track
 		// is loaded.
-		return a.fb.capsule(baseW, baseH)
+		return a.capsuleSize()
 	}
 	if a.dragging && !a.ownDrag {
 		if a.dropHot {
 			return baseW + dropPillExtraW, baseH + dropPillBody
 		}
-		// Drag hint: the notch's own height, a little wider — visible in
+		// Drag hint: the anchor's own height, a little wider — visible in
 		// the menu bar, never over the windows below it.
 		return baseW + dropHintExtraW, baseH
 	}
@@ -258,12 +265,12 @@ func (a *shelf) peekSize() (w, h float32) {
 	return baseW + 40, baseH + peekBody
 }
 
-// wingsSize is the hover wings' size: the notch plus npWingsW on each
+// wingsSize is the hover wings' size: the anchor plus npWingsW on each
 // side, and npWingsBody below it. Wide notches keep their width and gain
-// the same wings.
+// the same wings; the island's 120pt capsule grows to 224 × 34.
 func (a *shelf) wingsSize() (w, h float32) {
-	baseW := float32(max(180, a.notchW))
-	return baseW + 2*npWingsW, float32(max(32, a.notchH)) + npWingsBody
+	baseW, baseH := a.anchorSize()
+	return baseW + 2*npWingsW, baseH + npWingsBody
 }
 
 // shellSize is the one interpolation the shell Path and the content layout
@@ -272,8 +279,7 @@ func (a *shelf) wingsSize() (w, h float32) {
 // animates them per display frame and substitutes final ones in headless
 // tests.
 func (a *shelf) shellSize(openK, levelK, peekK, peekW, peekH float32) (w, h float32) {
-	baseW := float32(max(180, a.notchW))
-	baseH := float32(max(32, a.notchH))
+	baseW, baseH := a.anchorSize()
 	lvlW := float32(islandW) + (sheetW-islandW)*levelK
 	lvlH := float32(islandH) + (sheetH-islandH)*levelK
 	w0 := baseW + (peekW-baseW)*peekK
@@ -303,7 +309,7 @@ func (a *shelf) peekPillRect() mygo.Rectangle {
 		w, h = a.fx.w, a.fx.h
 	}
 	x := a.stripCenter() - int(w/2) + int(a.fx.shakeX)
-	return mygo.Rectangle{X: x, Y: a.y, Width: int(w + 0.5), Height: int(h + 0.5)}
+	return mygo.Rectangle{X: x, Y: a.y + a.sheetTop(), Width: int(w + 0.5), Height: int(h + 0.5)}
 }
 
 func (a *shelf) overPeekPill(p mygo.Point) bool {
@@ -325,6 +331,13 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	if a.quitting {
 		return
 	}
+	// A press on another screen's idle capsule moves the resident window
+	// there first — every screen's island opens its own panel.
+	if !inside && button == 0 && !a.visible && a.idleIslandAt(p) {
+		a.place(p)
+		a.show(false)
+		return
+	}
 	// The capsule is drawn over the menu bar's empty centre. WindowServer
 	// often gives that press to the menu bar or the app underneath, so the
 	// overlay paints a "click to expand" pill that never receives the click.
@@ -333,6 +346,14 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	// handler opens the shelf for a press anywhere on them. Only a press
 	// inside the drawn shape acts: transparent window margin neither opens
 	// the panel nor claims the event for it.
+	// The idle island is a click target of its own: its window takes the
+	// press only while the pointer is on the capsule, and a press that
+	// slipped through to the window underneath still opens the shelf — the
+	// capsule is always visible, unlike the notch's hidden band.
+	if a.island && !a.visible && a.overShell(p) {
+		a.show(false)
+		return
+	}
 	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && a.overPeekPill(p) {
 		// The completion capsule is a button of its own: its view adds the
 		// file and opens the tray page. The shell must not swallow that
@@ -356,7 +377,11 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 		return
 	}
 	a.releaseKeys()
-	inMenuBar := p.Y >= a.notchY && p.Y <= a.notchY+max(36, a.notchH+4)
+	menuBottom := a.notchY + max(36, a.notchH+4)
+	if a.island {
+		menuBottom = max(menuBottom, a.y+a.islandTop+islandIdleH)
+	}
+	inMenuBar := p.Y >= a.notchY && p.Y <= menuBottom
 	if a.visible && !a.dragging && !inMenuBar {
 		a.hide(hidePassive)
 	}
@@ -420,10 +445,19 @@ func (a *shelf) overlayWanted() bool {
 // shape), and an idle overlay ignores the mouse everywhere.
 func (a *shelf) overlayAcceptsMouse() bool {
 	wanted := a.overlayWanted()
-	if !wanted || a.winH == 0 || a.dragging || a.pointerDrag {
+	if a.winH == 0 {
+		return wanted
+	}
+	if a.dragging || a.pointerDrag {
 		return wanted
 	}
 	p := cursorPoint()
+	if !wanted {
+		// A notched shelf at rest draws nothing: every press belongs to
+		// whatever is under the strip. The island's resting capsule is a
+		// real, visible target and takes presses on its own shape.
+		return a.island && a.overShell(p)
+	}
 	if a.overShell(p) {
 		return true
 	}
@@ -591,6 +625,22 @@ func (a *shelf) overShellShape(p mygo.Point, w, h, levelK, shakeX float32) bool 
 	}
 	cx := float64(a.stripCenter()) + float64(shakeX)
 	x0, x1 := cx-float64(w)/2, cx+float64(w)/2
+	corner := float64(islandRadius) + float64(sheetRadius-islandRadius)*float64(levelK)
+	if a.island {
+		// Four round corners, no top ears: the island's path is a rounded
+		// rectangle (islandPath's circular arcs) whose radius shrinks to
+		// half the height for a capsule. The hit edge follows the circle.
+		r := math.Min(float64(h)/2, corner)
+		inset := func(d float64) float64 {
+			if r <= 0 || d >= r {
+				return 0
+			}
+			return r - math.Sqrt(sq(r)-sq(r-d))
+		}
+		cut := math.Max(inset(y), inset(float64(h)-y))
+		x := float64(p.X)
+		return x >= x0+cut && x < x1-cut
+	}
 	left, right := x0, x1
 	// inset is how far the path's corner cuts in d points from the edge it
 	// starts on, for radius r: 0 at the flank, r at the outer edge. Both
@@ -607,7 +657,6 @@ func (a *shelf) overShellShape(p mygo.Point, w, h, levelK, shakeX float32) bool 
 		// meets the flank at earR below.
 		left, right = x0-inset(y, ear), x1+inset(y, ear)
 	}
-	corner := float64(islandRadius) + float64(sheetRadius-islandRadius)*float64(levelK)
 	if botR := math.Min(float64(h)/2, corner); y > float64(h)-botR {
 		cut := inset(float64(h)-y, botR)
 		left, right = x0+cut, x1-cut

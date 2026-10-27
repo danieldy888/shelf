@@ -215,7 +215,7 @@ func (a *shelf) pinReturnZone(centre mygo.Point) bool {
 	// The shelf follows the cursor across displays (monitorDrag places
 	// it on the cursor's): a pin dragged at the notch is by definition
 	// on the shelf's display. The zone centres on the hardware notch,
-	// widening like overNotch does.
+	// widening like overAnchor does.
 	nx, nw := a.notchX, a.notchW
 	if nw <= 0 {
 		nw = 200 // no measured notch: the strip's default centre

@@ -490,8 +490,8 @@ func TestNotchPeekClickExpandsShelf(t *testing.T) {
 func TestNoNotchGeometryDisablesTriggers(t *testing.T) {
 	a := &shelf{}
 	for _, p := range []mygo.Point{{X: 0, Y: 0}, {X: 100, Y: 20}, {X: 646, Y: 30}} {
-		if a.overNotch(p) {
-			t.Fatalf("overNotch(%v) true with no notch geometry", p)
+		if a.overAnchor(p) {
+			t.Fatalf("overAnchor(%v) true with no geometry", p)
 		}
 		if a.dropBand(p) {
 			t.Fatalf("dropBand(%v) true with no notch geometry", p)
@@ -503,13 +503,13 @@ func TestNoNotchGeometryDisablesTriggers(t *testing.T) {
 // × 菜单栏高的一条——菜单栏以下、远离刘海的位置都不得命中。
 func TestNotchTriggersBoundToRealRect(t *testing.T) {
 	a := &shelf{notchX: 645, notchY: 0, notchW: 180, notchH: 32}
-	if !a.overNotch(mygo.Point{X: 735, Y: 20}) {
+	if !a.overAnchor(mygo.Point{X: 735, Y: 20}) {
 		t.Fatal("cursor at notch center should hover")
 	}
-	if a.overNotch(mygo.Point{X: 100, Y: 20}) {
+	if a.overAnchor(mygo.Point{X: 100, Y: 20}) {
 		t.Fatal("cursor far left of notch must not hover")
 	}
-	if a.overNotch(mygo.Point{X: 735, Y: 60}) {
+	if a.overAnchor(mygo.Point{X: 735, Y: 60}) {
 		t.Fatal("cursor below hover pad must not hover")
 	}
 	if !a.dropBand(mygo.Point{X: 735, Y: 31}) {

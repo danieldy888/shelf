@@ -99,6 +99,10 @@ type shelf struct {
 	topInset                                                    int
 	notchX, notchY, notchW, notchH                              int
 	hasNotch                                                    bool
+	island                                                      bool // this display draws the floating island shell
+	islandTop                                                   int  // island shell's top inset inside the window
+	dispID                                                      int64
+	idleIslands                                                 []*idleIslandWindow
 	peeking                                                     bool
 	peekProgress, peekFrom                                      float32
 	peekAnimStart                                               time.Time

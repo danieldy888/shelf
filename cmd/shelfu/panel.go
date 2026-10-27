@@ -333,10 +333,14 @@ func (a *shelf) currentLevel() int {
 // window sits below the menu bar's level, so the shell drops below it by
 // the menu bar's height and keeps the sheet's 250 pt below that.
 func (a *shelf) sheetTop() int {
+	// The island floats below the screen's top edge; the hardware notch
+	// path starts at it. Clipboard search drops the whole shell below the
+	// menu bar, never above where the style already put it.
+	top := a.islandTop
 	if a.focusMode {
-		return max(a.topInset, menuBarMinH) + headerTopGap
+		top = max(top, max(a.topInset, menuBarMinH)+headerTopGap)
 	}
-	return 0
+	return top
 }
 
 // view 画三种状态：空闲（完全不可见）、探头（悬停播放器、下拉箭头或拖拽
@@ -501,8 +505,9 @@ func (a *shelf) view(c *ui.Context) {
 			a.fb.retracting = false
 		}
 	}
-	// 真实窗口的彻底空闲态：什么都不画，常驻窗口完全不可见。阈值与上面
-	// 的静止吸附一致（亚点级），收起最后一段平滑落位、看不出跳变。
+	// 真实窗口的彻底空闲态：刘海样式什么都不画，常驻窗口完全不可见；
+	// 灵动岛空闲时一直画那颗 120 × 30 的胶囊，让用户知道往哪儿移鼠标。
+	// 阈值与上面的静止吸附一致（亚点级），收起最后一段平滑落位、看不出跳变。
 	idle := a.win != nil && !a.visible && a.progress <= 0.01 && openK <= 0.002 && !a.peeking && peekK <= 0.002
 	// ShelfU's own drag-out never lands back on the shelf: the drop would
 	// add a second item pointing at the same file. Without a target the
@@ -514,22 +519,27 @@ func (a *shelf) view(c *ui.Context) {
 		_, over = ui.DataDragOver(zone, opts)
 	}
 	if idle {
-		// 空闲态收到内容只入库不展开：那时窗口本就不显示，也无从接受拖放。
-		// The mesh is the hardware notch: nothing is drawn, and the frame
-		// the next state starts from is the notch's own box.
-		a.fx.w, a.fx.h = float32(max(180, a.notchW)), float32(max(32, a.notchH))
+		// 空闲态收到内容只入库不展开：刘海样式那时窗口本就不显示，也无从
+		// 接受拖放。灵动岛的空闲胶囊一直可见，照常画下去。
+		// The mesh is the anchor: nothing else is drawn, and the frame the
+		// next state starts from is its own box.
+		a.fx.w, a.fx.h = a.anchorSize()
 		a.fx.peekW, a.fx.peekH = 0, 0
 		a.fx.peek, a.fx.openMoving, a.fx.sizeMoving, a.fb.drawn = false, false, false, false
 		a.fx.openK, a.fx.peekK = 0, 0
 		a.fb.clearExpired(now, true)
-		a.syncMousePassThrough()
-		if accepts {
-			if drop, ok := ui.DropData(zone, opts); ok {
-				a.drop.done = true
-				a.receive(drop.Data)
+		if a.island {
+			zone.Label("展开 ShelfU")
+		} else {
+			a.syncMousePassThrough()
+			if accepts {
+				if drop, ok := ui.DropData(zone, opts); ok {
+					a.drop.done = true
+					a.receive(drop.Data)
+				}
 			}
+			return
 		}
-		return
 	}
 	peeked := a.peeking || peekK > 0.01
 	// A closing panel keeps the view it had for the content's 120 ms fade;
@@ -663,10 +673,16 @@ func (a *shelf) view(c *ui.Context) {
 		x1 := x0 + shellW
 		y0 := top
 		y1 := top + shellH
+		var path ui.Path
+		if a.island {
+			// 四角全圆的胶囊：空闲 15、两翼/提示条半圆、面板 22 → 24。
+			islandPath(&path, x0+shake, y0, x1+shake, y1, min(shellH/2, corner))
+			p.FillPath(&path, ui.Hex("#000000"))
+			return
+		}
 		ear := float32(earR)
 		// 底部圆角：探头胶囊半圆 → 一级 22 → 二级 24。
 		botR := min(shellH/2, corner)
-		var path ui.Path
 		path.MoveTo(x0-ear+shake, y0)
 		path.QuadTo(x0+shake, y0, x0+shake, y0+earR)
 		path.LineTo(x0+shake, y1-botR)
@@ -1505,7 +1521,10 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	case peekWings:
 		if a.np != nil {
 			pw, ph := a.wingsSize()
-			clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+			// The shell hangs from sheetTop inside the window (the island
+			// floats below the top edge); its content starts there too.
+			clip := ui.Column(c.Key("peek-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center).
+				Margin(float32(a.sheetTop()), 0, 0, 0)
 			drew := false
 			clip.Children(func() { drew = a.np.peekWings(c, pw, ph, peekK) })
 			if drew {
@@ -1529,9 +1548,11 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 		// them outside even sooner.
 		pw, ph = shellW, shellH
 	}
-	notchH := float32(max(32, a.notchH))
+	// 内容从壳顶内侧开始：刘海样式空出刘海那一条，灵动岛空出胶囊本身
+	// 的高度，文字落在它下面长出的那一截。
+	_, notchH := a.anchorSize()
 	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Clip().
-		AlignItems(ui.Center).Label("展开 ShelfU")
+		AlignItems(ui.Center).Label("展开 ShelfU").Margin(float32(a.sheetTop()), 0, 0, 0)
 	pill.Children(func() {
 		ui.Column(c.Key("peek-body")).Width(pw).Height(ph).Opacity(min(max(peekK, 0), 1)).Children(func() {
 			ui.Box(c.Key("peek-notch")).Height(notchH)
@@ -1566,11 +1587,11 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, _ /* openK */, peekK,
 	// the panel was still closing is held for its full span from here.
 	f.arm(now)
 
-	baseW, baseH := float32(max(180, a.notchW)), float32(max(32, a.notchH))
-	cw, ch := f.capsule(baseW, baseH)
+	cw, ch := a.capsuleSize()
 	col := f.color()
 	textW := cw - fbDot - fbGap - 2*fbPadX
-	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).Label("展开 ShelfU · " + f.text)
+	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).
+		Margin(float32(a.sheetTop()), 0, 0, 0).Label("展开 ShelfU · " + f.text)
 	if shake != 0 {
 		box.Translate(shake, 0)
 	}
@@ -1581,10 +1602,16 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, _ /* openK */, peekK,
 		clip := ui.Column(c.Key("fb-clip")).Absolute().Top(0).Left(0).
 			Width(shellW).Height(shellH).Clip().Justify(ui.End).AlignItems(ui.Center).PassThrough()
 		clip.Children(func() {
-			body := ui.Column(c.Key("fb-body")).Width(cw).Height(ch).Justify(ui.End).
+			// 刘海的提示条长在刘海下沿那 22pt 的带里；灵动岛是一颗 36
+			// 高的完整胶囊，文字垂直居中。
+			rowH, justify := float32(fbBody), ui.End
+			if a.island {
+				rowH, justify = ch, ui.Center
+			}
+			body := ui.Column(c.Key("fb-body")).Width(cw).Height(ch).Justify(justify).
 				Opacity(min(max(peekK, 0), 1))
 			body.Children(func() {
-				ui.Row(c.Key("fb-msg")).Height(fbBody).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(fbGap).Children(func() {
+				ui.Row(c.Key("fb-msg")).Height(rowH).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Gap(fbGap).Children(func() {
 					dot := ui.Row(c.Key("fb-dot")).Size(fbDot, fbDot).Radius(fbDot / 2).Background(col).Center()
 					if f.live {
 						// A running job has no verdict yet: the dot
