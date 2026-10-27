@@ -404,11 +404,18 @@ func (a *shelf) view(c *ui.Context) {
 	if capsule {
 		a.fb.schedule(c, now)
 	}
+	// The realtime queue advances here too, so a notice grows the shell on
+	// its own and folds it back when its hold ends.
+	liveEv, liveUp := a.liveNow(now, a.liveAllow())
+	if liveUp {
+		c.After(max(liveEv.deadline.Sub(now), 0) + 10*time.Millisecond)
+	}
+	downloadUp := a.downloadRunning()
 	openTarget, peekTarget := float32(0), float32(0)
 	if a.visible {
 		openTarget = 1
 	}
-	if a.peeking || capsule {
+	if a.peeking || capsule || liveUp || downloadUp {
 		peekTarget = 1
 	}
 	// Keep one native drop target across all states. The transparent root does
@@ -1421,7 +1428,14 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	// live state mid-fold would flash a loaded track's title inside the
 	// shrinking shell.
 	kind := a.fx.peekKind
+	var liveEv liveEvent
+	liveOK := false
 	if !folding {
+		// The queue advances once per drawn frame, so the kind chosen here
+		// and the shape peekSize() returns agree.
+		if ev, ok := a.liveNow(now, a.liveAllow()); ok {
+			liveEv, liveOK = ev, true
+		}
 		switch {
 		case a.pinReturning:
 			// A pinned card held over the notch wins over the capsule
@@ -1435,6 +1449,16 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			// agree), and the wings take the shape back when the toast
 			// is done.
 			kind = peekCapsule
+		case liveOK:
+			// A charging / headphone / download notice covers the wings
+			// for its own hold; the persistent download owns them after.
+			if liveEv.kind.wings() {
+				kind = peekLiveWings
+			} else {
+				kind = peekLiveCapsule
+			}
+		case a.downloadRunning():
+			kind = peekDownload
 		case !over && a.np != nil && a.np.showsPlayer():
 			kind = peekWings
 		case a.dragging && !a.ownDrag:
@@ -1455,6 +1479,28 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	switch kind {
 	case peekCapsule:
 		a.capsuleView(c, shellW, shellH, openK, peekK, shake, now)
+		return
+	case peekLiveWings:
+		if !liveOK {
+			return // the event ended: the fold shows only the shrinking shell
+		}
+		pw, ph := a.liveShape(liveEv)
+		clip := ui.Column(c.Key("live-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+		clip.Children(func() { a.liveView(c, pw, ph, peekK, liveEv) })
+		return
+	case peekLiveCapsule:
+		if !liveOK {
+			return
+		}
+		a.liveView(c, shellW, shellH, peekK, liveEv)
+		return
+	case peekDownload:
+		if !a.downloadRunning() {
+			return
+		}
+		pw, ph := a.downloadShape()
+		clip := ui.Column(c.Key("dl-clip")).Width(shellW).Height(shellH).Clip().AlignItems(ui.Center)
+		clip.Children(func() { a.downloadWings(c, pw, ph, peekK, a.dl.progress()) })
 		return
 	case peekWings:
 		if a.np != nil {

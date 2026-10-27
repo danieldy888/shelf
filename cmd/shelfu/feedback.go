@@ -84,6 +84,11 @@ const (
 	// peekReturn is a desktop-pinned card held over the notch: the same
 	// pill as the drop shape, inviting 松开放回 (pin.go pinReturning).
 	peekReturn
+	// The realtime activities (live.go): the wide charging or download
+	// wings, and the capsule for headphones or a finished download.
+	peekLiveWings
+	peekLiveCapsule
+	peekDownload
 )
 
 // shellMotion is what view() drew last: the drawn shell's size, for the

@@ -47,6 +47,10 @@ type shelf struct {
 	settings                                                    settings.Settings
 	modules                                                     []module
 	np                                                          *nowPlayingModule     // the peek wings read its state
+	pwr                                                         *powerModule          // battery / adapter events (live.go)
+	audio                                                       *audioModule          // headphone connect / disconnect
+	dl                                                          *downloadsModule      // browser downloads in ~/Downloads
+	live                                                        liveQueue             // transient charging / headphone / download-done events
 	conv                                                        *converter            // image conversion jobs; nil until the app starts
 	usage                                                       *usageFeature         // nil until the AI usage page registers itself
 	clip                                                        *clipboardModule      // nil until monitoring starts

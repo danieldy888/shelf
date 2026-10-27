@@ -229,14 +229,12 @@ func (a *shelf) peekSize() (w, h float32) {
 		// must always be the drop-pill it acts on (design §4 松开放回).
 		return baseW + dropPillExtraW, baseH + dropPillBody
 	}
-	if a.capsuleUp(time.Now()) {
+	now := time.Now()
+	if a.capsuleUp(now) {
 		// The completion capsule takes the peek shape while the panel is
 		// closed: it is what the shell grows into, whether or not a track
 		// is loaded.
 		return a.fb.capsule(baseW, baseH)
-	}
-	if a.np != nil && a.np.showsPlayer() {
-		return a.wingsSize()
 	}
 	if a.dragging && !a.ownDrag {
 		if a.dropHot {
@@ -245,6 +243,17 @@ func (a *shelf) peekSize() (w, h float32) {
 		// Drag hint: the notch's own height, a little wider — visible in
 		// the menu bar, never over the windows below it.
 		return baseW + dropHintExtraW, baseH
+	}
+	// Charging, headphones and a finished download take the notch while
+	// their words are up; a running download holds the wings below them.
+	if ev, ok := a.liveNow(now, a.liveAllow()); ok {
+		return a.liveShape(ev)
+	}
+	if a.downloadRunning() {
+		return a.downloadShape()
+	}
+	if a.np != nil && a.np.showsPlayer() {
+		return a.wingsSize()
 	}
 	return baseW + 40, baseH + peekBody
 }
@@ -325,6 +334,12 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	// inside the drawn shape acts: transparent window margin neither opens
 	// the panel nor claims the event for it.
 	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && a.overPeekPill(p) {
+		// The completion capsule is a button of its own: its view adds the
+		// file and opens the tray page. The shell must not swallow that
+		// press by expanding first.
+		if inside && a.liveClickable(time.Now()) {
+			return
+		}
 		if inside && a.peeking && a.np != nil && a.np.showsPlayer() {
 			return
 		}
@@ -394,7 +409,8 @@ func (a *shelf) syncMousePassThrough() {
 // the mouse at all: hovering, opening, open, folding, or a capture capsule.
 func (a *shelf) overlayWanted() bool {
 	return a.visible || a.fx.openK > 0.02 || a.dragging || a.pointerDrag ||
-		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting
+		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting ||
+		a.liveUp()
 }
 
 // overlayAcceptsMouse answers whether the overlay takes the mouse at the
@@ -625,6 +641,8 @@ func (a *shelf) show(edge bool) {
 	if a.visible {
 		return
 	}
+	// Transient notices never pop out after the panel closes.
+	a.clearLive()
 	if a.win != nil {
 		a.placeAt(mygo.Screen.CursorScreenPoint())
 	}
