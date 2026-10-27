@@ -37,6 +37,19 @@ type Settings struct {
 	// AIUsage is the AI 用量 page: off by default; each source (quota and
 	// local usage) can be switched separately.
 	AIUsage AIUsageSettings `json:"aiUsage"`
+	// LiveActivities is the 实时活动 group: the charging, headphone and
+	// download notices on the notch. Every switch is on for a fresh
+	// install; a settings.json without the object keeps all three.
+	LiveActivities LiveActivitySettings `json:"liveActivities"`
+}
+
+// LiveActivitySettings switches the three realtime activities. A missing
+// key keeps the default (on), so an older settings.json shows all of them
+// after the update.
+type LiveActivitySettings struct {
+	Charging   bool `json:"charging"`
+	Headphones bool `json:"headphones"`
+	Downloads  bool `json:"downloads"`
 }
 
 // AIUsageSettings is the aiUsage object in settings.json. Enabled turns
@@ -63,6 +76,11 @@ func Default() Settings {
 		IslandNowPlaying: true,
 		AutoCheckUpdates: true,
 		RemoveAfterDrag:  false,
+		LiveActivities: LiveActivitySettings{
+			Charging:   true,
+			Headphones: true,
+			Downloads:  true,
+		},
 		AIUsage: AIUsageSettings{
 			Enabled:     false,
 			QuotaCodex:  true,

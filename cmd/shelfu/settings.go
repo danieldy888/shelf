@@ -263,6 +263,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 				}
 				a.settingsPermissionsSection(c)
 				a.settingsGeneralSection(c)
+				a.settingsLiveSection(c)
 				a.settingsAIUsageSection(c)
 				a.settingsClipboardSection(c)
 				a.settingsTraySection(c)
@@ -394,6 +395,33 @@ func (a *shelf) applyOpenAtLogin(on bool) {
 		a.loginErr = ""
 	}
 	a.repaintSettings()
+}
+
+// settingsLiveSection is the 实时活动 group: charging, headphones and
+// downloads, all on for a fresh install. The switches go through the same
+// applySettings path as every other preference; the modules read them on
+// each tick, so a change applies at once.
+func (a *shelf) settingsLiveSection(c *ui.Context) {
+	settingsSection(c, "实时活动", "", a.settingsBroken, func() {
+		settingsToggle(c, "live-charging", "充电提示", a.settings.LiveActivities.Charging, func(on bool) {
+			a.setLiveActivity(func(s *settings.Settings) { s.LiveActivities.Charging = on })
+		})
+		settingsSep(c, "live-charging")
+		settingsToggle(c, "live-headphones", "耳机连接提示", a.settings.LiveActivities.Headphones, func(on bool) {
+			a.setLiveActivity(func(s *settings.Settings) { s.LiveActivities.Headphones = on })
+		})
+		settingsSep(c, "live-headphones")
+		settingsToggle(c, "live-downloads", "下载进度", a.settings.LiveActivities.Downloads, func(on bool) {
+			a.setLiveActivity(func(s *settings.Settings) { s.LiveActivities.Downloads = on })
+		})
+	})
+}
+
+// setLiveActivity saves one 实时活动 switch and repaints.
+func (a *shelf) setLiveActivity(mutate func(*settings.Settings)) {
+	next := a.settings
+	mutate(&next)
+	a.applySettings(next)
 }
 
 // settingsClipboardSection contains the retained count and excluded apps,

@@ -578,3 +578,23 @@ func TestSettingsWindowSmoke(t *testing.T) {
 	}
 	t.Logf("settings shot=%s box=%v dark=%d light=%d", shot, box, dark, light)
 }
+
+// The three 实时活动 switches save through applySettings like every other
+// preference, and a fresh install has all of them on.
+func TestSettingsViewLiveTogglesSave(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	a, view := newSettingsShelf(t)
+	if !a.settings.LiveActivities.Charging || !a.settings.LiveActivities.Headphones || !a.settings.LiveActivities.Downloads {
+		t.Fatalf("live activities must default on: %+v", a.settings.LiveActivities)
+	}
+	clickVisible(t, view, "充电提示")
+	clickVisible(t, view, "耳机连接提示")
+	clickVisible(t, view, "下载进度")
+	saved, err := settings.Load(a.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.LiveActivities.Charging || saved.LiveActivities.Headphones || saved.LiveActivities.Downloads {
+		t.Fatalf("the switches did not reach settings.json: %+v", saved.LiveActivities)
+	}
+}
