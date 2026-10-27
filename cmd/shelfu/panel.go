@@ -527,6 +527,7 @@ func (a *shelf) view(c *ui.Context) {
 		a.fx.peekW, a.fx.peekH = 0, 0
 		a.fx.peek, a.fx.openMoving, a.fx.sizeMoving, a.fb.drawn = false, false, false, false
 		a.fx.openK, a.fx.peekK = 0, 0
+		a.snap.drawn = false // the fold out of the snap box is over
 		a.fb.clearExpired(now, true)
 		if a.island {
 			zone.Label("展开 ShelfU")
@@ -668,6 +669,9 @@ func (a *shelf) view(c *ui.Context) {
 	// 这里画出的耳角任何一帧都不会被裁。
 	top := float32(a.sheetTop())
 	corner := float32(islandRadius) + float32(sheetRadius-islandRadius)*levelK
+	if a.snap.panel || a.snap.drawn {
+		corner = snapGhostR * 2 // 24: the design's snap panel corners
+	}
 	zone.Draw(func(p *ui.Painter, r ui.Rect) {
 		x0 := (r.W - shellW) / 2
 		x1 := x0 + shellW
@@ -723,8 +727,11 @@ func (a *shelf) view(c *ui.Context) {
 				return
 			}
 			w, h := float32(islandW), float32(islandH)
-			if level == 2 {
+			switch {
+			case level == 2:
 				w, h = sheetW, sheetH
+			case a.snap.drawn:
+				w, h = snapW, snapH
 			}
 			outer := ui.Column(c.Key(fmt.Sprintf("panel-l%d", level))).Absolute().Top(0).Left(0).Right(0).
 				Height(h).AlignItems(ui.Center).Opacity(alpha)
@@ -739,9 +746,12 @@ func (a *shelf) view(c *ui.Context) {
 					inner.TransformOrigin(0.5, 0).Scale(scale, scale)
 				}
 				inner.Children(func() {
-					if level == 2 {
+					switch {
+					case level == 2:
 						a.sheetView(c, over)
-					} else {
+					case a.snap.drawn:
+						a.snapView(c)
+					default:
 						a.islandView(c)
 					}
 				})

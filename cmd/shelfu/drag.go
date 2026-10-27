@@ -229,6 +229,9 @@ func (a *shelf) monitorDrag(now time.Time) {
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
+	// 拖窗口分屏：这一次按下如果是拖动别的应用的窗口，而不是系统拖拽
+	// （拖文件会写 NSDragPboard），就跟着指针走并接管刘海面板。
+	a.snapTick(now, p, active)
 	// 摇晃召唤：只在系统拖拽进行中、且不是自己拖出或已放弃拖放的会话里
 	// 采样；竖直拖动没有 x 采样变化，不会误触发篮子。只有文件或图片
 	// 拖得动篮子——拖标签、链接、纯文字摇不响应（它们仍可放进刘海带）。

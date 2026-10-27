@@ -37,6 +37,9 @@ type Settings struct {
 	// ShellStyle is the closed shelf's outer shape on a screen with a
 	// camera housing. Screens without one always draw the island.
 	ShellStyle ShellStyle `json:"shellStyle"`
+	// SnapWindows lets a window dragged by its title bar to the notch pick
+	// one of six arrangements.
+	SnapWindows bool `json:"snapWindows"`
 	// AIUsage is the AI 用量 page: off by default; each source (quota and
 	// local usage) can be switched separately.
 	AIUsage AIUsageSettings `json:"aiUsage"`
@@ -98,6 +101,7 @@ func Default() Settings {
 		IslandNowPlaying: true,
 		AutoCheckUpdates: true,
 		RemoveAfterDrag:  false,
+		SnapWindows:      true,
 		ShellStyle:       ShellStyleNotch,
 		LiveActivities: LiveActivitySettings{
 			Charging:   true,

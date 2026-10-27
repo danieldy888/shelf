@@ -47,6 +47,26 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 // The now-playing toggle still loads from the file, and the removed
 // battery/volume island keys in a legacy settings.json are ignored
 // (unknown keys never fail a load) while the rest keep their defaults.
+// snapWindows defaults on: a file without the key (older versions) must
+// not silently turn window snapping off, and an explicit false is honoured.
+func TestSnapWindowsLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil || !s.SnapWindows {
+		t.Fatalf("missing snapWindows = %v, %v; want true", s.SnapWindows, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"snapWindows": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Load(dir)
+	if err != nil || s.SnapWindows {
+		t.Fatalf("snapWindows: false => %v, %v; want false", s.SnapWindows, err)
+	}
+}
+
 func TestNowPlayingToggleAndLegacyIslandKeysLoad(t *testing.T) {
 	dir := t.TempDir()
 	legacy := `{"islandNowPlaying": false, "islandBattery": false, "islandVolume": false}`

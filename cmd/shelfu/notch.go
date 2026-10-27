@@ -94,10 +94,7 @@ func (a *shelf) desiredFrame() mygo.Rectangle {
 		// it when the spring settles would shift the window under a shell
 		// that has not moved, and the transparent columns beside the shell
 		// no longer take clicks anyway (overlayAcceptsMouse).
-		tw, th := float32(sheetW), float32(sheetH)
-		if a.currentLevel() == 1 {
-			tw, th = islandW, islandH
-		}
+		tw, th := a.panelBox()
 		w, roomH := a.frameRoom(tw, float32(th+float32(top)))
 		w = max(w, int(math.Ceil(float64(a.fx.w)))+2*ears)
 		// Once settled the height is the shell's exact box, so its
@@ -292,6 +289,11 @@ func (a *shelf) shellSize(openK, levelK, peekK, peekW, peekH float32) (w, h floa
 	baseW, baseH := a.anchorSize()
 	lvlW := float32(islandW) + (sheetW-islandW)*levelK
 	lvlH := float32(islandH) + (sheetH-islandH)*levelK
+	if a.snap.panel || a.snap.drawn {
+		// The arrangement panel is its own box; it never morphs through
+		// the sheet's size.
+		lvlW, lvlH = snapW, snapH
+	}
 	w0 := baseW + (peekW-baseW)*peekK
 	h0 := baseH + (peekH-baseH)*peekK
 	return w0 + (lvlW-w0)*openK, h0 + (lvlH-h0)*openK
@@ -389,6 +391,9 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 		return
 	}
 	a.releaseKeys()
+	// A left press delivered to another app may be the start of a window
+	// drag; the arrangement panel follows it from here (snap.go).
+	a.snapPress(false, button, p)
 	menuBottom := a.notchY + max(36, a.notchH+4)
 	if a.island {
 		menuBottom = max(menuBottom, a.y+a.islandTop+islandIdleH)
@@ -694,9 +699,28 @@ func (a *shelf) setPeek(peek bool) {
 	}
 }
 
-// panelH is the sheet's fixed height; both levels' sizes come from the
-// layout constants, never from page content.
-func (a *shelf) panelH() int { return sheetH }
+// panelH is the open panel's fixed height: the arrangement panel while a
+// window-drag session owns the shell, otherwise the sheet's 250. Both come
+// from layout constants, never from page content.
+func (a *shelf) panelH() int {
+	if a.snap.panel || a.snap.drawn {
+		return snapH
+	}
+	return sheetH
+}
+
+// panelBox is the open panel's target size. The arrangement panel replaces
+// the island box; it is reached by the open spring out of the notch, never
+// by a level change.
+func (a *shelf) panelBox() (w, h float32) {
+	if a.snap.panel || a.snap.drawn {
+		return snapW, snapH
+	}
+	if a.currentLevel() == 2 {
+		return sheetW, sheetH
+	}
+	return islandW, islandH
+}
 
 func (a *shelf) show(edge bool) {
 	if a.visible {
@@ -722,6 +746,7 @@ func (a *shelf) show(edge bool) {
 	}
 	a.level = level
 	a.jumpLevel = true
+	a.snap.drawn = a.snap.panel
 	a.visible, a.edgeOpened, a.received = true, edge, false
 	a.dropZoneSnap(edge)
 	a.fx.openMoving = true
@@ -916,6 +941,9 @@ func (a *shelf) hide(exit hideExit) {
 	restore := a.shouldRestoreApp(exit)
 	prev := a.prevAppPID
 	a.visible, a.edgeOpened, a.peeking = false, false, false
+	// Any hide ends the arrangement panel's claim on the shell; its box
+	// stays drawn (snap.drawn) until the fold completes.
+	a.snap.panel = false
 	a.closeAt = time.Now()
 	// 收起也复位层级进度：二级收起后 fx.levelK 若停在 1，下一次打开一级
 	// 的第一帧仍会按二级壳开窗（451pt），在菜单栏图标上方压一层透明窗。

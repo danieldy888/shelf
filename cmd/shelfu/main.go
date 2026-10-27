@@ -101,6 +101,7 @@ func main() {
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		close(a.stop)
 		a.stopDragGuard()
+		a.endSnapSession(true)
 		mygo.GlobalShortcut.UnregisterAll()
 		if a.stopMouseObservation != nil {
 			a.stopMouseObservation()

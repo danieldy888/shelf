@@ -1,0 +1,651 @@
+//go:build darwin
+
+package main
+
+// 拖窗口到刘海分屏: a window dragged by its title bar toward the notch grows
+// the 排列窗口 panel, the hovered tile previews its target on that display,
+// and releasing the button arranges the window with Accessibility.
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"shelf/internal/mac"
+)
+
+const (
+	snapW, snapH   = 360, 150 // 排列窗口面板，从刘海长出
+	snapPadX       = 12
+	snapTitleTop   = 9
+	snapGridTop    = 40
+	snapTileW      = 108
+	snapTileH      = 46
+	snapTileGap    = 6
+	snapTileR      = 11
+	snapMiniW      = 34
+	snapMiniH      = 22
+	snapGhostR     = 12
+	snapGhostEdge  = 2
+	snapZonePad    = 8  // 触发区相对刘海的水平、上沿外扩
+	snapZoneBottom = 40 // 触发区相对刘海下沿再向下
+	snapDragDist   = 4.0
+	snapMovedDist  = 2.0 // AX 帧位置变化多少算窗口真的在动
+	snapGhostOmega = 18  // 预览框弹簧角速度（rad/s，临界阻尼）
+)
+
+// snapTarget is one arrangement: its name and the horizontal span of the
+// window it covers (as fractions of the visible area), drawn in the tile's
+// small screen icon.
+type snapTarget struct {
+	Name     string
+	From, To float32
+}
+
+// snapTargets is the design's order: 左半、全屏、右半、左 1/3、中 1/3、右 1/3.
+var snapTargets = []snapTarget{
+	{"左半", 0, 0.5},
+	{"全屏", 0, 1},
+	{"右半", 0.5, 1},
+	{"左 1/3", 0, 1.0 / 3},
+	{"中 1/3", 1.0 / 3, 2.0 / 3},
+	{"右 1/3", 2.0 / 3, 1},
+}
+
+// snapGhost is the transparent target preview: one floating window with an
+// accent-tinted, accent-outlined rounded rect. It never takes the mouse.
+type snapGhost struct {
+	win            *mygo.Window
+	frame          mygo.Rectangle // last applied screen rect
+	target         mygo.Rectangle
+	x, y, w, h     float64
+	vx, vy, vw, vh float64
+	at             time.Time
+}
+
+// snapWindow is the Accessible window a session follows. The production
+// value is mac.AXWindowRef; tests supply a fake without touching AX.
+type snapWindow interface {
+	Valid() bool
+	Frame() (mac.AXRect, bool)
+	Settable() (move, resize bool)
+	MoveResize(r mac.AXRect, resize bool) error
+	Release()
+}
+
+// snapState is one window-drag session. Zero is idle.
+type snapState struct {
+	armed    bool
+	press    mygo.Point
+	win      snapWindow
+	start    mac.AXRect // window frame at the press
+	frame    mac.AXRect // latest frame read while dragging
+	move     bool       // the window's position is settable
+	resize   bool       // the window's size is settable
+	trusted  bool       // Accessibility at the press
+	dragging bool       // the press turned out to be a window drag
+	hot      int        // hovered tile, -1 for none
+	panel    bool       // the 排列窗口 panel is (or is closing as) the open panel
+	drawn    bool       // the shell currently drawn is the snap box
+	ghost    *snapGhost
+}
+
+// Seams for the headless tests and the smoke run.
+var (
+	snapAXWindowAt = func(x, y float64) (snapWindow, int, bool) {
+		w, pid, ok := mac.AXWindowAt(x, y)
+		if !ok {
+			return nil, 0, false
+		}
+		return w, pid, true
+	}
+	snapOwnPID    = mac.OwnPID
+	snapOwnWindow = func(a *shelf, f mac.AXRect) bool { return a.snapOwnWindowFrame(f) }
+	// snapWorkAreaAt picks the display a window lives on; a seam because
+	// Display queries need the running app, headless tests do not have.
+	snapWorkAreaAt = func(p mygo.Point) mygo.Rectangle {
+		return mygo.Screen.DisplayNearestPoint(p).WorkArea
+	}
+)
+
+// snapSlotRect is one arrangement's target in a display's visible frame
+// (menu bar and Dock excluded). Needle edges share the boundary, so the six
+// targets tile the frame exactly. Pure; unit-tested.
+func snapSlotRect(work mygo.Rectangle, slot int) mygo.Rectangle {
+	if slot < 0 || slot >= len(snapTargets) {
+		return mygo.Rectangle{}
+	}
+	x0, x1 := 0, work.Width
+	switch slot {
+	case 0: // 左半
+		x1 = work.Width / 2
+	case 1: // 全屏
+	case 2: // 右半
+		x0 = work.Width / 2
+	case 3, 4, 5: // 三等分
+		i := slot - 3
+		x0, x1 = work.Width*i/3, work.Width*(i+1)/3
+	}
+	return mygo.Rectangle{X: work.X + x0, Y: work.Y, Width: x1 - x0, Height: work.Height}
+}
+
+// snapAnchorRect is the resting anchor on screen: the measured hardware
+// notch, or the floating island capsule. islandTop is where the shell
+// starts inside the window (0 for the notch), so the trigger, the panel
+// and the drawn shell all share one origin. Pure; unit-tested.
+func snapAnchorRect(stripCenter, y, islandTop int, w, h float32) mygo.Rectangle {
+	return mygo.Rectangle{
+		X: stripCenter - int(w/2), Y: y + islandTop,
+		Width: int(w + 0.5), Height: int(h + 0.5),
+	}
+}
+
+// snapTriggerRect is the anchor's hot zone: its rectangle grown by
+// snapZonePad on every side and another snapZoneBottom below its lower
+// edge. Under the island style it follows the floating capsule. Pure;
+// unit-tested.
+func snapTriggerRect(anchor mygo.Rectangle) mygo.Rectangle {
+	return mygo.Rectangle{
+		X:      anchor.X - snapZonePad,
+		Y:      anchor.Y - snapZonePad,
+		Width:  anchor.Width + 2*snapZonePad,
+		Height: anchor.Height + 2*snapZonePad + snapZoneBottom,
+	}
+}
+
+// snapPanelRect is the panel's on-screen box: centred on the anchor, its
+// top edge where the shell starts (the notch's top, or the island's
+// floating top). Pure.
+func snapPanelRect(stripCenter, top int) mygo.Rectangle {
+	return mygo.Rectangle{X: stripCenter - snapW/2, Y: top, Width: snapW, Height: snapH}
+}
+
+// snapTileRect is one tile's box in screen coordinates. Pure.
+func snapTileRect(panel mygo.Rectangle, slot int) mygo.Rectangle {
+	col, row := slot%3, slot/3
+	return mygo.Rectangle{
+		X:      panel.X + snapPadX + col*(snapTileW+snapTileGap),
+		Y:      panel.Y + snapGridTop + row*(snapTileH+snapTileGap),
+		Width:  snapTileW,
+		Height: snapTileH,
+	}
+}
+
+// snapHotSlot is the tile under p, or -1 over a gap or outside the grid.
+// Pure; unit-tested.
+func snapHotSlot(panel mygo.Rectangle, p mygo.Point) int {
+	for i := range snapTargets {
+		if insideRect(p, snapTileRect(panel, i)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// snapIsWindowDrag decides whether an armed press has become a window drag.
+// A file drag is never one. With Accessibility the press must have landed
+// on a movable window and that window's position must have changed; without
+// it the panel still appears, greyed out, so the user learns what is
+// missing — movement alone is the only signal available then. Pure;
+// unit-tested.
+func snapIsWindowDrag(trusted, pressedWindow, movable, fileDrag bool, distance, frameMoved float64) bool {
+	if fileDrag {
+		return false
+	}
+	if !trusted {
+		return distance >= snapDragDist
+	}
+	return pressedWindow && movable && frameMoved >= snapMovedDist
+}
+
+// snapPress starts (or replaces) a window-drag session at a left press.
+// Presses on the shelf and its own interface windows never arm it.
+func (a *shelf) snapPress(inside bool, button int, p mygo.Point) {
+	if button != 0 || inside {
+		return
+	}
+	a.endSnapSession(false)
+	if a.quitting || !a.settings.SnapWindows || a.notchW <= 0 || a.notchH <= 0 {
+		return
+	}
+	s := &a.snap
+	s.armed, s.press, s.hot = true, p, -1
+	s.trusted = accessibilityProbe()
+	if !s.trusted {
+		return
+	}
+	w, pid, ok := snapAXWindowAt(float64(p.X), float64(p.Y))
+	if !ok {
+		s.armed = false
+		return
+	}
+	move, resize := w.Settable()
+	f, fok := w.Frame()
+	if !move || !fok {
+		w.Release()
+		s.armed = false
+		return
+	}
+	if pid == snapOwnPID() && snapOwnWindow(a, f) {
+		w.Release()
+		s.armed = false
+		return
+	}
+	s.win, s.move, s.resize = w, move, resize
+	s.start, s.frame = f, f
+}
+
+// snapOwnWindowFrame reports whether f is one of ShelfU's own interface
+// windows: the notch overlay, a desktop pin, the basket, the preview, the
+// Settings or 重新命名 window. AXWindowNumber is unsupported on macOS 27,
+// so the frame is what identifies them. A normal window of the same
+// process (the smoke test's, for one) is not ShelfU's interface and may be
+// arranged.
+func (a *shelf) snapOwnWindowFrame(f mac.AXRect) bool {
+	if f.Width <= 0 || f.Height <= 0 {
+		return false
+	}
+	var handles []uintptr
+	if a.win != nil {
+		handles = append(handles, a.win.NativeHandle())
+	}
+	if a.settingsWin != nil {
+		handles = append(handles, a.settingsWin.NativeHandle())
+	}
+	if a.rn != nil && a.rn.win != nil {
+		handles = append(handles, a.rn.win.NativeHandle())
+	}
+	if a.basket.win != nil {
+		handles = append(handles, a.basket.win.NativeHandle())
+	}
+	if a.snap.ghost != nil && a.snap.ghost.win != nil {
+		handles = append(handles, a.snap.ghost.win.NativeHandle())
+	}
+	for _, it := range a.pins {
+		if it.win != nil {
+			handles = append(handles, it.win.NativeHandle())
+		}
+	}
+	for _, h := range handles {
+		num := mac.WindowNumber(h)
+		if num == 0 {
+			continue
+		}
+		r, ok := mac.WindowScreenRect(num)
+		if !ok {
+			continue
+		}
+		if math.Abs(r.Origin.X-f.X) <= 1 && math.Abs(r.Origin.Y-f.Y) <= 1 &&
+			math.Abs(r.Size.Width-f.Width) <= 1 && math.Abs(r.Size.Height-f.Height) <= 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// snapTick follows an armed press while it is held and finishes the
+// session on release. fileDrag is the system drag pasteboard state: a drag
+// that wrote the pasteboard is a file drag, not a window move.
+func (a *shelf) snapTick(now time.Time, p mygo.Point, fileDrag bool) {
+	s := &a.snap
+	if s.armed {
+		if fileDrag {
+			a.endSnapSession(true)
+		} else if down := dragLeftDown(); !down {
+			a.snapRelease(p)
+		} else {
+			dx, dy := float64(p.X-s.press.X), float64(p.Y-s.press.Y)
+			moved, window := 0.0, s.win != nil && s.win.Valid()
+			if window {
+				if f, ok := s.win.Frame(); ok {
+					s.frame = f
+					moved = math.Abs(f.X-s.start.X) + math.Abs(f.Y-s.start.Y)
+				}
+			}
+			s.dragging = snapIsWindowDrag(s.trusted, window, s.move, false,
+				math.Hypot(dx, dy), moved)
+			if !s.dragging {
+				a.advanceGhost(now)
+				return
+			}
+			trigger := snapTriggerRect(a.snapAnchor())
+			panel := snapPanelRect(a.stripCenter(), a.y+a.sheetTop())
+			if !s.panel && insideRect(p, trigger) {
+				a.openSnapPanel()
+			}
+			if s.panel {
+				// Once open, the panel itself is part of the active area:
+				// the pointer must be able to travel down to the tiles.
+				if !insideRect(p, trigger) && !insideRect(p, panel) {
+					a.endSnapSession(true)
+					a.advanceGhost(now)
+					return
+				}
+				a.snapHover(p)
+			}
+		}
+	}
+	a.advanceGhost(now)
+}
+
+// snapHover updates the hovered tile and the preview box. Without
+// Accessibility there is nothing to arrange: no tile lights up and no
+// preview appears, only the permission row.
+func (a *shelf) snapHover(p mygo.Point) {
+	s := &a.snap
+	s.hot = -1
+	if s.trusted && s.win != nil && s.win.Valid() {
+		s.hot = snapHotSlot(snapPanelRect(a.stripCenter(), a.y+a.sheetTop()), p)
+	}
+	if s.hot < 0 {
+		a.closeGhost()
+		return
+	}
+	target := snapSlotRect(snapWorkAreaAt(screenPointOf(s.frame)), s.hot)
+	a.showGhost(target)
+}
+
+// snapRelease finishes the press: arrange on the hovered tile, or cancel.
+// Without Accessibility a panel that appeared stays open with what it is
+// waiting for; the user can click 开启 (or anywhere else to dismiss it).
+func (a *shelf) snapRelease(p mygo.Point) {
+	s := &a.snap
+	hadPanel := s.panel
+	target := -1
+	if s.dragging && s.trusted && s.win != nil && s.win.Valid() {
+		if f, ok := s.win.Frame(); ok {
+			s.frame = f
+		}
+		target = snapHotSlot(snapPanelRect(a.stripCenter(), a.y+a.sheetTop()), p)
+	}
+	resizeErr, moveErr := false, false
+	resize := s.resize
+	if target >= 0 {
+		r := snapSlotRect(snapWorkAreaAt(screenPointOf(s.frame)), target)
+		err := s.win.MoveResize(mac.AXRect{
+			X: float64(r.X), Y: float64(r.Y),
+			Width: float64(r.Width), Height: float64(r.Height),
+		}, resize)
+		switch {
+		case errors.Is(err, mac.ErrAXResize):
+			resizeErr = true
+		case err != nil:
+			moveErr = true
+		}
+	}
+	keepForPermission := hadPanel && !s.trusted
+	a.endSnapSession(!keepForPermission)
+	// The result grows out of the notch as a capsule; the panel is folding
+	// while this is posted, so it cannot land in the island's pill.
+	switch {
+	case resizeErr || (target >= 0 && !resize):
+		a.toastStatus("这个窗口不能调整大小", time.Now().Add(4*time.Second), statusInfo)
+	case moveErr:
+		a.toastStatus("无法移动这个窗口", time.Now().Add(4*time.Second), statusErr)
+	}
+}
+
+// endSnapSession drops the AX reference and the preview; hidePanel also
+// folds a panel the session opened. The panel's shell geometry is retired
+// by view() once the fold is over.
+func (a *shelf) endSnapSession(hidePanel bool) {
+	s := &a.snap
+	if s.win != nil {
+		s.win.Release()
+	}
+	s.win = nil
+	s.armed, s.dragging, s.move, s.resize = false, false, false, false
+	s.press = mygo.Point{}
+	s.hot = -1
+	a.closeGhost()
+	if hidePanel {
+		a.removeSnapPanel()
+	}
+}
+
+// openSnapPanel shows the shelf as the 360 × 150 arrangement panel.
+func (a *shelf) openSnapPanel() {
+	s := &a.snap
+	if s.panel {
+		return
+	}
+	s.panel = true
+	s.hot = -1
+	a.show(false)
+}
+
+// removeSnapPanel folds a snap panel away. drawn stays true until the fold
+// finishes so the shell animates from its own box, not from the island.
+func (a *shelf) removeSnapPanel() {
+	s := &a.snap
+	if !s.panel {
+		return
+	}
+	s.panel = false
+	if a.visible {
+		a.hide(hidePassive)
+	}
+}
+
+// openSnapPermissions is the panel's 开启 button: the existing single
+// permission flow, which opens Settings and walks the missing items.
+func (a *shelf) openSnapPermissions() {
+	a.removeSnapPanel()
+	a.showPermissions()
+}
+
+// snapAnchor is the current display's resting shell box on screen: the
+// measured notch, or the island's floating capsule.
+func (a *shelf) snapAnchor() mygo.Rectangle {
+	w, h := a.anchorSize()
+	return snapAnchorRect(a.stripCenter(), a.y, a.islandTop, w, h)
+}
+
+// screenPointOf is the AX frame's centre as the point that picks a display.
+func screenPointOf(r mac.AXRect) mygo.Point {
+	return mygo.Point{X: int(math.Round(r.X + r.Width/2)), Y: int(math.Round(r.Y + r.Height/2))}
+}
+
+// setSnapWindows saves the setting; switching it off ends any session and
+// folds a panel the session opened.
+func (a *shelf) setSnapWindows(on bool) {
+	if a.settings.SnapWindows == on {
+		return
+	}
+	next := a.settings
+	next.SnapWindows = on
+	if !a.applySettings(next) {
+		return
+	}
+	if !on {
+		a.endSnapSession(true)
+	}
+}
+
+// showGhost points the preview box at target, creating its window on the
+// first hover. Moving the window to the next tile is the spring in
+// advanceGhost, not a jump.
+func (a *shelf) showGhost(target mygo.Rectangle) {
+	s := &a.snap
+	if target.Width <= 0 || target.Height <= 0 {
+		return
+	}
+	g := s.ghost
+	if g == nil {
+		g = &snapGhost{}
+		s.ghost = g
+		g.target = target
+		g.frame = target
+		g.x, g.y, g.w, g.h = float64(target.X), float64(target.Y), float64(target.Width), float64(target.Height)
+		if a.win != nil {
+			a.openGhostWindow(g)
+		}
+		return
+	}
+	g.target = target
+}
+
+// advanceGhost steps the preview's spring and applies the new frame. The
+// window never takes the mouse; a headless shelf only keeps the target so
+// the hover logic stays testable.
+func (a *shelf) advanceGhost(now time.Time) {
+	g := a.snap.ghost
+	if g == nil {
+		return
+	}
+	if g.at.IsZero() {
+		g.at = now
+		return
+	}
+	dt := min(max(now.Sub(g.at).Seconds(), 0), 0.1)
+	g.at = now
+	if dt > 0 {
+		step := func(cur, vel *float64, target float64) {
+			acc := snapGhostOmega*snapGhostOmega*(target-*cur) - 2*snapGhostOmega**vel
+			*vel += acc * dt
+			*cur += *vel * dt
+		}
+		step(&g.x, &g.vx, float64(g.target.X))
+		step(&g.y, &g.vy, float64(g.target.Y))
+		step(&g.w, &g.vw, float64(g.target.Width))
+		step(&g.h, &g.vh, float64(g.target.Height))
+	}
+	r := mygo.Rectangle{
+		X: int(math.Round(g.x)), Y: int(math.Round(g.y)),
+		Width: max(1, int(math.Round(g.w))), Height: max(1, int(math.Round(g.h))),
+	}
+	if r == g.frame {
+		return
+	}
+	g.frame = r
+	if g.win != nil {
+		mac.SetWindowFrame(g.win.NativeHandle(), r.X, r.Y, r.Width, r.Height)
+		g.win.Invalidate()
+	}
+}
+
+// openGhostWindow creates the preview's native window at its target.
+func (a *shelf) openGhostWindow(g *snapGhost) {
+	f := g.frame
+	w := mygo.NewWindow(mygo.WindowOptions{
+		Title: appName + " 排列预览", Width: f.Width, Height: f.Height,
+		X: f.X, Y: f.Y,
+		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
+		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,
+		DisableMove: true, DisableResize: true, DisableMinimize: true, DisableMaximize: true, DisableFullScreen: true,
+		Content: ui.View(snapGhostView),
+	})
+	g.win = w
+	w.SetVisibleOnAllWorkspaces(true)
+	mac.ConfigureDragPreview(w.NativeHandle(), a.windowLevel())
+	mac.SetWindowFrame(w.NativeHandle(), f.X, f.Y, f.Width, f.Height)
+	w.ShowInactive()
+}
+
+// closeGhost destroys the preview window. Idempotent.
+func (a *shelf) closeGhost() {
+	g := a.snap.ghost
+	a.snap.ghost = nil
+	if g != nil && g.win != nil {
+		g.win.Destroy()
+	}
+}
+
+// snapGhostView paints the preview: accent 16% fill, 2pt accent edge,
+// 12pt corners, nothing else.
+func snapGhostView(c *ui.Context) {
+	c.Root().Background(ui.Transparent)
+	ui.Column(c.Key("ghost")).Fill().Radius(snapGhostR).
+		Background(accent16).Border(snapGhostEdge, accent)
+}
+
+// snapView lays out the 360 × 150 panel: the title at the top left, the
+// 3 × 2 tile grid, and — without Accessibility — the permission row over
+// the greyed out tiles.
+func (a *shelf) snapView(c *ui.Context) {
+	trusted := a.snap.trusted
+	ui.Column(c.Key("snap")).Width(snapW).Height(snapH).Children(func() {
+		panelLabel(c, "snap-title", "排列窗口", 11, 600).
+			Absolute().Left(14).Top(snapTitleTop).TextColor(ink3)
+		grid := ui.Column(c.Key("snap-grid")).Absolute().Left(snapPadX).Top(snapGridTop).
+			Width(3*snapTileW + 2*snapTileGap).Gap(snapTileGap)
+		grid.Disabled(!trusted)
+		if !trusted {
+			grid = grid.Opacity(0.35)
+		}
+		grid.Children(func() {
+			for row := range 2 {
+				ui.Row(c.Key(fmt.Sprintf("snap-row-%d", row))).FillWidth().Gap(snapTileGap).Children(func() {
+					for col := range 3 {
+						a.snapTile(c, row*3+col, trusted)
+					}
+				})
+			}
+		})
+		if !trusted {
+			a.snapPermissionRow(c)
+		}
+	})
+}
+
+// snapTile draws one arrangement: a small screen icon with the target
+// region, then its name. The hovered tile takes the accent fill and edge.
+func (a *shelf) snapTile(c *ui.Context, slot int, trusted bool) {
+	t := snapTargets[slot]
+	hot := trusted && a.snap.hot == slot
+	tile := ui.Row(c.Key(fmt.Sprintf("snap-tile-%d", slot))).Width(snapTileW).Height(snapTileH).
+		Radius(snapTileR).Padding(0, 10).Gap(8).AlignItems(ui.Center).
+		Label(t.Name)
+	if hot {
+		tile.Background(accent.Alpha(0.28)).Border(1.5, accent)
+	} else {
+		tile.Background(fill1)
+	}
+	tile.Children(func() {
+		mini := ui.Box(c.Key(fmt.Sprintf("snap-mini-%d", slot))).Width(snapMiniW).Height(snapMiniH)
+		mini.Draw(func(p *ui.Painter, r ui.Rect) {
+			edge, inner := ui.RGBA(255, 255, 255, 0.45), ui.RGBA(255, 255, 255, 0.55)
+			if hot {
+				edge, inner = ui.Hex("#FFFFFF"), accent
+			}
+			p.Stroke(r, edge, 4, 1.4)
+			x := r.X + r.W*t.From
+			p.Fill(ui.Rect{X: x, Y: r.Y + 1.4, W: r.W * (t.To - t.From), H: r.H - 2.8}, inner, 1)
+		})
+		name := panelLabel(c, fmt.Sprintf("snap-name-%d", slot), t.Name, 11.5, 600)
+		if hot {
+			name.TextColor(ink)
+		} else {
+			name.TextColor(ink2)
+		}
+	})
+}
+
+// snapPermissionRow is the panel's one line without Accessibility: what is
+// missing and the button that starts the existing permission flow.
+func (a *shelf) snapPermissionRow(c *ui.Context) {
+	ui.Row(c.Key("snap-perm")).Absolute().Left(0).Right(0).Top(58).Height(34).
+		Justify(ui.Center).Children(func() {
+		row := ui.Row(c.Key("snap-perm-pill")).Height(26).Radius(13).
+			Background(ui.RGBA(0, 0, 0, 0.9)).Border(0.5, fill2).
+			Padding(0, 10).Gap(8).AlignItems(ui.Center)
+		row.Children(func() {
+			ui.Text(c, "需要「辅助功能」权限").SingleLine().FontSize(11.5).TextColor(ink2)
+			b := ui.ButtonBase(c.Key("snap-perm-open")).Height(20).Radius(10).
+				Padding(0, 10).Center().Background(accent).Label("开启")
+			if b.Hovered() {
+				b.Background(accent.Alpha(0.8))
+			}
+			b.Children(func() {
+				ui.Text(c, "开启").SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
+			})
+			if b.Clicked() {
+				a.openSnapPermissions()
+			}
+		})
+	})
+}

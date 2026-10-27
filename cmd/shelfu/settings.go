@@ -392,6 +392,11 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 				}
 			})
 		})
+		settingsSep(c, "snap")
+		ui.Column(c.Key("snap")).Disabled(a.settingsBroken).FillWidth().Children(func() {
+			settingsToggleCap(c, "snap", "拖窗口到刘海分屏", "把窗口拖到刘海，松手就排好", setInk3,
+				a.settings.SnapWindows, a.setSnapWindows)
+		})
 	})
 }
 

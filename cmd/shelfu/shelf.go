@@ -92,6 +92,7 @@ type shelf struct {
 	updateProgress                                              float64 // download progress while installing
 	updateNext                                                  time.Time
 	guard                                                       dragGuard
+	snap                                                        snapState // 拖窗口到刘海分屏 session / panel
 	escHeld, spaceHeld, cmdCHeld                                bool
 	selection                                                   selection
 	stopMouseObservation, stopDragObservation                   func()
