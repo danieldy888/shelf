@@ -794,6 +794,15 @@ func (a *shelf) islandView(c *ui.Context) {
 	ui.Column(c.Key("island")).Width(islandW).Height(islandH).Children(func() {
 		a.bandRow(c, true)
 		a.islandRow(c)
+		if a.status != "" {
+			// The island has no page content and therefore no toast layer;
+			// a status posted while it is open (a failed snap, a copy) still
+			// has to be readable. The pill sits in the bottom padding,
+			// below the 56pt row's content.
+			stack := ui.Column(c.Key("island-toast")).Absolute().Left(16).Right(16).Bottom(0).
+				AlignItems(ui.Center).PassThrough()
+			stack.Children(func() { a.statusToast(c) })
+		}
 	})
 }
 

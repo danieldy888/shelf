@@ -22,6 +22,9 @@ type fakeSnapWindow struct {
 	moves    []mac.AXRect
 	resizes  []bool
 	err      error
+	// tiled is a frame the window server applies right after the first
+	// move, standing in for its own drag-time tiling.
+	tiled *mac.AXRect
 }
 
 func (f *fakeSnapWindow) Valid() bool               { return !f.released }
@@ -33,6 +36,10 @@ func (f *fakeSnapWindow) MoveResize(r mac.AXRect, resize bool) error {
 	f.resizes = append(f.resizes, resize)
 	if f.err == nil && !f.released {
 		f.rect = r
+		if f.tiled != nil {
+			f.rect = *f.tiled
+			f.tiled = nil
+		}
 	}
 	return f.err
 }
@@ -221,7 +228,8 @@ func TestSnapIsWindowDrag(t *testing.T) {
 		frameMoved float64
 		want       bool
 	}{
-		{"file drag never snaps", true, true, true, true, 100, 100, false},
+		{"file drag with a still window", true, true, true, true, 100, 0, false},
+		{"a window moving wins over the pasteboard", true, true, true, true, 100, 12, true},
 		{"window moved", true, true, true, false, 40, 12, true},
 		{"window not moving", true, true, true, false, 40, 0, false},
 		{"press was not a window", true, false, false, false, 40, 12, false},
@@ -291,8 +299,14 @@ func TestSnapSessionArrangesAndCloses(t *testing.T) {
 		t.Fatalf("after release: visible=%v panel=%v armed=%v ghost=%v",
 			a.visible, a.snap.panel, a.snap.armed, a.snap.ghost)
 	}
-	if !f.released {
-		t.Fatal("the AX window reference leaked")
+	// The arrangement is verified after the drag settles; the reference is
+	// held until that check (or its retries) is over.
+	if a.snap.confirm == nil || f.released {
+		t.Fatalf("after release: confirm=%v released=%v, want a pending check", a.snap.confirm, f.released)
+	}
+	a.snapTick(time.Now().Add(300*time.Millisecond), mygo.Point{X: 576, Y: 63}, false)
+	if a.snap.confirm != nil || !f.released {
+		t.Fatalf("verification did not finish: confirm=%v released=%v", a.snap.confirm, f.released)
 	}
 }
 
@@ -321,6 +335,10 @@ func TestSnapOnlyMovesUnresizableWindow(t *testing.T) {
 	}
 	if a.status != "这个窗口不能调整大小" {
 		t.Fatalf("status = %q, want the resize notice", a.status)
+	}
+	a.snapTick(time.Now().Add(300*time.Millisecond), mygo.Point{X: 576, Y: 63}, false)
+	if a.snap.confirm != nil || !f.released {
+		t.Fatalf("verification did not finish: confirm=%v released=%v", a.snap.confirm, f.released)
 	}
 }
 
@@ -420,6 +438,83 @@ func TestSnapPanelTakesOverOpenShelf(t *testing.T) {
 	}
 }
 
+// A failed snap that restores the first-level island must still show its
+// notice: the island has no page toast layer, so it draws the status pill
+// itself. The old code posted a status nothing rendered and lost it after
+// four seconds.
+func TestSnapFailureNoticeShowsOnIsland(t *testing.T) {
+	a, _ := levelShelf(t)
+	a.notchX, a.notchY, a.notchW, a.notchH = 600, 0, 180, 32
+	a.x, a.y = 410, 0
+	a.visible, a.level = true, 1
+	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400}, move: true, resize: false}
+	s := &snapSeams{fake: f, pid: 4242, trusted: true, down: true,
+		work: mygo.Rectangle{X: 0, Y: 25, Width: 1470, Height: 750}}
+	installSnapSeams(t, s)
+	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
+	f.rect.X -= 60
+	a.snapTick(time.Now(), mygo.Point{X: 690, Y: 10}, false) // takes over the island
+	if !a.snap.panel || a.level != 1 {
+		t.Fatalf("the snap panel did not take over: panel=%v level=%d", a.snap.panel, a.level)
+	}
+	f.rect.X -= 20
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false) // 左半
+	s.down = false
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false)
+	if a.status != "这个窗口不能调整大小" {
+		t.Fatalf("status = %q, want the resize notice", a.status)
+	}
+	if !a.visible || a.level != 1 || a.snap.drawn {
+		t.Fatalf("island not restored: visible=%v level=%d drawn=%v", a.visible, a.level, a.snap.drawn)
+	}
+	view := ui.NewTester(a.view, islandW, islandH)
+	view.Frame()
+	if !view.HasText("这个窗口不能调整大小") {
+		t.Fatalf("the island did not draw the notice; texts %v", view.Texts())
+	}
+}
+
+// A frame the window server changes right after the AX move (its own
+// drag-time tiling) must not win: the shelf looks again after the drag has
+// settled and sets its target a second time.
+func TestSnapReappliesAFrameTheWindowServerChanged(t *testing.T) {
+	a := snapTestShelf()
+	tiled := mac.AXRect{X: 0, Y: 25, Width: 490, Height: 750}
+	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400},
+		move: true, resize: true, tiled: &tiled}
+	s := &snapSeams{fake: f, pid: 4242, trusted: true, down: true,
+		work: mygo.Rectangle{X: 0, Y: 25, Width: 1470, Height: 750}}
+	installSnapSeams(t, s)
+	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
+	f.rect.X -= 60
+	a.snapTick(time.Now(), mygo.Point{X: 690, Y: 10}, false)
+	f.rect.X -= 20
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false)
+	s.down = false
+	a.snapTick(time.Now(), mygo.Point{X: 576, Y: 63}, false)
+	if len(f.moves) != 1 {
+		t.Fatalf("first move count = %d, want 1", len(f.moves))
+	}
+	if f.rect.Width != 490 {
+		t.Fatalf("the tiled frame was not applied: %+v", f.rect)
+	}
+	if a.snap.confirm == nil {
+		t.Fatal("no verification was kept")
+	}
+	// The verification is due after the drag settles.
+	a.snapTick(time.Now().Add(200*time.Millisecond), mygo.Point{X: 576, Y: 63}, false)
+	if len(f.moves) != 2 || f.moves[1] != (mac.AXRect{X: 0, Y: 25, Width: 735, Height: 750}) {
+		t.Fatalf("verification moves = %+v, want a second move to the left half", f.moves)
+	}
+	if f.rect.Width != 735 {
+		t.Fatalf("the target did not win: %+v", f.rect)
+	}
+	a.snapTick(time.Now().Add(600*time.Millisecond), mygo.Point{X: 576, Y: 63}, false)
+	if a.snap.confirm != nil || !f.released {
+		t.Fatalf("the verification did not finish: confirm=%v released=%v", a.snap.confirm, f.released)
+	}
+}
+
 func TestSnapLeavingTriggerCancels(t *testing.T) {
 	a := snapTestShelf()
 	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400}, move: true, resize: true}
@@ -454,13 +549,31 @@ func TestSnapFileDragNeverOpensPanel(t *testing.T) {
 	installSnapSeams(t, s)
 
 	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
-	f.rect.X -= 60
 	a.snapTick(time.Now(), mygo.Point{X: 690, Y: 10}, true)
 	if a.visible || a.snap.panel || a.snap.armed {
 		t.Fatalf("a file drag armed the snap panel: visible=%v panel=%v armed=%v", a.visible, a.snap.panel, a.snap.armed)
 	}
 	if !f.released {
 		t.Fatal("the file drag leaked the AX reference")
+	}
+}
+
+// macOS can write the drag pasteboard for a window move. A confirmed
+// window whose frame is changing is still a window drag, not a file drag.
+// The old code cancelled the session on the pasteboard bit alone.
+func TestSnapMovingWindowOutranksAFileDragPasteboard(t *testing.T) {
+	a := snapTestShelf()
+	f := &fakeSnapWindow{rect: mac.AXRect{X: 700, Y: 300, Width: 500, Height: 400}, move: true, resize: true}
+	s := &snapSeams{fake: f, pid: 4242, trusted: true, down: true,
+		work: mygo.Rectangle{X: 0, Y: 25, Width: 1470, Height: 750}}
+	installSnapSeams(t, s)
+	a.snapPress(false, 0, mygo.Point{X: 700, Y: 300})
+	f.rect.X -= 30
+	f.rect.Y -= 280
+	a.snapTick(time.Now(), mygo.Point{X: 690, Y: 10}, true)
+	if !a.snap.armed || !a.snap.dragging || !a.visible || !a.snap.panel {
+		t.Fatalf("a moving window was cancelled by the drag pasteboard: armed=%v dragging=%v visible=%v panel=%v",
+			a.snap.armed, a.snap.dragging, a.visible, a.snap.panel)
 	}
 }
 

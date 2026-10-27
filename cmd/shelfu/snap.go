@@ -36,6 +36,10 @@ const (
 	snapDragDist   = 4.0
 	snapMovedDist  = 2.0 // AX 帧位置变化多少算窗口真的在动
 	snapGhostOmega = 18  // 预览框弹簧角速度（rad/s，临界阻尼）
+	snapConfirmAt  = 120 * time.Millisecond
+	snapConfirmGap = 180 * time.Millisecond
+	snapConfirmMax = 2
+	snapConfirmTol = 2.0
 )
 
 // snapTarget is one arrangement: its name and the horizontal span of the
@@ -67,6 +71,18 @@ type snapGhost struct {
 	at             time.Time
 }
 
+// snapConfirm is an arrangement applied at release that the shelf keeps
+// checking for a moment. The window server may finish its own drag-time
+// tiling after the AX frame is set; a second look and one re-apply makes
+// ShelfU's target stick.
+type snapConfirm struct {
+	win    snapWindow
+	target mac.AXRect
+	resize bool
+	at     time.Time
+	tries  int
+}
+
 // snapWindow is the Accessible window a session follows. The production
 // value is mac.AXWindowRef; tests supply a fake without touching AX.
 type snapWindow interface {
@@ -82,17 +98,18 @@ type snapState struct {
 	armed     bool
 	press     mygo.Point
 	win       snapWindow
-	start     mac.AXRect // window frame at the press
-	frame     mac.AXRect // latest frame read while dragging
-	move      bool       // the window's position is settable
-	resize    bool       // the window's size is settable
-	trusted   bool       // Accessibility at the press
-	dragging  bool       // the press turned out to be a window drag
-	hot       int        // hovered tile, -1 for none
-	panel     bool       // the 排列窗口 panel is (or is closing as) the open panel
-	drawn     bool       // the shell currently drawn is the snap box
-	wasOpen   bool       // the shelf panel was already open when the snap panel took over
-	prevLevel int        // that panel's level, restored when the snap panel leaves
+	start     mac.AXRect   // window frame at the press
+	frame     mac.AXRect   // latest frame read while dragging
+	move      bool         // the window's position is settable
+	resize    bool         // the window's size is settable
+	trusted   bool         // Accessibility at the press
+	dragging  bool         // the press turned out to be a window drag
+	hot       int          // hovered tile, -1 for none
+	panel     bool         // the 排列窗口 panel is (or is closing as) the open panel
+	drawn     bool         // the shell currently drawn is the snap box
+	wasOpen   bool         // the shelf panel was already open when the snap panel took over
+	prevLevel int          // that panel's level, restored when the snap panel leaves
+	confirm   *snapConfirm // the arrangement still being verified after the drag
 	ghost     *snapGhost
 }
 
@@ -196,19 +213,23 @@ func snapHotSlot(panel mygo.Rectangle, p mygo.Point) int {
 }
 
 // snapIsWindowDrag decides whether an armed press has become a window drag.
-// A file drag is never one. With Accessibility the press must have landed
-// on a movable window and that window's position must have changed; without
-// it the panel still appears, greyed out, so the user learns what is
-// missing — movement alone is the only signal available then. Pure;
-// unit-tested.
+// A confirmed window whose position is changing wins even when the drag
+// pasteboard changed: macOS starts a drag session for some window moves
+// too. A file drag leaves the window still, so it never reaches that test.
+// Without Accessibility the panel still appears, greyed out, so the user
+// learns what is missing — movement alone is the only signal available
+// then. Pure; unit-tested.
 func snapIsWindowDrag(trusted, pressedWindow, movable, fileDrag bool, distance, frameMoved float64) bool {
+	if trusted && pressedWindow && movable && frameMoved >= snapMovedDist {
+		return true
+	}
 	if fileDrag {
 		return false
 	}
 	if !trusted {
 		return distance >= snapDragDist
 	}
-	return pressedWindow && movable && frameMoved >= snapMovedDist
+	return false
 }
 
 // snapPress starts (or replaces) a window-drag session at a left press.
@@ -217,6 +238,7 @@ func (a *shelf) snapPress(inside bool, button int, p mygo.Point) {
 	if button != 0 || inside {
 		return
 	}
+	a.flushSnapConfirm()
 	a.endSnapSession(false)
 	if a.quitting || !a.settings.SnapWindows || a.notchW <= 0 || a.notchH <= 0 {
 		return
@@ -300,22 +322,26 @@ func (a *shelf) snapOwnWindowFrame(f mac.AXRect) bool {
 // session on release. fileDrag is the system drag pasteboard state: a drag
 // that wrote the pasteboard is a file drag, not a window move.
 func (a *shelf) snapTick(now time.Time, p mygo.Point, fileDrag bool) {
+	a.snapConfirmTick(now)
 	s := &a.snap
 	if s.armed {
-		if fileDrag {
+		dx, dy := float64(p.X-s.press.X), float64(p.Y-s.press.Y)
+		moved, window := 0.0, s.win != nil && s.win.Valid()
+		if window {
+			if f, ok := s.win.Frame(); ok {
+				s.frame = f
+				moved = math.Abs(f.X-s.start.X) + math.Abs(f.Y-s.start.Y)
+			}
+		}
+		movingWindow := s.trusted && window && s.move && moved >= snapMovedDist
+		if fileDrag && !movingWindow {
+			// A drag that wrote the pasteboard and left the window still
+			// is a file drag; the drop zone keeps that gesture.
 			a.endSnapSession(true)
 		} else if down := dragLeftDown(); !down {
 			a.snapRelease(p)
 		} else {
-			dx, dy := float64(p.X-s.press.X), float64(p.Y-s.press.Y)
-			moved, window := 0.0, s.win != nil && s.win.Valid()
-			if window {
-				if f, ok := s.win.Frame(); ok {
-					s.frame = f
-					moved = math.Abs(f.X-s.start.X) + math.Abs(f.Y-s.start.Y)
-				}
-			}
-			s.dragging = snapIsWindowDrag(s.trusted, window, s.move, false,
+			s.dragging = snapIsWindowDrag(s.trusted, window, s.move, fileDrag,
 				math.Hypot(dx, dy), moved)
 			if !s.dragging {
 				a.advanceGhost(now)
@@ -375,6 +401,8 @@ func (a *shelf) snapRelease(p mygo.Point) {
 	// may arrange anything. A hidden 360 × 150 box is not a target: the
 	// drag can end beside the notch without ever opening it.
 	if s.panel && a.visible && s.dragging && s.trusted && s.win != nil && s.win.Valid() {
+		// Read the window once: the tile is computed from the same panel
+		// geometry that is logged and used for the move.
 		if f, ok := s.win.Frame(); ok {
 			s.frame = f
 		}
@@ -384,16 +412,23 @@ func (a *shelf) snapRelease(p mygo.Point) {
 	resize := s.resize
 	if target >= 0 {
 		r := snapSlotRect(snapWorkAreaAt(screenPointOf(s.frame)), target)
-		err := s.win.MoveResize(mac.AXRect{
+		want := mac.AXRect{
 			X: float64(r.X), Y: float64(r.Y),
 			Width: float64(r.Width), Height: float64(r.Height),
-		}, resize)
+		}
+		err := s.win.MoveResize(want, resize)
 		switch {
 		case errors.Is(err, mac.ErrAXResize):
 			resizeErr = true
 		case err != nil:
 			moveErr = true
 		}
+		// The window server can finish its drag-time tiling a frame or two
+		// after this call and overwrite the frame. Keep the reference and
+		// look again; a mismatch is re-applied once or twice.
+		s.confirm = &snapConfirm{win: s.win, target: want, resize: resize,
+			at: time.Now().Add(snapConfirmAt)}
+		s.win = nil
 	}
 	keepForPermission := hadPanel && !s.trusted
 	a.endSnapSession(!keepForPermission)
@@ -406,6 +441,60 @@ func (a *shelf) snapRelease(p mygo.Point) {
 	case moveErr:
 		a.toastStatus("无法移动这个窗口", time.Now().Add(4*time.Second), statusErr)
 	}
+}
+
+// snapConfirmTick checks the arrangement after the drag has settled. A
+// frame the window server (or the app) changed is set once more; after
+// snapConfirmMax re-applies the shelf accepts the window's own frame.
+func (a *shelf) snapConfirmTick(now time.Time) {
+	c := a.snap.confirm
+	if c == nil || now.Before(c.at) {
+		return
+	}
+	f, ok := c.win.Frame()
+	if ok && snapFrameNear(f, c.target) {
+		c.win.Release()
+		a.snap.confirm = nil
+		return
+	}
+	if c.tries >= snapConfirmMax {
+		c.win.Release()
+		a.snap.confirm = nil
+		return
+	}
+	c.tries++
+	c.at = now.Add(snapConfirmGap)
+	c.win.MoveResize(c.target, c.resize)
+}
+
+// flushSnapConfirm applies a pending verification at once, before a new
+// session reuses the shelf state, and releases the reference.
+func (a *shelf) flushSnapConfirm() {
+	c := a.snap.confirm
+	if c == nil {
+		return
+	}
+	if f, ok := c.win.Frame(); !ok || !snapFrameNear(f, c.target) {
+		c.win.MoveResize(c.target, c.resize)
+	}
+	c.win.Release()
+	a.snap.confirm = nil
+}
+
+// cancelSnapConfirm drops a pending verification without touching the
+// window (quit path).
+func (a *shelf) cancelSnapConfirm() {
+	if c := a.snap.confirm; c != nil {
+		c.win.Release()
+		a.snap.confirm = nil
+	}
+}
+
+// snapFrameNear reports whether two frames are the same arrangement
+// within the one-point rounding the window server applies.
+func snapFrameNear(a, b mac.AXRect) bool {
+	return math.Abs(a.X-b.X) <= snapConfirmTol && math.Abs(a.Y-b.Y) <= snapConfirmTol &&
+		math.Abs(a.Width-b.Width) <= snapConfirmTol && math.Abs(a.Height-b.Height) <= snapConfirmTol
 }
 
 // endSnapSession drops the AX reference and the preview; hidePanel also

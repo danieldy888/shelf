@@ -102,6 +102,7 @@ func main() {
 		close(a.stop)
 		a.stopDragGuard()
 		a.endSnapSession(true)
+		a.cancelSnapConfirm()
 		mygo.GlobalShortcut.UnregisterAll()
 		if a.stopMouseObservation != nil {
 			a.stopMouseObservation()

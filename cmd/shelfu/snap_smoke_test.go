@@ -170,7 +170,7 @@ func TestSnapSmokeDragToNotch(t *testing.T) {
 	)
 	snapPostDrag(t, titleX, titleY, moved)
 	snapPostDrag(t, titleX, titleY, down)
-	onMain(func() { a.snapPress(false, 0, mygo.Point{X: int(titleX), Y: int(titleY)}) })
+	onMain(func() { a.mouseDown(false, 0, mygo.Point{X: int(titleX), Y: int(titleY)}) })
 	// Travel from the title bar to the notch, then to the 左半 tile.
 	cx := float64(a.stripCenter())
 	for _, step := range []struct{ x, y float64 }{
@@ -273,7 +273,7 @@ func TestSnapSmokeIslandPanel(t *testing.T) {
 	)
 	snapPostDrag(t, titleX, titleY, moved)
 	snapPostDrag(t, titleX, titleY, down)
-	onMain(func() { a.snapPress(false, 0, mygo.Point{X: int(titleX), Y: int(titleY)}) })
+	onMain(func() { a.mouseDown(false, 0, mygo.Point{X: int(titleX), Y: int(titleY)}) })
 	cx := float64(a.stripCenter())
 	tileY := float64(anchor.Y + snapGridTop + snapTileH/2)
 	for _, step := range []struct{ x, y float64 }{
@@ -299,7 +299,7 @@ func TestSnapSmokeIslandPanel(t *testing.T) {
 	}
 	snapShot(t, a.win, "snap-panel-island")
 	snapPostDrag(t, cx-114, tileY, up)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	if got, want := snapWindowFrame(t, w), snapSlotRect(work, 0); absInt(got.X-want.X) > 4 ||
 		absInt(got.Width-want.Width) > 4 || absInt(got.Height-want.Height) > 4 {
 		t.Fatalf("island drag did not arrange the window: %+v, want %+v", got, want)
