@@ -9,11 +9,10 @@ package mac
 // 探测不会弹出任何系统对话框 —— TCC 的弹框只由带 prompt 的 API 或首次访问
 // 受保护文件夹触发，被拒绝的 open 只返回 EPERM。
 //
-// 位置随 macOS 版本变化：macOS 26 之前用户库在
-// ~/Library/Application Support/com.apple.TCC/TCC.db，之后的系统把用户库并进
+// 位置：较早的 macOS 有用户库 ~/Library/Application Support/com.apple.TCC/TCC.db；
+// 本机 macOS 27.0.1 上没有这个文件，只有系统库
 // /Library/Application Support/com.apple.TCC/TCC.db。两个位置都试，任一能打开
-// 即已授权；在本机（macOS 27）实测未授权的独立进程对两者都拿到 EPERM，没有
-// 任何对话框。
+// 即已授权；在本机实测未授权的独立进程打开系统库拿到 EPERM，没有任何对话框。
 //
 // 申请只能由用户完成：系统设置 → 隐私与安全性 → 完整磁盘访问 里没有
 // 「添加」以外的程序化入口。所以 RequestFullDiskAccess 只打开该面板，并把
