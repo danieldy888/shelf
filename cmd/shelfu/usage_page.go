@@ -22,6 +22,7 @@ import (
 
 	"shelf/internal/aiusage"
 	"shelf/internal/settings"
+	"shelf/locales"
 )
 
 // Quota ring and source colours — the DESIGN.md single-accent rule's only
@@ -114,7 +115,7 @@ func (f *usageFeature) localSourceOn(t aiusage.Tool) bool {
 // --- panelPage ----------------------------------------------------------
 
 func (f *usageFeature) id() pageID    { return pageUsage }
-func (f *usageFeature) label() string { return "AI 用量" }
+func (f *usageFeature) label() string { return f.host.appLoc().UsagePageTitle() }
 func (f *usageFeature) enabled() bool { return f.host.settings.AIUsage.Enabled }
 
 // icon is the left-ear's third icon: a miniature of the quota card's
@@ -209,15 +210,15 @@ func orderedWindows(ws []aiusage.Window) []aiusage.Window {
 	return append(out, rest...)
 }
 
-// windowLabel is a window's Chinese card name.
-func windowLabel(w aiusage.Window) string {
+// windowLabel is a window's card name in the language of l.
+func windowLabel(l locales.Messages, w aiusage.Window) string {
 	if w.Length >= 6*24*time.Hour {
 		if _, scope, ok := strings.Cut(w.Name, "·"); ok && w.Model != "" {
-			return "每周 · " + strings.TrimSpace(scope)
+			return l.UsageWindowScoped(strings.TrimSpace(scope))
 		}
-		return "每周"
+		return l.UsageWindowWeekly()
 	}
-	return "5 小时"
+	return l.UsageWindowFive()
 }
 
 // windowShown is the share a meter fills: how much is used by default, how
@@ -253,33 +254,34 @@ func windowColor(w aiusage.Window) ui.Color {
 }
 
 // title is the back row's page name; the data stamp is in actions.
-func (f *usageFeature) title() string { return "AI 用量" }
+func (f *usageFeature) title() string { return f.host.appLoc().UsagePageTitle() }
 
 // stamp is the data age — or progress while any source is busy — shown
 // just left of the refresh button; empty before the first answer.
-func (f *usageFeature) stamp() string {
+func (f *usageFeature) stamp(c *ui.Context) string {
+	l := loc(c)
 	if f.quota[0].busy || f.quota[1].busy || f.localBusy {
-		return "正在更新…"
+		return l.UsageUpdating()
 	}
 	at := f.lastUpdatedAt()
 	if at.IsZero() {
 		return ""
 	}
-	s := usageAgo(at, f.deps.now()) + "更新"
+	ago := usageAgo(l, at, f.deps.now())
 	if f.offline() {
-		s += " · 网络不通"
+		return l.UsageUpdatedAgoOffline(ago)
 	}
-	return s
+	return l.UsageUpdatedAgo(ago)
 }
 
 // actions is the data stamp and the refresh button; 「刷新」 is the
 // button's tooltip and accessible name.
 func (f *usageFeature) actions(c *ui.Context) []ui.Element {
 	var out []ui.Element
-	if s := f.stamp(); s != "" {
+	if s := f.stamp(c); s != "" {
 		out = append(out, panelLabel(c, "usage-stamp", s, 10, 600).TextColor(ink3))
 	}
-	b := f.host.iconButton(c, "usage-refresh", refreshSymbol, "刷新")
+	b := f.host.iconButton(c, "usage-refresh", refreshSymbol, loc(c).UsageRefresh())
 	if b.Clicked() && f.host.tab == pageUsage {
 		f.requestRefresh()
 	}
@@ -291,7 +293,8 @@ func (f *usageFeature) actions(c *ui.Context) []ui.Element {
 // part of it scrolls — the user reads every state at once.
 func (f *usageFeature) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	if !f.anySource() {
-		return f.host.emptyState(c, gaugeSymbol, "没有选中的数据来源", "在设置 → AI 用量里打开套餐额度或本机用量")
+		l := loc(c)
+		return f.host.emptyState(c, gaugeSymbol, l.UsageEmptyTitle(), l.UsageEmptyDetail())
 	}
 	root := ui.Row(c.Key("usage")).FillWidth().FillHeight().Gap(usageCardGap).PassThrough()
 	root.Children(func() {
@@ -402,7 +405,7 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 		return
 	}
 	if st.latest.FetchedAt.IsZero() {
-		panelLabel(c, nil, "正在查询…", 11, 0).TextColor(ink3).Margin(4, 0, 0, 0)
+		panelLabel(c, nil, loc(c).UsageQuerying(), 11, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 		return
 	}
 	f.quotaMessage(c, tool, st.latest, now)
@@ -414,29 +417,30 @@ func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, q aiusage.
 	// Each line must fit the 124pt info column at 10.5pt: a longer line
 	// wraps inside the card and the third line falls out of it (the page
 	// audit measures every line, so this cannot regress silently).
+	l := loc(c)
 	var lines string
 	switch q.Status {
 	case aiusage.QuotaNotLoggedIn:
 		if tool == aiusage.ToolClaude {
-			lines = "未登录 Claude Code\n运行 claude login 后显示"
+			lines = l.UsageSignedOutClaude()
 		} else {
-			lines = "未登录 Codex\n运行 codex login 后显示"
+			lines = l.UsageSignedOutCodex()
 		}
 	case aiusage.QuotaExpired:
-		lines = fmt.Sprintf("登录已过期\n重新打开 %s", toolName(tool))
+		lines = l.UsageSignInExpired(toolName(tool))
 	case aiusage.QuotaLimitReached:
 		// The vendor said the allowance is used up: say so, and when it
 		// comes back if its message named the reset.
-		lines = "已达到额度上限"
+		lines = l.UsageLimitReached()
 		if !q.LimitResetsAt.IsZero() {
-			lines += "\n" + usageReset(q.LimitResetsAt, now)
+			lines = l.UsageLimitReachedUntil(usageResetIn(l, q.LimitResetsAt, now))
 		}
 	case aiusage.QuotaRateLimited:
-		lines = "额度查询暂时被限流\n稍后再看"
+		lines = l.UsageRateLimited()
 	case aiusage.QuotaNoCLI:
-		lines = "未找到 Claude Code\n装好后自动读取"
+		lines = l.UsageNoCLI()
 	default:
-		lines = "暂时查不到额度\n稍后再看"
+		lines = l.UsageUnavailable()
 	}
 	panelLines(c, lines, 10.5, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 }
@@ -444,7 +448,8 @@ func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, q aiusage.
 // windowLine is one card row: coloured dot, window name, the shown share
 // (used, or left when the setting asks) and its reset time.
 func (f *usageFeature) windowLine(c *ui.Context, w aiusage.Window, stale bool, now time.Time) {
-	name := windowLabel(w)
+	l := loc(c)
+	name := windowLabel(l, w)
 	col := windowColor(w)
 	pctCol := ink
 	if col == danger {
@@ -458,9 +463,9 @@ func (f *usageFeature) windowLine(c *ui.Context, w aiusage.Window, stale bool, n
 		panelLabel(c, nil, name, 10.5, 0).TextColor(ink2).Width(31)
 		// The mode rides on the number, as Magpie's 「41% used」 does, so
 		// the row states which share it shows without a second label.
-		panelLabel(c, nil, f.shownShort(w), 10, 600).TextColor(pctCol).MinWidth(26)
+		panelLabel(c, nil, f.shownShort(l, w), 10, 600).TextColor(pctCol).MinWidth(26)
 		if !w.ResetsAt.IsZero() {
-			panelLabel(c, nil, usageResetShort(w.ResetsAt, now), 9.5, 0).TextColor(ink3)
+			panelLabel(c, nil, usageResetShort(l, w.ResetsAt, now), 9.5, 0).TextColor(ink3)
 		}
 	})
 }
@@ -469,9 +474,10 @@ func (f *usageFeature) windowLine(c *ui.Context, w aiusage.Window, stale bool, n
 // red 快用完了 under 10% left, the orange depletion estimate naming the
 // window that runs out first, otherwise the quiet 正常 line.
 func (f *usageFeature) paceLine(c *ui.Context, q aiusage.Quota, stale bool, now time.Time) {
-	text, col := "节奏正常，可撑到重置", ink3
+	l := loc(c)
+	text, col := l.UsagePaceSteady(), ink3
 	if stale {
-		text = usageAgo(q.FetchedAt, now) + "的数据"
+		text = l.UsageStaleData(usageAgo(l, q.FetchedAt, now))
 	} else {
 		ordered := orderedWindows(q.Windows)
 		if len(ordered) > 2 {
@@ -488,16 +494,16 @@ func (f *usageFeature) paceLine(c *ui.Context, q aiusage.Quota, stale bool, now 
 		for _, w := range ordered {
 			if pi, ok := f.paceOf(&w, now); ok && !pi.LastsUntilReset {
 				if !runsOut || pi.RunsOutIn < d {
-					d, name = pi.RunsOutIn, windowLabel(w)
+					d, name = pi.RunsOutIn, windowLabel(l, w)
 				}
 				runsOut = true
 			}
 		}
 		switch {
 		case lowest < 10:
-			text, col = "快用完了", danger
+			text, col = l.UsageRunningLow(), danger
 		case runsOut:
-			text, col = name+" · "+usageDeplete(d)+"用完", usageFive
+			text, col = l.UsageWindowRunsOut(name, usageDeplete(l, d)), usageFive
 		}
 	}
 	panelLabel(c, nil, text, 10, 0).TextColor(col).Margin(3, 0, 0, 0)
@@ -628,10 +634,10 @@ func (f *usageFeature) popoverBody(c *ui.Context, tool aiusage.Tool) {
 	five, week := ringWindows(q.Windows)
 	ui.Row(c.Key("leg")).Gap(14).Margin(6, 0, 0, 0).Children(func() {
 		if week != nil {
-			popLegend(c, usageWeekly, "每周 · 外圈")
+			popLegend(c, usageWeekly, loc(c).UsageLegendWeekly())
 		}
 		if five != nil {
-			popLegend(c, usageFive, "5 小时 · 内圈")
+			popLegend(c, usageFive, loc(c).UsageLegendFive())
 		}
 	})
 	ordered := orderedWindows(q.Windows)
@@ -667,15 +673,16 @@ func popLegend(c *ui.Context, col ui.Color, s string) {
 // over the track (fill3 bar, coloured share, white/red even-pace tick),
 // then the pace delta and the depletion estimate.
 func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time) {
-	name := windowLabel(w)
+	l := loc(c)
+	name := windowLabel(l, w)
 	shown := f.windowShown(w)
 	col := windowColor(w)
 	pi, hasPace := f.paceOf(&w, now)
 	ui.Row(c.Key("pw-"+name)).AlignItems(ui.End).Margin(12, 0, 0, 0).Children(func() {
 		panelLabel(c, nil, name, 13, 600).TextColor(ink)
-		panelLabel(c, nil, f.shownLabel(shown), 11, 600).TextColor(ink2).Margin(0, 0, 0, 6)
+		panelLabel(c, nil, f.shownLabel(l, shown), 11, 600).TextColor(ink2).Margin(0, 0, 0, 6)
 		ui.Box(c).Grow(1)
-		panelLabel(c, nil, usageResetLong(w.ResetsAt, now), 11, 0).TextColor(ink3)
+		panelLabel(c, nil, usageResetLong(l, w.ResetsAt, now), 11, 0).TextColor(ink3)
 	})
 	bar := ui.Box(c.Key("trk-"+name)).FillWidth().Height(5).Radius(3).Margin(6, 0, 0, 0)
 	bar.Draw(func(p *ui.Painter, r ui.Rect) {
@@ -696,18 +703,18 @@ func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time)
 		delta, dcol := "", ink3
 		if hasPace {
 			if pi.AheadPct > 0 {
-				delta, dcol = fmt.Sprintf("比均匀用量超前 %.0f%%", pi.AheadPct), col
+				delta, dcol = l.UsageAhead(fmt.Sprintf("%.0f", pi.AheadPct)), col
 			} else {
-				delta = fmt.Sprintf("比均匀用量留有 %.0f%%", -pi.AheadPct)
+				delta = l.UsageBehind(fmt.Sprintf("%.0f", -pi.AheadPct))
 			}
 		}
 		if delta != "" {
 			panelLabel(c, nil, delta, 10.5, 0).TextColor(dcol)
 		}
 		ui.Box(c).Grow(1)
-		right := "可撑到重置"
+		right := l.UsageLastsToReset()
 		if hasPace && !pi.LastsUntilReset {
-			right = "按这个速度 " + usageDeplete(pi.RunsOutIn) + "用完"
+			right = l.UsageAtRate(usageDeplete(l, pi.RunsOutIn))
 		}
 		panelLabel(c, nil, right, 10.5, 0).TextColor(ink3)
 	})
@@ -716,15 +723,16 @@ func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time)
 // popCompact is one line plus a thin meter: the shape a plan with more
 // than two windows uses so every window stays visible in the sheet.
 func (f *usageFeature) popCompact(c *ui.Context, w aiusage.Window, now time.Time) {
-	name := windowLabel(w)
+	l := loc(c)
+	name := windowLabel(l, w)
 	shown := f.windowShown(w)
 	col := windowColor(w)
 	ui.Row(c.Key("pc-"+name)).AlignItems(ui.Center).Margin(4, 0, 0, 0).Gap(6).Children(func() {
 		panelLabel(c, nil, name, 12, 600).TextColor(ink)
 		ui.Box(c).Grow(1)
-		panelLabel(c, nil, f.shownLabel(shown), 11, 600).TextColor(ink2)
+		panelLabel(c, nil, f.shownLabel(l, shown), 11, 600).TextColor(ink2)
 		if !w.ResetsAt.IsZero() {
-			panelLabel(c, nil, usageResetShort(w.ResetsAt, now), 10.5, 0).TextColor(ink3)
+			panelLabel(c, nil, usageResetShort(l, w.ResetsAt, now), 10.5, 0).TextColor(ink3)
 		}
 	})
 	ui.Box(c.Key("tk-"+name)).FillWidth().Height(3).Radius(2).Margin(3, 12, 1, 0).Draw(func(p *ui.Painter, r ui.Rect) {
@@ -737,20 +745,20 @@ func (f *usageFeature) popCompact(c *ui.Context, w aiusage.Window, now time.Time
 
 // shownShort is the card row's share and mode: 「41% 已用」 or 「59%
 // 剩余」 at 11pt, sized to fit beside the window name.
-func (f *usageFeature) shownShort(w aiusage.Window) string {
+func (f *usageFeature) shownShort(l locales.Messages, w aiusage.Window) string {
 	v := quotaPctText(f.windowShown(w))
 	if f.cfg().QuotaLeft {
-		return v + " 剩余"
+		return l.UsageShownLeft(v)
 	}
-	return v + " 已用"
+	return l.UsageShownUsed(v)
 }
 
 // shownLabel names the share the meters fill: 「41% 已用」 or 「59% 剩余」.
-func (f *usageFeature) shownLabel(v float64) string {
+func (f *usageFeature) shownLabel(l locales.Messages, v float64) string {
 	if f.cfg().QuotaLeft {
-		return quotaPctText(v) + " 剩余"
+		return l.UsageShownLeft(quotaPctText(v))
 	}
-	return quotaPctText(v) + " 已用"
+	return l.UsageShownUsed(quotaPctText(v))
 }
 
 // --- local usage ---------------------------------------------------------
@@ -763,7 +771,7 @@ func (f *usageFeature) localPanel(c *ui.Context) {
 		Padding(8, 10, 7, 10).Gap(4)
 	card.Children(func() {
 		ui.Row(c.Key("uh")).Height(15).AlignItems(ui.Center).Children(func() {
-			panelLabel(c, nil, "本机用量", 10.5, 600).TextColor(ink2)
+			panelLabel(c, nil, loc(c).UsageLocalTitle(), 10.5, 600).TextColor(ink2)
 			ui.Box(c).Grow(1)
 			f.usageSeg(c)
 		})
@@ -824,7 +832,8 @@ func (f *usageFeature) shownSummary() aiusage.Summary {
 // usageSeg is the 今天/7 天/30 天/全部 picker: a fill1 track of small
 // buttons; the active segment gets the fill2 capsule and ink text.
 func (f *usageFeature) usageSeg(c *ui.Context) {
-	labels := []string{"今天", "7 天", "30 天", "全部"}
+	l := loc(c)
+	labels := []string{l.UsageRangeToday(), l.UsageRange7d(), l.UsageRange30d(), l.UsageRangeAll()}
 	ranges := []aiusage.Range{aiusage.RangeToday, aiusage.Range7d, aiusage.Range30d, aiusage.RangeAll}
 	ui.Row(c.Key("seg")).Background(fill1).Radius(6).Padding(1, 1, 1, 1).Gap(1).Children(func() {
 		for i, s := range labels {
@@ -855,34 +864,36 @@ func (f *usageFeature) usageSeg(c *ui.Context) {
 // scanCard fills the local section while there is no summary to show: the
 // first scan's progress, the pre-scan 「正在统计…」, or a read error.
 func (f *usageFeature) scanCard(c *ui.Context) {
+	l := loc(c)
 	ui.Column(c.Key("scan")).Grow(1).MinHeight(0).AlignItems(ui.Center).Justify(ui.Center).Gap(6).Children(func() {
 		switch {
 		case f.localErr != nil && !f.localBusy:
-			panelLines(c, "本机记录读取失败\n稍后再试", 10.5, 0).TextAlign(ui.Center).TextColor(ink2)
+			panelLines(c, l.UsageScanFailed(), 10.5, 0).TextAlign(ui.Center).TextColor(ink2)
 		case f.localBusy:
 			done, total := f.scanDone.Load(), f.scanTotal.Load()
-			pct := ""
+			text := l.UsageScanFirst()
 			var frac float32
 			if total > 0 {
 				n := min(100, done*100/total)
-				pct = fmt.Sprintf(" %d%%", n)
+				text = l.UsageScanFirstPct(int(n))
 				frac = float32(n) / 100
 			}
-			panelLabel(c, nil, "第一次统计本机记录…"+pct, 10.5, 0).TextColor(ink2)
+			panelLabel(c, nil, text, 10.5, 0).TextColor(ink2)
 			ui.Box(c.Key("sbar")).Width(130).Height(3).Radius(2).Background(fill3).Draw(func(p *ui.Painter, r ui.Rect) {
 				if frac > 0 {
 					p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * frac, H: r.H}, progress, 2)
 				}
 			})
-			ui.Text(c, f.scanSources()).MaxLines(2).TextAlign(ui.Center).FontSize(9.5).TextColor(ink3)
+			ui.Text(c, f.scanSources(c)).MaxLines(2).TextAlign(ui.Center).FontSize(9.5).TextColor(ink3)
 		default:
-			panelLabel(c, nil, "正在统计本机用量…", 10.5, 0).TextColor(ink2)
+			panelLabel(c, nil, l.UsageScanCounting(), 10.5, 0).TextColor(ink2)
 		}
 	})
 }
 
 // scanSources names the enabled local sources in the scan card's caption.
-func (f *usageFeature) scanSources() string {
+func (f *usageFeature) scanSources(c *ui.Context) string {
+	l := loc(c)
 	var names []string
 	for _, t := range localTools() {
 		if f.localSourceOn(t) {
@@ -890,9 +901,9 @@ func (f *usageFeature) scanSources() string {
 		}
 	}
 	if len(names) == 0 {
-		return "没有选中的本机来源"
+		return l.UsageNoLocalSources()
 	}
-	return "只读 " + strings.Join(names, "、")
+	return l.UsageReadOnly(strings.Join(names, l.UsageListSeparator()))
 }
 
 // kpiGrid is the 2 × 2 metric block: Token, requests, cost and cache-hit
@@ -901,12 +912,13 @@ func (f *usageFeature) scanSources() string {
 // cache, and the cost line says how much of it is priced.
 func (f *usageFeature) kpiGrid(c *ui.Context, s aiusage.Summary) {
 	tot := s.Total
+	l := loc(c)
 	ui.Grid(c.Key("kpi")).ColumnTracks(ui.Fr(1), ui.Fr(1)).GapY(1).GapX(8).FillWidth().
 		Children(func() {
-			f.kpi(c, "Token", usageTokens(totalTokens(tot)), false, usageTokenSub(tot))
-			f.kpi(c, "请求", fmt.Sprintf("%d", tot.Requests), false, "")
-			f.kpi(c, "费用", usageCost(tot), true, usageCostSub(tot))
-			f.kpi(c, "缓存命中", usageHitRate(tot), false, "")
+			f.kpi(c, "Token", usageTokens(totalTokens(tot)), false, usageTokenSub(l, tot))
+			f.kpi(c, l.UsageKpiRequests(), fmt.Sprintf("%d", tot.Requests), false, "")
+			f.kpi(c, l.UsageKpiCost(), usageCost(tot), true, usageCostSub(l, tot))
+			f.kpi(c, l.UsageKpiCacheHit(), usageHitRate(tot), false, "")
 		})
 }
 
@@ -931,10 +943,11 @@ func (f *usageFeature) kpi(c *ui.Context, k, v string, money bool, tip string) {
 // usageTokenSub splits the Token KPI into the parts it adds up: input,
 // output and cache (read plus write) — the same three the local scan
 // records separately.
-func usageTokenSub(t aiusage.Totals) string {
-	return "输入 " + usageTokens(t.Input) +
-		" · 输出 " + usageTokens(t.Output) +
-		" · 缓存 " + usageTokens(t.CacheRead+t.CacheWrite)
+func usageTokenSub(l locales.Messages, t aiusage.Totals) string {
+	return l.UsageTokenBreakdown(
+		usageTokens(t.Input),
+		usageTokens(t.Output),
+		usageTokens(t.CacheRead+t.CacheWrite))
 }
 
 // usageChart is the stacked bar chart: per bucket a column of per-tool
@@ -1000,7 +1013,7 @@ func (f *usageFeature) usageChart(c *ui.Context, s aiusage.Summary) {
 		}
 	})
 	ui.Row(c.Key("xl")).Justify(ui.SpaceBetween).Padding(0, 2, 0, 2).Children(func() {
-		labels := f.xLabels(buckets)
+		labels := f.xLabels(loc(c), buckets)
 		for _, i := range []int{0, 2, 4} {
 			if i < len(labels) {
 				panelLabel(c, nil, labels[i], 9, 0).TextColor(ink3)
@@ -1023,8 +1036,9 @@ func topRoundedRect(path *ui.Path, x, y, w, h, r float32) {
 }
 
 // xLabels is the axis under the chart: clock marks for today, dates for
-// the other ranges.
-func (f *usageFeature) xLabels(buckets []aiusage.Bucket) []string {
+// the other ranges. The clock marks stay 24-hour numerals: five ticks
+// share 167pt, which a 12-hour form with AM/PM cannot fit.
+func (f *usageFeature) xLabels(l locales.Messages, buckets []aiusage.Bucket) []string {
 	if f.rangeSel == aiusage.RangeToday {
 		return []string{"00:00", "06:00", "12:00", "18:00", "24:00"}
 	}
@@ -1032,19 +1046,18 @@ func (f *usageFeature) xLabels(buckets []aiusage.Bucket) []string {
 	if len(buckets) == 0 {
 		// No data in the range yet: the axis still names its span.
 		now := f.deps.now()
-		day := func(d int) string { t := now.AddDate(0, 0, -d); return fmt.Sprintf("%d/%d", int(t.Month()), t.Day()) }
 		switch f.rangeSel {
 		case aiusage.Range7d:
-			return []string{day(6), day(3), "今天"}
+			return []string{l.UsageDayMonth(now.AddDate(0, 0, -6)), l.UsageDayMonth(now.AddDate(0, 0, -3)), l.UsageRangeToday()}
 		case aiusage.Range30d:
-			return []string{day(29), day(14), "今天"}
+			return []string{l.UsageDayMonth(now.AddDate(0, 0, -29)), l.UsageDayMonth(now.AddDate(0, 0, -14)), l.UsageRangeToday()}
 		default:
-			return []string{now.AddDate(0, -12, 0).Format("1月"), now.AddDate(0, -6, 0).Format("1月"), "今天"}
+			return []string{l.UsageMonth(now.AddDate(0, -12, 0)), l.UsageMonth(now.AddDate(0, -6, 0)), l.UsageRangeToday()}
 		}
 	}
 	for i, frac := range []float64{0, 0.25, 0.5, 0.75, 1} {
 		b := buckets[min(len(buckets)-1, int(frac*float64(len(buckets)-1)+0.5))]
-		labels[i] = fmt.Sprintf("%d/%d", int(b.Start.Month()), b.Start.Day())
+		labels[i] = l.UsageDayMonth(b.Start)
 	}
 	return labels
 }
@@ -1114,11 +1127,11 @@ func usageCost(t aiusage.Totals) string {
 
 // usageCostSub explains the money line: only the tools' own prices count,
 // and how many records carried none.
-func usageCostSub(t aiusage.Totals) string {
+func usageCostSub(l locales.Messages, t aiusage.Totals) string {
 	if t.Unpriced > 0 {
-		return fmt.Sprintf("%d 条没有价格", t.Unpriced)
+		return l.UsageCostUnpriced(int(t.Unpriced))
 	}
-	return "只算自带价格"
+	return l.UsageCostBuiltIn()
 }
 
 // usageHitRate is the cache-read share of everything read (input + cache).
@@ -1130,90 +1143,99 @@ func usageHitRate(t aiusage.Totals) string {
 	return fmt.Sprintf("%.0f%%", float64(t.CacheRead)/float64(den)*100)
 }
 
-// usageAgo renders 「N 前」 for the update stamp and stale-data line:
-// 刚刚 / N 分钟前 / N 小时前 / N 天前 (the caller appends 更新 or 的数据).
-func usageAgo(t, now time.Time) string {
+// usageAgo renders the age of data in the language of l for the update
+// stamp and the stale-data line: 刚刚 / N 分钟前 / N 小时前 / N 天前 (the
+// caller's message adds 更新 or 的数据).
+func usageAgo(l locales.Messages, t, now time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return "刚刚"
+		return l.UsageAgoNow()
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+		return l.UsageAgoMinutes(int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+		return l.UsageAgoHours(int(d.Hours()))
 	default:
-		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+		return l.UsageAgoDays(int(d.Hours() / 24))
 	}
 }
 
 // usageWait renders how long a held-back refresh must wait: whole seconds
 // under a minute, whole minutes (rounded up) above it.
-func usageWait(d time.Duration) string {
+func usageWait(l locales.Messages, d time.Duration) string {
 	if d < time.Minute {
-		return fmt.Sprintf("%d 秒", max(1, int(math.Ceil(d.Seconds()))))
+		return l.UsageWaitSeconds(max(1, int(math.Ceil(d.Seconds()))))
 	}
-	return fmt.Sprintf("约 %d 分钟", int(math.Ceil(d.Minutes())))
+	return l.UsageWaitMinutes(int(math.Ceil(d.Minutes())))
+}
+
+// usageClockText writes a span under a day as hours and zero-padded
+// minutes, 「1:24」, whichever language reads it: both countdown forms
+// stay numeric so they fit the card.
+func usageClockText(d time.Duration) string {
+	return fmt.Sprintf("%d:%02d", int(d.Hours()), int(d.Minutes())%60)
 }
 
 // usageResetShort is the quota card's compact reset: 「1:24 后」 under a
 // day, the weekday otherwise — the 203-wide card cannot hold the long
 // form beside the numbers.
-func usageResetShort(at, now time.Time) string {
+func usageResetShort(l locales.Messages, at, now time.Time) string {
 	d := at.Sub(now)
 	if d <= 0 {
-		return "即将重置"
+		return l.UsageResetsSoon()
 	}
 	if d < 24*time.Hour {
-		return fmt.Sprintf("%d:%02d 后", int(d.Hours()), int(d.Minutes())%60)
+		return l.UsageResetsInShort(usageClockText(d))
 	}
-	return weekdayCN(at.Local().Weekday())
+	return l.UsageWeekday(at.Local())
 }
 
-// usageReset is the card's reset time: 「4:25 后重置」 under a day, else
-// 「周六 02:00 重置」.
+// usageReset is usageResetIn in the source language, for the tests that
+// pin the Chinese wording.
 func usageReset(at, now time.Time) string {
+	return usageResetIn(locales.In(""), at, now)
+}
+
+// usageResetIn is the card's reset time in the language of l: 「4:25
+// 后重置」 under a day, else 「周六 02:00 重置」.
+func usageResetIn(l locales.Messages, at, now time.Time) string {
 	d := at.Sub(now)
 	if d <= 0 {
-		return "即将重置"
+		return l.UsageResetsSoon()
 	}
 	if d < 24*time.Hour {
-		return fmt.Sprintf("%d:%02d 后重置", int(d.Hours()), int(d.Minutes())%60)
+		return l.UsageResetsClock(usageClockText(d))
 	}
 	local := at.Local()
-	return fmt.Sprintf("%s %02d:%02d 重置", weekdayCN(local.Weekday()), local.Hour(), local.Minute())
+	return l.UsageResetsAt(l.UsageWeekday(local), l.UsageClock(local))
 }
 
 // usageResetLong is the popover's reset time: 「3 小时 13 分后重置」 under
 // a day (minutes under an hour), else 「4 天 18 小时后重置」.
-func usageResetLong(at, now time.Time) string {
+func usageResetLong(l locales.Messages, at, now time.Time) string {
 	d := at.Sub(now)
 	if d <= 0 {
-		return "即将重置"
+		return l.UsageResetsSoon()
 	}
 	if d >= 24*time.Hour {
-		return fmt.Sprintf("%d 天 %d 小时后重置", int(d.Hours()/24), int(d.Hours())%24)
+		return l.UsageResetsInDH(int(d.Hours()/24), int(d.Hours())%24)
 	}
 	if d >= time.Hour {
-		return fmt.Sprintf("%d 小时 %d 分后重置", int(d.Hours()), int(d.Minutes())%60)
+		return l.UsageResetsInHM(int(d.Hours()), int(d.Minutes())%60)
 	}
-	return fmt.Sprintf("%d 分后重置", max(1, int(d.Minutes())))
+	return l.UsageResetsInMin(max(1, int(d.Minutes())))
 }
 
-// usageDeplete formats the depletion estimate: 「1:42 后」 under a day,
-// else 「3 天 2 小时后」.
-func usageDeplete(d time.Duration) string {
+// usageDeplete formats the depletion estimate as a clause the pace lines
+// complete: 「1:42 后」 under a day, else 「3 天 2 小时后」.
+func usageDeplete(l locales.Messages, d time.Duration) string {
 	if d <= 0 {
-		return "马上"
+		return l.UsageRunsOutNow()
 	}
 	if d >= 24*time.Hour {
-		return fmt.Sprintf("%d 天 %d 小时后", int(d.Hours()/24), int(d.Hours())%24)
+		return l.UsageRunsOutDays(int(d.Hours()/24), int(d.Hours())%24)
 	}
-	return fmt.Sprintf("%d:%02d 后", int(d.Hours()), int(d.Minutes())%60)
-}
-
-// weekdayCN maps a weekday to the mock's Chinese short name.
-func weekdayCN(d time.Weekday) string {
-	return [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}[d]
+	return l.UsageRunsOutClock(usageClockText(d))
 }
 
 // --- settings ------------------------------------------------------------

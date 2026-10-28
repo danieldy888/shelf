@@ -21,6 +21,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // renameMode picks which rule computes each new base name, like Finder's
@@ -99,8 +100,15 @@ func splitName(name string) (base, ext string) {
 // sitting inside another, a target another row also wants, a target
 // already on disk that no row in the batch gives up, or a source that is
 // no longer there. Names are compared case-insensitively and in NFC,
-// because that is how APFS treats them.
+// because that is how APFS treats them. It words the reasons in the
+// source language; planRenameIn says them in the language of l.
 func planRename(items []store.Item, p renameParams) renamePlan {
+	return planRenameIn(locales.In(""), items, p)
+}
+
+// planRenameIn is planRename with the conflict reasons in the language of
+// l.
+func planRenameIn(l locales.Messages, items []store.Item, p renameParams) renamePlan {
 	pl := renamePlan{rows: make([]renameRow, 0, len(items))}
 	// First pass: new names and the checks that need only the name.
 	for i, it := range items {
@@ -116,13 +124,13 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 		row.newPath = filepath.Join(filepath.Dir(it.Path), row.newName)
 		switch {
 		case nb == "":
-			row.warn = "名字不能为空"
+			row.warn = l.RenameWarnEmpty()
 		case strings.ContainsAny(nb, "/:"):
-			row.warn = "名字不能包含 / 或 :"
+			row.warn = l.RenameWarnIllegal()
 		case len(row.newName) > renameNameMax:
-			row.warn = "名字过长"
+			row.warn = l.RenameWarnNameTooLong()
 		case len(row.newPath) > renamePathMax:
-			row.warn = "路径太长"
+			row.warn = l.RenameWarnPathTooLong()
 		}
 		pl.rows = append(pl.rows, row)
 	}
@@ -139,9 +147,9 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 			if j == i || !pathInside(other.oldPath, row.oldPath) {
 				continue
 			}
-			pl.rows[i].warn = "不能同时改文件夹和它里面的项目"
+			pl.rows[i].warn = l.RenameWarnFolderInner()
 			if other.warn == "" {
-				pl.rows[j].warn = "不能同时改文件夹和它里面的项目"
+				pl.rows[j].warn = l.RenameWarnFolderInner()
 			}
 			break
 		}
@@ -153,14 +161,14 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 			if j == i || !sameNameInDir(row.newPath, other.newPath) {
 				continue
 			}
-			row.warn = "和本批其他项目重名"
+			row.warn = l.RenameWarnDuplicate()
 			if other.warn == "" {
-				pl.rows[j].warn = "和本批其他项目重名"
+				pl.rows[j].warn = l.RenameWarnDuplicate()
 			}
 			break
 		}
 		if row.warn == "" {
-			row.warn = diskConflict(pl.rows, i)
+			row.warn = diskConflictIn(l, pl.rows, i)
 		}
 		pl.rows[i] = row
 	}
@@ -177,7 +185,7 @@ func planRename(items []store.Item, p renameParams) renamePlan {
 		// that only fits until the rename starts must be refused here —
 		// the executor would fail on it after the plan said it was fine.
 		if len(filepath.Dir(row.oldPath))+1+renameTempNameLen(len(pl.ops)) > renamePathMax {
-			row.warn = "路径太长"
+			row.warn = l.RenameWarnPathTooLong()
 			pl.conflicts++
 			continue
 		}
@@ -217,17 +225,23 @@ func pathInside(parent, child string) bool {
 }
 
 // diskConflict reports why row self's target cannot be taken, "" when it
-// is free. A missing source is flagged here so a vanished file fails the
-// plan instead of the batch. A target already on disk is free only when
-// it is one of this batch's own sources that is itself moving (a swap, or
-// the row's own case-only rename), recognized by identity, not spelling.
+// is free, in the source language. A missing source is flagged here so a
+// vanished file fails the plan instead of the batch. A target already on
+// disk is free only when it is one of this batch's own sources that is
+// itself moving (a swap, or the row's own case-only rename), recognized
+// by identity, not spelling.
 func diskConflict(rows []renameRow, self int) string {
+	return diskConflictIn(locales.In(""), rows, self)
+}
+
+// diskConflictIn is diskConflict with the reason in the language of l.
+func diskConflictIn(l locales.Messages, rows []renameRow, self int) string {
 	row := rows[self]
 	if _, err := os.Lstat(row.oldPath); err != nil {
 		if os.IsNotExist(err) {
-			return "原文件不存在"
+			return l.RenameWarnSourceMissing()
 		}
-		return "无法读取原文件：" + err.Error()
+		return l.RenameWarnSourceUnreadable(err.Error())
 	}
 	if row.newPath == row.oldPath {
 		return "" // unchanged: the name it has is its own
@@ -247,7 +261,7 @@ func diskConflict(rows []renameRow, self int) string {
 			return ""
 		}
 	}
-	return "已存在同名文件"
+	return l.RenameConflictExists()
 }
 
 // sameFile reports whether st is the same directory entry as path.
@@ -359,8 +373,14 @@ var renameNoClobber = func(src, dst string) error {
 // overwrites (renameNoClobber): a conflict or any other failure rolls
 // every finished move back before the error is returned. ops must be a
 // sane plan (callers pass renamePlan.ops); dst paths are expected free or
-// belonging to the batch itself.
+// belonging to the batch itself. Its errors are in the source language;
+// execRenameIn words them in the language of l.
 func execRename(ops []renameOp) error {
+	return execRenameIn(locales.In(""), ops)
+}
+
+// execRenameIn is execRename with its errors in the language of l.
+func execRenameIn(l locales.Messages, ops []renameOp) error {
 	if len(ops) == 0 {
 		return nil
 	}
@@ -376,7 +396,7 @@ func execRename(ops []renameOp) error {
 	for i := range moves {
 		m := &moves[i]
 		if err := renameNoClobber(m.src, m.tmp); err != nil {
-			return rollback(moves, fmt.Errorf("无法移动「%s」：%s", filepath.Base(m.src), renameErr(err)))
+			return rollback(l, moves, errors.New(l.RenameMoveFailed(filepath.Base(m.src), renameErrIn(l, err))))
 		}
 		m.staged = true
 	}
@@ -384,7 +404,7 @@ func execRename(ops []renameOp) error {
 	for i := range moves {
 		m := &moves[i]
 		if err := renameNoClobber(m.tmp, m.dst); err != nil {
-			return rollback(moves, fmt.Errorf("无法命名为「%s」：%s", filepath.Base(m.dst), renameErr(err)))
+			return rollback(l, moves, errors.New(l.RenameTargetFailed(filepath.Base(m.dst), renameErrIn(l, err))))
 		}
 		m.staged, m.done = false, true
 	}
@@ -399,7 +419,7 @@ func execRename(ops []renameOp) error {
 // began are neither touched nor reported. A rollback failure is reported
 // alongside the original error; the file is left where it is, never
 // overwritten away.
-func rollback(moves []stagedMove, cause error) error {
+func rollback(l locales.Messages, moves []stagedMove, cause error) error {
 	var stranded []string
 	for i := len(moves) - 1; i >= 0; i-- {
 		m := &moves[i]
@@ -424,22 +444,28 @@ func rollback(moves []stagedMove, cause error) error {
 		m.staged = false
 	}
 	if len(stranded) > 0 {
-		return fmt.Errorf("%v；恢复原状时 %d 项未能改回：%s", cause, len(stranded), strings.Join(stranded, "、"))
+		return errors.New(l.RenameRollbackStranded(cause.Error(), len(stranded),
+			strings.Join(stranded, l.RenameListSeparator())))
 	}
-	return fmt.Errorf("%v，已全部恢复原状", cause)
+	return errors.New(l.RenameRollbackClean(cause.Error()))
 }
 
-// renameErr words the no-clobber rename's common failures in Chinese.
-func renameErr(err error) string {
+// renameErr words the no-clobber rename's common failures in the source
+// language.
+func renameErr(err error) string { return renameErrIn(locales.In(""), err) }
+
+// renameErrIn words the no-clobber rename's common failures in the
+// language of l.
+func renameErrIn(l locales.Messages, err error) string {
 	switch {
 	case errors.Is(err, syscall.EEXIST):
-		return "已存在同名文件"
+		return l.RenameConflictExists()
 	case errors.Is(err, syscall.ENOENT):
-		return "文件不存在"
+		return l.RenameErrMissing()
 	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
-		return "没有权限"
+		return l.RenameErrPermission()
 	case errors.Is(err, syscall.ENAMETOOLONG):
-		return "名字过长"
+		return l.RenameWarnNameTooLong()
 	default:
 		return err.Error()
 	}

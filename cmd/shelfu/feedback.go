@@ -16,10 +16,13 @@ package main
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"shelf/locales"
 )
 
 // Status colours (DESIGN.md's palette, used only by the capsule).
@@ -253,7 +256,7 @@ func (f *feedback) follow(a *shelf, now time.Time) {
 // window. Pure apart from the job reads; unit-tested.
 func (a *shelf) liveStatus(now time.Time) (text string, token any, live bool) {
 	if a.conv != nil && a.conv.job != nil && a.conv.live() {
-		if text, ok := convertProgress(a.conv.job); ok {
+		if text, ok := convertProgress(a.appLoc(), a.conv.job); ok {
 			return text, a.conv.job, true
 		}
 	}
@@ -395,34 +398,34 @@ func openFrameRoom(expW, expH float32) (w, h int) {
 // convertProgress is the activity strip's title and step for a running job,
 // the words the capsule shows while the panel is closed. The strip in
 // converter.go draws the same lines in its own row.
-func convertProgress(j *convertJob) (string, bool) {
+func convertProgress(l locales.Messages, j *convertJob) (string, bool) {
 	if j == nil {
 		return "", false
 	}
 	done, total := int(j.done.Load()), max(int(j.total.Load()), 1)
-	title := "正在转成 " + strings.ToUpper(convertExt(j.target))
+	title := l.StatusConvertTo(strings.ToUpper(convertExt(j.target)))
 	switch j.target {
 	case toJPEG:
-		title = "正在转成 JPEG"
+		title = l.StatusConvertTo("JPEG")
 	case toWord:
-		title = "正在转成 Word"
+		title = l.StatusConvertTo("Word")
 	case toMergedPDF:
-		title = "正在合并 PDF"
+		title = l.StatusConvertMergePDF()
 	case toZip:
-		title = "正在压缩为 zip"
+		title = l.StatusConvertZip()
 	case toLarge, toMedium, toSmall:
-		title = "正在缩小图片"
+		title = l.StatusConvertShrink()
 	case toFit500, toFit1M, toFit2M, toFit5M:
-		title = "正在压缩图片"
+		title = l.StatusConvertCompress()
 	case toExtract:
-		title = "正在解压"
+		title = l.StatusConvertExtract()
 	}
 	step := fmt.Sprintf("%d/%d", min(done+1, total), total)
 	if j.ocr.Load() {
-		step = fmt.Sprintf("识别文字 %d/%d", min(done+1, total), total)
+		step = l.StatusConvertOCR(strconv.Itoa(min(done+1, total)), strconv.Itoa(total))
 	}
 	if j.cancel.Load() {
-		step = "正在取消…"
+		step = l.StatusConvertCancel()
 	}
-	return title + " · " + step, true
+	return l.StatusConvertLine(title, step), true
 }

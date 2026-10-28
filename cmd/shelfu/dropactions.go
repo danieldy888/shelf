@@ -17,7 +17,6 @@ package main
 // module bar reads 投放 with a count, and hints 松开放入托盘，或拖到动作上.
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,6 +29,7 @@ import (
 
 	"shelf/internal/mac"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // Symbols for the action cells, after the design draft's glyphs.
@@ -189,23 +189,36 @@ func classifyDrop(paths []string) dropClass {
 // dropActions picks the action cells for the dragged paths, left to
 // right, at most dropMaxCells. No paths — a source vending promised or
 // remote files exposes none until the drop — shows only the 放入托盘 row.
+// It names the cells in the source language; dropActionsIn says them in
+// the language of l.
 func dropActions(paths []string) []dropAction {
-	return dropActionsFor(paths, classifyDrop(paths))
+	return dropActionsIn(locales.In(""), paths)
 }
 
-// dropActionsFor is dropActions on a classification the caller already
-// made — the zone classifies once per pasteboard change and reuses it.
+// dropActionsIn is dropActions in the language of l.
+func dropActionsIn(l locales.Messages, paths []string) []dropAction {
+	return dropActionsForIn(l, paths, classifyDrop(paths))
+}
+
+// dropActionsFor is dropActionsIn on a classification the caller already
+// made, in the source language.
 func dropActionsFor(paths []string, class dropClass) []dropAction {
+	return dropActionsForIn(locales.In(""), paths, class)
+}
+
+// dropActionsForIn is the cell table in the language of l; the zone
+// classifies once per pasteboard change and reuses the class here.
+func dropActionsForIn(l locales.Messages, paths []string, class dropClass) []dropAction {
 	if len(paths) == 0 {
 		return nil
 	}
-	air := dropAction{id: "airdrop", icon: airDropSymbol, label: "隔空投送", isAirDrop: true}
+	air := dropAction{id: "airdrop", icon: airDropSymbol, label: l.CardAirDrop(), isAirDrop: true}
 	switch class {
 	case classImages:
 		allJPEG := true
-		pdfLabel, pdfSub, pdfTarget := "转成 PDF", "1 页", toPDF
+		pdfLabel, pdfSub, pdfTarget := l.CardToPDF(), l.DropPdfPage(), toPDF
 		if len(paths) > 1 {
-			pdfLabel, pdfSub, pdfTarget = "合成一个 PDF", "按拖入顺序", toMergedPDF
+			pdfLabel, pdfSub, pdfTarget = l.DropPdfMerged(), l.DropPdfMergedSub(), toMergedPDF
 		}
 		for _, p := range paths {
 			if ext := strings.ToLower(filepath.Ext(p)); ext != ".jpg" && ext != ".jpeg" {
@@ -213,67 +226,73 @@ func dropActionsFor(paths []string, class dropClass) []dropAction {
 				break
 			}
 		}
-		other := dropAction{id: "tojpeg", icon: imgSymbol, label: "转 JPEG", sub: "每张一份", target: toJPEG}
+		other := dropAction{id: "tojpeg", icon: imgSymbol, label: l.CardToJPEG(), sub: l.DropPerFile(), target: toJPEG}
 		if allJPEG {
-			other = dropAction{id: "topng", icon: imgSymbol, label: "转 PNG", sub: "每张一份", target: toPNG}
+			other = dropAction{id: "topng", icon: imgSymbol, label: l.CardToPNG(), sub: l.DropPerFile(), target: toPNG}
 		}
 		return []dropAction{
-			{id: "fit1m", icon: shrinkSymbol, label: "压缩到 1 MB", sub: "以内", target: toFit1M},
+			{id: "fit1m", icon: shrinkSymbol, label: l.CardFit1M(), sub: l.DropWithin(), target: toFit1M},
 			{id: "topdf", icon: pdfSymbol, label: pdfLabel, sub: pdfSub, target: pdfTarget},
 			other,
 			air,
 		}
 	case classPDFs:
 		return []dropAction{
-			{id: "toword", icon: docSymbol, label: "转 Word", sub: "提取文字", target: toWord},
-			{id: "topng", icon: imgSymbol, label: "每页存成图片", sub: "PNG · 每页一张", target: toPNG},
-			zipAction(len(paths)),
+			{id: "toword", icon: docSymbol, label: l.CardToWord(), sub: l.DropExtractText(), target: toWord},
+			{id: "topng", icon: imgSymbol, label: l.DropPagesAsImages(), sub: l.DropPngPage(), target: toPNG},
+			zipAction(l, len(paths)),
 			air,
 		}
 	case classArchives:
 		sub := filepath.Base(paths[0])
 		if len(paths) > 1 {
-			sub = fmt.Sprintf("%d 项", len(paths))
+			sub = l.DropCountItems(len(paths))
 		}
 		return []dropAction{
-			{id: "extract", icon: unzipSymbol, label: "解压", sub: sub, target: toExtract},
+			{id: "extract", icon: unzipSymbol, label: l.CardExtract(), sub: sub, target: toExtract},
 			air,
 		}
 	}
-	return []dropAction{zipAction(len(paths)), air}
+	return []dropAction{zipAction(l, len(paths)), air}
 }
 
 // zipAction builds the 打成 zip cell; its subtitle previews the count the
 // archive name will carry.
-func zipAction(n int) dropAction {
+func zipAction(l locales.Messages, n int) dropAction {
 	sub := ""
 	if n > 1 {
-		sub = fmt.Sprintf("%d 项", n)
+		sub = l.DropCountItems(n)
 	}
-	return dropAction{id: "zip", icon: zipSymbol, label: "打成 zip", sub: sub, target: toZip}
+	return dropAction{id: "zip", icon: zipSymbol, label: l.CardZip(), sub: sub, target: toZip}
 }
 
 // dropCountText is the module-bar count: 「3 张图片」, 「1 个压缩包」,
 // 「2 个 PDF」, 「2 项」 for anything mixed.
 func dropCountText(paths []string) string {
-	return dropCountTextFor(len(paths), classifyDrop(paths))
+	return dropCountTextIn(locales.In(""), len(paths), classifyDrop(paths))
 }
 
 // dropCountTextFor is dropCountText on a classification the caller
-// already made.
+// already made, in the source language.
 func dropCountTextFor(n int, class dropClass) string {
+	return dropCountTextIn(locales.In(""), n, class)
+}
+
+// dropCountTextIn says the count in the language of l: 「3 张图片」,
+// 「1 个压缩包」, 「2 个 PDF」, 「2 项」 for anything mixed.
+func dropCountTextIn(l locales.Messages, n int, class dropClass) string {
 	if n == 0 {
 		return ""
 	}
 	switch class {
 	case classImages:
-		return fmt.Sprintf("%d 张图片", n)
+		return l.DropCountImages(n)
 	case classPDFs:
-		return fmt.Sprintf("%d 个 PDF", n)
+		return l.DropCountPDFs(n)
 	case classArchives:
-		return fmt.Sprintf("%d 个压缩包", n)
+		return l.DropCountArchives(n)
 	}
-	return fmt.Sprintf("%d 项", n)
+	return l.DropCountItems(n)
 }
 
 // dropZoneShow answers whether the dragged files become the drop zone
@@ -400,7 +419,7 @@ func (a *shelf) dropStage(c *ui.Context, paths []string, class dropClass) {
 	zone := ui.Column(c.Key("drop-zone")).FillWidth().Grow(1).MinHeight(float32(dropZoneNeedH())).Gap(dropZoneGap)
 	zone.Children(func() {
 		a.dropTrayCell(c, paths)
-		if actions := dropActionsFor(paths, class); len(actions) > 0 {
+		if actions := dropActionsForIn(loc(c), paths, class); len(actions) > 0 {
 			a.dropActionRow(c, actions)
 		}
 	})
@@ -412,7 +431,7 @@ func (a *shelf) dropStage(c *ui.Context, paths []string, class dropClass) {
 // target — means 放入托盘 exactly like dropping on empty space.
 func (a *shelf) dropTrayCell(c *ui.Context, paths []string) {
 	row := ui.Row(c.Key("drop-tray")).Height(dropTrayH).FillWidth().Radius(14).
-		Padding(0, 16, 0, 16).Gap(12).AlignItems(ui.Center).Label("放入托盘")
+		Padding(0, 16, 0, 16).Gap(12).AlignItems(ui.Center).Label(loc(c).DropPutInTray())
 	_, hot := ui.DataDragOver(row, dropCellOpts)
 	if hot {
 		row.Background(accent16).Border(1.5, accent.Alpha(0.9))
@@ -424,8 +443,8 @@ func (a *shelf) dropTrayCell(c *ui.Context, paths []string) {
 			ui.Icon(c, trayNavSymbol).Size(18, 18).TextColor(ink)
 		})
 		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, "放入托盘").SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-			ui.Text(c, "保存引用，随时拖出").SingleLine().FontSize(11).TextColor(ink3)
+			ui.Text(c, loc(c).DropPutInTray()).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
+			ui.Text(c, loc(c).DropTrayHint()).SingleLine().FontSize(11).TextColor(ink3)
 		})
 		ui.Box(c).Grow(1)
 		a.dropThumbStack(c, paths)

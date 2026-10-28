@@ -4,7 +4,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -332,8 +331,9 @@ func (a *shelf) dismissReadFeedback(now time.Time) bool {
 }
 
 func (a *shelf) receive(data transfer.Data) error {
+	l := a.appLoc()
 	if a.store == nil {
-		return errors.New("没有可写入的历史存储")
+		return errors.New(l.StatusNoStore())
 	}
 	var err error
 	if paths, e := data.Files(); e == nil && len(paths) > 0 {
@@ -343,13 +343,13 @@ func (a *shelf) receive(data transfer.Data) error {
 	} else if b, e := data.Read(transfer.Text); e == nil && len(b) > 0 {
 		err = a.store.AddText(string(b))
 	} else {
-		err = fmt.Errorf("此内容不能放入托盘；请拖入本地文件、文字或图片")
+		err = errors.New(l.StatusUnsupported())
 		a.report(err)
 		return err
 	}
 	if err == nil {
 		a.received = true
-		a.toastStatus("已放入 · 拖出后仍会保留", time.Now().Add(3*time.Second), statusOK)
+		a.toastStatus(l.StatusAdded(), time.Now().Add(3*time.Second), statusOK)
 	}
 	a.changed(err)
 	return err
@@ -368,7 +368,7 @@ func (a *shelf) changed(err error) {
 	}
 }
 func (a *shelf) report(err error) {
-	a.toastStatus("操作失败："+err.Error(), time.Time{}, statusErr)
+	a.toastStatus(a.appLoc().StatusFailed(err.Error()), time.Time{}, statusErr)
 	log.Print(a.status)
 	if a.win != nil {
 		a.win.Invalidate()

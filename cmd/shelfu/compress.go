@@ -45,12 +45,12 @@ func fitLimit(t convertTarget) int64 {
 // fitTiers are the menu's size choices, smallest first.
 var fitTiers = []struct {
 	target convertTarget
-	label  string
+	size   string
 }{
-	{toFit500, "500 KB 以内"},
-	{toFit1M, "1 MB 以内"},
-	{toFit2M, "2 MB 以内"},
-	{toFit5M, "5 MB 以内"},
+	{toFit500, "500 KB"},
+	{toFit1M, "1 MB"},
+	{toFit2M, "2 MB"},
+	{toFit5M, "5 MB"},
 }
 
 // compressOutExt decides a compressed copy's format: JPEG and HEIC keep
@@ -103,9 +103,10 @@ func (a *shelf) compressMenu(m *ui.Menu, items []store.Item, busy bool) {
 		}
 		return true
 	}
-	m.Submenu("压缩到", func(sm *ui.Menu) {
+	l := a.appLoc()
+	m.Submenu(l.ItemCompressTo(), func(sm *ui.Menu) {
 		for _, tier := range fitTiers {
-			if sm.Item(tier.label).Disabled(busy || !known || allUnder(fitLimit(tier.target))).Chosen() {
+			if sm.Item(l.ItemCompressUnder(tier.size)).Disabled(busy || !known || allUnder(fitLimit(tier.target))).Chosen() {
 				a.startConvert(items, tier.target)
 			}
 		}

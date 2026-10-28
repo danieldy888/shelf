@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"shelf/locales"
 )
 
 // Activity glyphs, scaled from the design preview: the lightning bolt, the
@@ -48,7 +50,7 @@ func (a *shelf) powerWings(c *ui.Context, shellW, shellH, k float32, ev liveEven
 	row := ui.Row(c.Key("live-power")).Width(shellW).Height(shellH).
 		Padding(0, liveWingPad, npWingsBody, liveWingPad).
 		AlignItems(ui.Center).Justify(ui.SpaceBetween).
-		Opacity(min(max(k*k, 0), 1)).Label(ev.statusLine())
+		Opacity(min(max(k*k, 0), 1)).Label(ev.statusLineIn(loc(c)))
 	row.Children(func() {
 		left := ui.Row(c.Key("live-power-left")).Gap(9).AlignItems(ui.Center)
 		left.Children(func() {
@@ -123,7 +125,7 @@ func (a *shelf) downloadWings(c *ui.Context, shellW, shellH, k float32, dl downl
 	row := ui.Row(c.Key("live-download")).Width(shellW).Height(shellH).
 		Padding(0, liveWingPad, npWingsBody, liveWingPad).
 		AlignItems(ui.Center).Justify(ui.SpaceBetween).
-		Opacity(min(max(k*k, 0), 1)).Label(downloadLabel(dl))
+		Opacity(min(max(k*k, 0), 1)).Label(downloadLabel(loc(c), dl))
 	row.Children(func() {
 		ring := ui.Box(c.Key("live-dl-ring")).Size(20, 20)
 		spin := float32(0)
@@ -179,10 +181,11 @@ func liveHeadsetIcon(label string) (*ui.SVG, float32) {
 // the notch. The completion capsule's body is clickable: it drops the file
 // into the tray and opens the tray page.
 func (a *shelf) liveCapsule(c *ui.Context, shellW, shellH, k float32, ev liveEvent) {
+	l := loc(c)
 	w := ev.width
 	if w <= 0 {
 		baseW, _ := a.anchorSize()
-		w = liveCapsuleWidth(ev, baseW)
+		w = liveCapsuleWidth(l, ev, baseW)
 	}
 	// 刘海的提示条长在下沿 22pt 的带里；灵动岛是完整的 36 高胶囊，
 	// 内容垂直居中（没有摄像头要避让）。
@@ -195,7 +198,7 @@ func (a *shelf) liveCapsule(c *ui.Context, shellW, shellH, k float32, ev liveEve
 	clip.Children(func() {
 		body := ui.Row(c.Key("live-cap-body")).Width(w).Height(rowH).Gap(fbGap).
 			Justify(ui.Center).AlignItems(ui.Center).Opacity(min(max(k*k, 0), 1)).
-			Label(ev.statusLine())
+			Label(ev.statusLineIn(l))
 		body.Children(func() {
 			switch ev.kind {
 			case liveHeadset:
@@ -207,16 +210,17 @@ func (a *shelf) liveCapsule(c *ui.Context, shellW, shellH, k float32, ev liveEve
 					ui.Text(c, lv).SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
 				}
 				if len(ev.levels) == 0 {
-					ui.Text(c, "已连接").SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
+					ui.Text(c, l.LiveConnected()).SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
 				}
 			case liveHeadsetOff:
 				ui.Box(c.Key("live-off-dot")).Size(7, 7).Radius(3.5).Background(ink)
 				ui.Text(c, ev.label).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-				ui.Text(c, "已断开").SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
+				ui.Text(c, l.LiveDisconnected()).SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
 			case liveDownloadDone:
 				ui.Icon(c, liveFileSym).Size(13, 16)
-				ui.Text(c, "已下载").SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-				ui.Text(c, middleEllipsis(c, ev.label, w-13-2*fbPadX-35.76-7-fbGap*3-7)).
+				ui.Text(c, l.LiveDownloaded()).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+				verbW, _ := c.MeasureText(0, ui.Span{Text: l.LiveDownloaded(), Size: 12, Weight: 600})
+				ui.Text(c, middleEllipsis(c, ev.label, w-13-2*fbPadX-verbW-7-fbGap*3-7)).
 					SingleLine().FontSize(12).FontWeight(500).TextColor(ink2)
 				ui.Box(c.Key("live-done-dot")).Size(7, 7).Radius(3.5).Background(liveGreen)
 			}
@@ -297,9 +301,9 @@ func downloadMegabytes(done int64) string {
 }
 
 // downloadLabel is the accessible description of the wings.
-func downloadLabel(dl downloadProgress) string {
+func downloadLabel(l locales.Messages, dl downloadProgress) string {
 	if dl.file.total > 0 {
-		return "正在下载 " + dl.file.name + " " + downloadPercent(dl.file)
+		return l.DownloadWings(dl.file.name, downloadPercent(dl.file))
 	}
-	return "正在下载 " + dl.file.name + " " + downloadMegabytes(dl.file.done)
+	return l.DownloadWings(dl.file.name, downloadMegabytes(dl.file.done))
 }

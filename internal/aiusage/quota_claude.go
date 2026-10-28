@@ -399,7 +399,7 @@ func claudeFailure(q *Quota, msg string) {
 	}
 	q.Status = QuotaFailed
 	if msg == "" {
-		msg = "Claude Code 的 /usage 没有读数"
+		msg = "Claude Code's /usage reported no reading"
 	}
 	q.Err = clipLine(msg)
 }

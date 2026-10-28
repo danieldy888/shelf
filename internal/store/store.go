@@ -419,9 +419,9 @@ func (s *Store) ensureMigrationBackup(data []byte) (string, error) {
 		return path, nil
 	}
 	if lastErr == nil {
-		lastErr = errors.New("所有备份名均已被占用")
+		lastErr = errors.New("every backup name is taken")
 	}
-	return "", fmt.Errorf("无法为迁移创建恢复备份：%w", lastErr)
+	return "", fmt.Errorf("cannot write a recovery backup for the migration: %w", lastErr)
 }
 
 // writeFileNew creates path exclusively and writes data, reporting every
@@ -1123,14 +1123,14 @@ func (s *Store) Refresh() {
 // On failure the previous state.json is left untouched.
 func (s *Store) Save() error {
 	if s.migrationBlocked != nil {
-		return fmt.Errorf("store: 迁移前无法保留恢复备份，已停止写入以免覆盖可恢复原件：%w", s.migrationBlocked)
+		return fmt.Errorf("store: no recovery backup before the migration, so writing stopped rather than overwrite a recoverable original: %w", s.migrationBlocked)
 	}
 	if s.migrateBackup != "" {
 		// 首次迁移写入前再次确认恢复点仍然可用，避免备份被删除或改写后
 		// 原件被无保护地覆盖。
 		backup, err := os.ReadFile(s.migrateBackup)
 		if err != nil || !bytes.Equal(backup, s.migrateBytes) {
-			return fmt.Errorf("store: 迁移恢复备份 %s 已不可用，拒绝覆盖原文件", s.migrateBackup)
+			return fmt.Errorf("store: the migration recovery backup %s is gone, refusing to overwrite the original", s.migrateBackup)
 		}
 	}
 	items := s.persistItems()

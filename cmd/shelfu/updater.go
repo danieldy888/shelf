@@ -16,7 +16,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"time"
@@ -98,7 +97,7 @@ func (a *shelf) checkUpdates(user bool) {
 	a.updateChecking = true
 	if user {
 		// In-progress note: the check is fast, so the toast outlives it rarely.
-		a.toastProgress("正在检查更新…", time.Now().Add(6*time.Second))
+		a.toastProgress(a.appLoc().UpdateChecking(), time.Now().Add(6*time.Second))
 	}
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
@@ -118,10 +117,11 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 	if err != nil {
 		log.Printf("ShelfU: 检查更新失败：%v", err)
 		if user {
+			l := a.appLoc()
 			if errors.Is(err, mygo.ErrUpdatesDisabled) {
-				a.toastStatus("此构建未启用自动更新（开发构建或未签名的安装）", time.Now().Add(8*time.Second), statusInfo)
+				a.toastStatus(l.UpdateDisabled(), time.Now().Add(8*time.Second), statusInfo)
 			} else {
-				a.toastStatus("检查更新失败："+err.Error(), time.Now().Add(8*time.Second), statusErr)
+				a.toastStatus(l.UpdateCheckFailed(err.Error()), time.Now().Add(8*time.Second), statusErr)
 			}
 		}
 		return
@@ -129,7 +129,7 @@ func (a *shelf) checkedUpdate(user bool, up *mygo.Update, err error) {
 	if up == nil {
 		a.update = nil
 		if user {
-			a.toastStatus("已是最新版本", time.Now().Add(4*time.Second), statusInfo)
+			a.toastStatus(a.appLoc().UpdateUpToDate(), time.Now().Add(4*time.Second), statusInfo)
 			if a.win != nil {
 				a.win.Invalidate()
 			}
@@ -165,7 +165,7 @@ func (a *shelf) installUpdate() {
 		return
 	}
 	a.updateInstalling, a.updateProgress = true, 0
-	a.toastProgress(fmt.Sprintf("正在下载更新 v%s…", up.Version), time.Now().Add(updateInstallTimeout))
+	a.toastProgress(a.appLoc().UpdateDownloading(up.Version), time.Now().Add(updateInstallTimeout))
 	goWork(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), updateInstallTimeout)
 		defer cancel()
@@ -197,11 +197,11 @@ func (a *shelf) installedUpdate(up *mygo.Update, err error) {
 	a.updateInstalling, a.updateProgress = false, 0
 	if err != nil {
 		log.Printf("ShelfU: 安装更新失败：%v", err)
-		a.toastStatus("安装更新失败："+err.Error(), time.Now().Add(8*time.Second), statusErr)
+		a.toastStatus(a.appLoc().UpdateInstallFailed(err.Error()), time.Now().Add(8*time.Second), statusErr)
 	} else {
 		a.updateInstalled = true
 		log.Printf("ShelfU: 更新 v%s 已安装，重启后生效", up.Version)
-		a.toastStatus(fmt.Sprintf("v%s 已安装 · 重新启动 ShelfU 后生效", up.Version), time.Now().Add(8*time.Second), statusOK)
+		a.toastStatus(a.appLoc().UpdateInstalled(up.Version), time.Now().Add(8*time.Second), statusOK)
 		if os.Getenv("SHELF_UPDATE_SELFTEST") == "1" {
 			// End-to-end test hook: click 重新启动 ShelfU 完成更新 for the
 			// test. mygo installs the staged bundle as this instance exits
@@ -215,25 +215,26 @@ func (a *shelf) installedUpdate(up *mygo.Update, err error) {
 // 安装更新（vX）… while a version waits, a progress line while it installs
 // and 重新启动 once it is in place.
 func (a *shelf) updateMenu() *mygo.MenuItem {
+	l := a.appLoc()
 	switch {
 	case a.updateInstalled:
-		return &mygo.MenuItem{Label: "重新启动 ShelfU 完成更新", Click: func(*mygo.MenuItem, *mygo.Window) {
+		return &mygo.MenuItem{Label: l.UpdateRestartToFinish(), Click: func(*mygo.MenuItem, *mygo.Window) {
 			relaunchApp()
 		}}
 	case a.updateInstalling:
-		label := fmt.Sprintf("正在安装更新（v%s）…", a.update.Version)
+		label := l.UpdateInstalling(a.update.Version)
 		if a.updateProgress > 0 {
-			label = fmt.Sprintf("正在安装更新（v%s · %d%%）", a.update.Version, int(a.updateProgress*100))
+			label = l.UpdateInstallingPercent(a.update.Version, int(a.updateProgress*100))
 		}
 		return &mygo.MenuItem{Label: label, Disabled: true}
 	case a.update != nil:
-		return &mygo.MenuItem{Label: fmt.Sprintf("安装更新（v%s）…", a.update.Version), Click: func(*mygo.MenuItem, *mygo.Window) {
+		return &mygo.MenuItem{Label: l.UpdateInstall(a.update.Version), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.installUpdate()
 		}}
 	case a.updateChecking:
-		return &mygo.MenuItem{Label: "正在检查更新…", Disabled: true}
+		return &mygo.MenuItem{Label: l.UpdateChecking(), Disabled: true}
 	default:
-		return &mygo.MenuItem{Label: "检查更新…", Click: func(*mygo.MenuItem, *mygo.Window) {
+		return &mygo.MenuItem{Label: l.UpdateCheck(), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.checkUpdates(true)
 		}}
 	}
@@ -243,16 +244,17 @@ func (a *shelf) updateMenu() *mygo.MenuItem {
 // while there is nothing to say. It is a line of its own so it never
 // overwrites status messages.
 func (a *shelf) updateStatus() string {
+	l := a.appLoc()
 	switch {
 	case a.updateInstalling:
 		if a.updateProgress > 0 {
-			return fmt.Sprintf("正在下载更新 v%s · %d%%", a.update.Version, int(a.updateProgress*100))
+			return l.UpdateDownloadingPercent(a.update.Version, int(a.updateProgress*100))
 		}
-		return fmt.Sprintf("正在下载更新 v%s…", a.update.Version)
+		return l.UpdateDownloading(a.update.Version)
 	case a.updateInstalled:
-		return fmt.Sprintf("v%s 已安装 · 重新启动 ShelfU 后生效", a.update.Version)
+		return l.UpdateInstalled(a.update.Version)
 	case a.update != nil:
-		return fmt.Sprintf("发现新版本 v%s · 从菜单栏图标的菜单安装", a.update.Version)
+		return l.UpdateAvailable(a.update.Version)
 	}
 	return ""
 }

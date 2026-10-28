@@ -123,14 +123,14 @@ func (m *powerModule) resetCycle() {
 }
 
 func (m *powerModule) chargeNotice(st mac.BatteryStatus, now time.Time) {
-	m.host.pushLive(liveEvent{kind: liveCharging, label: "正在充电", pct: st.Percent}, liveHoldCharge, now)
+	m.host.pushLive(liveEvent{kind: liveCharging, label: m.host.appLoc().LiveCharging(), pct: st.Percent}, liveHoldCharge, now)
 }
 
 func (m *powerModule) fullNotice(st mac.BatteryStatus, now time.Time) {
 	m.full = true
-	m.host.pushLive(liveEvent{kind: liveCharged, label: "已充满", pct: st.Percent}, liveHoldFull, now)
+	m.host.pushLive(liveEvent{kind: liveCharged, label: m.host.appLoc().LiveCharged(), pct: st.Percent}, liveHoldFull, now)
 }
 
 func (m *powerModule) lowNotice(st mac.BatteryStatus, now time.Time) {
-	m.host.pushLive(liveEvent{kind: liveLow, label: "电量低", pct: st.Percent}, liveHoldLow, now)
+	m.host.pushLive(liveEvent{kind: liveLow, label: m.host.appLoc().LiveLow(), pct: st.Percent}, liveHoldLow, now)
 }

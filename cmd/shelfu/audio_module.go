@@ -19,7 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo/i18n"
+
 	"shelf/internal/mac"
+	"shelf/locales"
 )
 
 const audioPollInterval = time.Second
@@ -196,17 +199,24 @@ func sameDevice(a, b string) bool {
 }
 
 func batteryLevels(props map[string]any) []string {
+	// The levels are words, not numbers: they say 左 / 右 / 盒 / 电量 in the
+	// language the app shows. The poll runs off the main thread, outside a
+	// view, so the catalog's own language is the one to ask.
+	l := locales.In(i18n.Locale())
 	var levels []string
-	for _, f := range []struct{ key, label string }{
-		{"device_batteryLevelLeft", "左"},
-		{"device_batteryLevelRight", "右"},
-		{"device_batteryLevelCase", "盒"},
-		{"device_batteryLevelMain", "电量"},
-		{"device_batteryLevel", "电量"},
+	for _, f := range []struct {
+		key   string
+		label func(locales.Messages, int) string
+	}{
+		{"device_batteryLevelLeft", locales.Messages.AudioLevelLeft},
+		{"device_batteryLevelRight", locales.Messages.AudioLevelRight},
+		{"device_batteryLevelCase", locales.Messages.AudioLevelCase},
+		{"device_batteryLevelMain", locales.Messages.AudioLevelMain},
+		{"device_batteryLevel", locales.Messages.AudioLevelMain},
 	} {
 		if v, ok := props[f.key]; ok {
 			if pct, ok := percentOf(v); ok {
-				levels = append(levels, fmt.Sprintf("%s %d%%", f.label, pct))
+				levels = append(levels, f.label(l, pct))
 			}
 		}
 	}

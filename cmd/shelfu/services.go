@@ -38,7 +38,7 @@ func (a *shelf) installServices() {
 		mygo.RunOnMain(func() { a.serviceReceive(paths, text) })
 	})
 	if err != nil {
-		a.notice("服务菜单不可用：" + err.Error())
+		a.notice(a.appLoc().ServiceMenuUnavailable(err.Error()))
 	}
 }
 
@@ -69,7 +69,7 @@ func (a *shelf) serviceReceive(paths []string, text string) {
 		return
 	}
 	if err == nil {
-		a.toastStatus("已放入 · 拖出后仍会保留", time.Now().Add(3*time.Second), statusOK)
+		a.toastStatus(a.appLoc().ServiceReceived(), time.Now().Add(3*time.Second), statusOK)
 	}
 	a.changed(err)
 	// 托盘已显示时用户正在看它，交给现有状态栏，不再闪动。

@@ -19,6 +19,7 @@ import (
 	"shelf/internal/docx"
 	"shelf/internal/mac"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // Image conversion (DESIGN.md「图片转换」): the item menu offers 转换为 ▸
@@ -196,10 +197,11 @@ func convertBaseName(item store.Item) string {
 
 // convertJob is one run of the converter. total, done and the step flags
 // are written by the worker and read by the main thread's drawing, hence
-// atomics; target and unit never change.
+// atomics; target, pdf and unit never change.
 type convertJob struct {
 	target  convertTarget
-	unit    string // what the step counts: 张 (images), 页 (PDF pages), 个 (PDFs), 个文件 (archive entries)
+	pdf     bool   // the sources are PDFs: a Word output without text is a blank document
+	unit    string // what the step counts, in the language the job started in
 	total   atomic.Int32
 	done    atomic.Int32
 	skipped atomic.Int32    // 「压缩到」sources already under the byte budget
@@ -245,41 +247,43 @@ func (m *converter) chip(c *ui.Context) ui.Element {
 	if j == nil {
 		return ui.Box(c).Size(0, 0)
 	}
+	l := loc(c)
 	done, total := int(j.done.Load()), max(int(j.total.Load()), 1)
 	frac := float32(done) / float32(total)
-	title := "正在转成 " + strings.ToUpper(convertExt(j.target))
+	title := l.ConvToFormat(strings.ToUpper(convertExt(j.target)))
 	switch j.target {
 	case toJPEG:
-		title = "正在转成 JPEG"
+		title = l.ConvToJPEG()
 	case toWord:
-		title = "正在转成 Word"
+		title = l.ConvToWord()
 	case toMergedPDF:
-		title = "正在合并 PDF"
+		title = l.ConvMergingPDF()
 	case toZip:
-		title = "正在压缩为 zip"
+		title = l.ConvZipping()
 	case toLarge, toMedium, toSmall:
-		title = "正在缩小图片"
+		title = l.ConvResizing()
 	case toFit500, toFit1M, toFit2M, toFit5M:
-		title = "正在压缩图片"
+		title = l.ConvCompressing()
 	case toExtract:
-		title = "正在解压"
+		title = l.ConvExtracting()
 	}
-	step := fmt.Sprintf("%d/%d", min(done+1, total), total)
+	step := l.ConvStep(min(done+1, total), total)
 	if j.cancel.Load() {
-		step = "正在取消…"
+		step = l.ConvCanceling()
 	}
+	tip := l.ConvChipTooltip(title, step)
 	chip := ui.Row(c.Key("conv-chip")).Height(chipH).Radius(chipH/2).Background(fill1).
 		Padding(0, 3, 0, 3).Gap(4).AlignItems(ui.Center).
-		Label(title).Tooltip(title + " · " + step)
+		Label(title).Tooltip(tip)
 	chip.Children(func() {
 		if m.cancelOpen {
 			b := ui.ButtonBase(c.Key("conv-chip-cancel")).Height(16).Radius(8).
-				Padding(0, 5, 0, 5).Center().Label("取消转换")
+				Padding(0, 5, 0, 5).Center().Label(l.ConvCancelLabel())
 			if b.Hovered() {
 				b.Background(fill2)
 			}
 			b.Children(func() {
-				ui.Text(c, "取消").SingleLine().FontSize(9.5).TextColor(ink)
+				ui.Text(c, l.ConvCancel()).SingleLine().FontSize(9.5).TextColor(ink)
 			})
 			if b.Clicked() {
 				j.cancel.Store(true)
@@ -287,7 +291,7 @@ func (m *converter) chip(c *ui.Context) ui.Element {
 			}
 			return
 		}
-		ring := ui.ButtonBase(c.Key("conv-chip-ring")).Size(16, 16).Radius(8).Center().Label(title + " · " + step)
+		ring := ui.ButtonBase(c.Key("conv-chip-ring")).Size(16, 16).Radius(8).Center().Label(tip)
 		ring.Draw(func(p *ui.Painter, r ui.Rect) {
 			cx, cy, rad := r.X+r.W/2, r.Y+r.H/2, r.W/2-1.5
 			var track ui.Path
@@ -332,11 +336,12 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 	if a.conv == nil || a.conv.busy() || a.store == nil || len(items) == 0 {
 		return false
 	}
+	l := a.appLoc()
 	dir := a.store.ConvertedDir()
 	// Outputs are written straight into converted/; never into whatever a
 	// symlink or stray file there points at.
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
-		a.report(fmt.Errorf("无法使用转换文件夹 %s", dir))
+		a.report(errors.New(l.ConvNoConvertDir(dir)))
 		return false
 	}
 	srcs := make([]string, len(items))
@@ -347,13 +352,13 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 		srcs[i], names[i], exts[i] = it.Path, convertBaseName(it), convertExt(target)
 		switch {
 		case px > 0:
-			names[i] = fmt.Sprintf("%s %dpx", names[i], px)
+			names[i] = l.ConvResizeName(names[i], px)
 			exts[i] = resizeExt(it)
 		case fitLimit(target) > 0:
-			names[i] += "（压缩）"
+			names[i] = l.ConvCompressedName(names[i])
 			exts[i] = "" // compressOutExt decides in planConvert (worker side)
 		case target == toExtract:
-			names[i] = archiveStem(it.Path)
+			names[i] = archiveStem(l, it.Path)
 		}
 	}
 	var roots []string
@@ -367,27 +372,27 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 			if items[0].Kind == store.KindImage {
 				first = convertBaseName(items[0])
 			}
-			names[0] = fmt.Sprintf("%s 等 %d 项", first, len(items))
+			names[0] = l.ConvZipName(first, len(items))
 		}
 	}
 	pdf := isPDF(items[0]) && target != toZip && target != toExtract
-	unit := "张"
+	unit := l.ConvUnitImages()
 	switch {
 	case target == toZip:
-		unit = "个文件"
+		unit = l.ConvUnitFiles()
 	case target == toExtract:
-		unit = "个"
+		unit = l.ConvUnitItems()
 	case pdf && target == toWord:
-		unit = "个"
+		unit = l.ConvUnitItems()
 	case pdf:
-		unit = "页"
+		unit = l.ConvUnitPages()
 	}
-	job := &convertJob{target: target, unit: unit, started: time.Now()}
+	job := &convertJob{target: target, pdf: pdf, unit: unit, started: time.Now()}
 	job.total.Store(int32(len(items)))
 	a.conv.job = job
 	a.conv.cancelOpen = false
 	convertWork(func() {
-		tasks := planConvert(dir, srcs, names, exts, pdf, target, job)
+		tasks := planConvert(l, dir, srcs, names, exts, pdf, target, job)
 		if target != toZip {
 			job.total.Store(int32(len(tasks)))
 		}
@@ -408,7 +413,7 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 			switch {
 			case out.err != nil:
 			case target == toZip:
-				out.err = writeZip(t.dst, srcs, roots, job)
+				out.err = writeZipIn(l, t.dst, srcs, roots, job)
 			case target == toMergedPDF:
 				out.err = imagesToPDF(srcs, t.dst)
 			case t.pdf && target == toWord:
@@ -431,7 +436,7 @@ func (a *shelf) startConvert(items []store.Item, target convertTarget) bool {
 				}
 				out.before, out.after = fileSize(t.src), fileSize(t.dst)
 			case target == toExtract:
-				out.path, out.err = extractArchive(t.src, t.dst, job)
+				out.path, out.err = extractArchive(l, t.src, t.dst, job)
 			default:
 				out.err = convertImage(t.src, t.dst, format)
 			}
@@ -458,8 +463,8 @@ func fileSize(p string) int64 {
 }
 
 // formatBytes renders a size the way Finder does (decimal units): 「812 KB」,
-// 「4.2 MB」.
-func formatBytes(n int64) string {
+// 「4.2 MB」, with the byte count in the language of l.
+func formatBytes(l locales.Messages, n int64) string {
 	switch {
 	case n >= 1e9:
 		return fmt.Sprintf("%.1f GB", float64(n)/1e9)
@@ -468,7 +473,7 @@ func formatBytes(n int64) string {
 	case n >= 1e3:
 		return fmt.Sprintf("%.0f KB", float64(n)/1e3)
 	}
-	return fmt.Sprintf("%d 字节", n)
+	return l.ConvBytes(int(n))
 }
 
 // zipRoots names each item at an archive's root: a file or folder by its
@@ -503,7 +508,7 @@ func zipRoots(items []store.Item) []string {
 // PDF turned into images one per page (「名 第 2 页.png」, just 「名.png」
 // for a one-page PDF). A PDF whose pages cannot be counted becomes a
 // failed task. Counting stops when the job is cancelled.
-func planConvert(dir string, srcs, names, exts []string, pdf bool, target convertTarget, job *convertJob) []convertTask {
+func planConvert(l locales.Messages, dir string, srcs, names, exts []string, pdf bool, target convertTarget, job *convertJob) []convertTask {
 	taken := map[string]bool{}
 	job.taken = taken
 	var tasks []convertTask
@@ -513,7 +518,7 @@ func planConvert(dir string, srcs, names, exts []string, pdf bool, target conver
 	case target == toMergedPDF:
 		name := names[0]
 		if len(srcs) > 1 {
-			name = fmt.Sprintf("%s 等 %d 张", name, len(srcs))
+			name = l.ConvMergedName(name, len(srcs))
 		}
 		return []convertTask{{dst: uniquePath(dir, name, "pdf", taken)}}
 	case target == toExtract:
@@ -545,7 +550,7 @@ func planConvert(dir string, srcs, names, exts []string, pdf bool, target conver
 			}
 			n, err := pdfPageCount(src)
 			if err == nil && n < 1 {
-				err = fmt.Errorf("%s 没有页面", filepath.Base(src))
+				err = errors.New(l.ConvNoPages(filepath.Base(src)))
 			}
 			if err != nil {
 				tasks = append(tasks, convertTask{src: src, pdf: true, dst: filepath.Join(dir, names[i]), err: err})
@@ -554,7 +559,7 @@ func planConvert(dir string, srcs, names, exts []string, pdf bool, target conver
 			for p := 1; p <= n; p++ {
 				name := names[i]
 				if n > 1 {
-					name = fmt.Sprintf("%s 第 %d 页", names[i], p)
+					name = l.ConvPageName(names[i], p)
 				}
 				tasks = append(tasks, convertTask{src: src, pdf: true, page: p, dst: uniquePath(dir, name, convertExt(target), taken)})
 			}
@@ -697,44 +702,35 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		}
 		a.selection.onlyAll(ids)
 	}
-	verb := "转换"
-	switch job.target {
-	case toZip, toFit500, toFit1M, toFit2M, toFit5M:
-		verb = "压缩"
-	case toExtract:
-		verb = "解压"
-	}
+	l := a.appLoc()
 	switch {
 	case len(paths) == 0 && failed > 0:
-		a.report(fmt.Errorf("%s失败：%v", verb, firstErr))
+		a.report(errors.New(convertFailText(l, job.target, firstErr)))
 	case failed > 0:
-		a.toastStatus(fmt.Sprintf("%d 项成功，%d 项失败", len(paths), failed), time.Now().Add(4*time.Second), statusErr)
+		a.toastStatus(l.ConvPartial(len(paths), failed), time.Now().Add(4*time.Second), statusErr)
 	case job.cancel.Load():
-		a.toastStatus(fmt.Sprintf("已取消 · 已完成 %d 项", len(paths)), time.Now().Add(3*time.Second), statusInfo)
-	case noText > 0 && noText == len(paths) && job.unit == "个":
-		a.toastStatus("没有找到文字，Word 文件是空白的", time.Now().Add(4*time.Second), statusInfo)
+		a.toastStatus(l.ConvCanceledDone(len(paths)), time.Now().Add(3*time.Second), statusInfo)
+	case noText > 0 && noText == len(paths) && job.pdf:
+		a.toastStatus(l.ConvNoTextPDF(), time.Now().Add(4*time.Second), statusInfo)
 	case noText > 0 && noText == len(paths):
-		a.toastStatus("没有识别到文字，只放入了图片", time.Now().Add(4*time.Second), statusInfo)
+		a.toastStatus(l.ConvNoTextImage(), time.Now().Add(4*time.Second), statusInfo)
 	case job.target == toZip:
-		a.toastStatus(fmt.Sprintf("已压缩 · %s · 已选中，可直接拖出", formatBytes(fileSize(paths[0]))), time.Now().Add(3*time.Second), statusOK)
+		a.toastStatus(l.ConvZipDone(formatBytes(l, fileSize(paths[0]))), time.Now().Add(3*time.Second), statusOK)
 	case job.target == toExtract:
-		a.toastStatus(fmt.Sprintf("已解压 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), statusOK)
+		a.toastStatus(l.ConvExtractDone(len(paths)), time.Now().Add(3*time.Second), statusOK)
 	case fitLimit(job.target) > 0:
 		var before, after int64
 		for _, o := range outs {
 			before, after = before+o.before, after+o.after
 		}
 		skipped, over := int(job.skipped.Load()), int(job.over.Load())
-		msg := fmt.Sprintf("已压缩 %d 张", len(paths))
-		if skipped > 0 {
-			msg += fmt.Sprintf("，%d 张本来就小于目标", skipped)
-		}
-		if over > 0 {
-			msg += fmt.Sprintf("，%d 张没能压到 %s 以内", over, formatBytes(fitLimit(job.target)))
-		}
+		sizes := "no"
 		if len(paths) > 0 {
-			msg += fmt.Sprintf(" · %s → %s", formatBytes(before), formatBytes(after))
+			sizes = "yes"
 		}
+		msg := l.ConvCompressDone(len(paths), skipped, over,
+			formatBytes(l, fitLimit(job.target)), sizes,
+			formatBytes(l, before), formatBytes(l, after))
 		kind := statusOK
 		if over > 0 {
 			kind = statusErr
@@ -745,15 +741,27 @@ func (a *shelf) finishConvert(job *convertJob, outs []convertOut) {
 		for _, o := range outs {
 			before, after = before+o.before, after+o.after
 		}
-		a.toastStatus(fmt.Sprintf("已缩小 %d 张 · %s → %s", len(paths), formatBytes(before), formatBytes(after)), time.Now().Add(4*time.Second), statusOK)
+		a.toastStatus(l.ConvResizeDone(len(paths), formatBytes(l, before), formatBytes(l, after)), time.Now().Add(4*time.Second), statusOK)
 	case len(paths) > 0:
-		a.toastStatus(fmt.Sprintf("已转换 %d 项 · 已选中，可直接拖出", len(paths)), time.Now().Add(3*time.Second), statusOK)
+		a.toastStatus(l.ConvConverted(len(paths)), time.Now().Add(3*time.Second), statusOK)
 	}
 	a.syncWindowFrame()
 	if a.win != nil {
 		a.win.Invalidate()
 	}
 	a.syncCopyKey()
+}
+
+// convertFailText words a job that produced nothing, in the language of l:
+// the operation the job was doing names the failure.
+func convertFailText(l locales.Messages, target convertTarget, err error) string {
+	switch {
+	case target == toExtract:
+		return l.ConvFailedExtract(err.Error())
+	case target == toZip, fitLimit(target) > 0:
+		return l.ConvFailedZip(err.Error())
+	}
+	return l.ConvFailed(err.Error())
 }
 
 // uniquePath is dir/name.ext, or 「name 2.ext」, 「name 3.ext」… when that
@@ -789,6 +797,7 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 	if a.conv == nil || a.store == nil || len(items) == 0 {
 		return
 	}
+	l := a.appLoc()
 	allImages, allPDFs, allFiles, allArchives := true, true, true, true
 	for _, it := range items {
 		allImages = allImages && convertible(it)
@@ -803,19 +812,19 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 	m.Separator()
 	switch {
 	case allPDFs:
-		label := "转换为"
+		label := l.ConvMenuConvert()
 		if len(items) > 1 {
-			label = fmt.Sprintf("转换 %d 个为", len(items))
+			label = l.ConvMenuConvertItems(len(items))
 		}
 		m.Submenu(label, func(sm *ui.Menu) {
-			if sm.Item("Word（提取文字）").Disabled(busy).Chosen() {
+			if sm.Item(l.ConvMenuPDFWord()).Disabled(busy).Chosen() {
 				a.startConvert(items, toWord)
 			}
 			sm.Separator()
-			if sm.Item("PNG（每页一张）").Disabled(busy).Chosen() {
+			if sm.Item(l.ConvMenuPDFPNG()).Disabled(busy).Chosen() {
 				a.startConvert(items, toPNG)
 			}
-			if sm.Item("JPEG（每页一张）").Disabled(busy).Chosen() {
+			if sm.Item(l.ConvMenuPDFJPEG()).Disabled(busy).Chosen() {
 				a.startConvert(items, toJPEG)
 			}
 		}).Disabled(busy)
@@ -823,17 +832,17 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 		a.imageConvertMenu(m, items, busy)
 	}
 	if allArchives {
-		label := "解压"
+		label := l.ConvMenuExtract()
 		if len(items) > 1 {
-			label = fmt.Sprintf("解压 %d 项", len(items))
+			label = l.ConvMenuExtractN(len(items))
 		}
 		if m.Item(label).Disabled(busy).Chosen() {
 			a.startConvert(items, toExtract)
 		}
 	}
-	label := "压缩为 zip"
+	label := l.ConvMenuZip()
 	if len(items) > 1 {
-		label = fmt.Sprintf("压缩 %d 项为 zip", len(items))
+		label = l.ConvMenuZipN(len(items))
 	}
 	if m.Item(label).Disabled(busy).Chosen() {
 		a.startConvert(items, toZip)
@@ -842,26 +851,27 @@ func (a *shelf) convertMenu(m *ui.Menu, items []store.Item) {
 
 // imageConvertMenu is convertMenu's group for pictures.
 func (a *shelf) imageConvertMenu(m *ui.Menu, items []store.Item, busy bool) {
+	l := a.appLoc()
 	current := imageFormatOf(items[0])
 	for _, it := range items[1:] {
 		if imageFormatOf(it) != current {
 			current = ""
 		}
 	}
-	label := "转换为"
+	label := l.ConvMenuConvert()
 	if len(items) > 1 {
-		label = fmt.Sprintf("转换 %d 张为", len(items))
+		label = l.ConvMenuConvertImages(len(items))
 	}
 	m.Submenu(label, func(sm *ui.Menu) {
 		for _, f := range []struct {
 			t     convertTarget
 			label string
 		}{{toJPEG, "JPEG"}, {toHEIC, "HEIC"}, {toPNG, "PNG"}} {
-			l, same := f.label, convertExt(f.t) == current
+			name, same := f.label, convertExt(f.t) == current
 			if same {
-				l += "（当前格式）"
+				name = l.ConvMenuCurrent(name)
 			}
-			if sm.Item(l).Disabled(busy || same).Chosen() {
+			if sm.Item(name).Disabled(busy || same).Chosen() {
 				a.startConvert(items, f.t)
 			}
 		}
@@ -869,12 +879,12 @@ func (a *shelf) imageConvertMenu(m *ui.Menu, items []store.Item, busy bool) {
 		if sm.Item("PDF").Disabled(busy).Chosen() {
 			a.startConvert(items, toPDF)
 		}
-		if sm.Item("Word（识别文字）").Disabled(busy).Chosen() {
+		if sm.Item(l.ConvMenuWord()).Disabled(busy).Chosen() {
 			a.startConvert(items, toWord)
 		}
 	}).Disabled(busy)
 	if len(items) > 1 {
-		if m.Item("合并为一个 PDF").Disabled(busy).Chosen() {
+		if m.Item(l.ConvMenuMergePDF()).Disabled(busy).Chosen() {
 			a.startConvert(items, toMergedPDF)
 		}
 	}
@@ -886,18 +896,18 @@ func (a *shelf) imageConvertMenu(m *ui.Menu, items []store.Item, busy bool) {
 			longest = max(longest, w, h)
 		}
 	}
-	label = "缩小图片"
+	label = l.ConvMenuResize()
 	if len(items) > 1 {
-		label = fmt.Sprintf("缩小 %d 张图片", len(items))
+		label = l.ConvMenuResizeN(len(items))
 	}
 	m.Submenu(label, func(sm *ui.Menu) {
 		for _, f := range []struct {
 			t     convertTarget
 			label string
-		}{{toLarge, "大"}, {toMedium, "中"}, {toSmall, "小"}} {
+		}{{toLarge, l.ConvMenuLarge()}, {toMedium, l.ConvMenuMedium()}, {toSmall, l.ConvMenuSmall()}} {
 			px := resizePx(f.t)
-			l := fmt.Sprintf("%s（长边 %d 像素）", f.label, px)
-			if sm.Item(l).Disabled(busy || longest <= px).Chosen() {
+			name := l.ConvMenuTier(f.label, px)
+			if sm.Item(name).Disabled(busy || longest <= px).Chosen() {
 				a.startConvert(items, f.t)
 			}
 		}

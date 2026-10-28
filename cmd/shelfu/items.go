@@ -4,7 +4,7 @@ package main
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,11 +12,13 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // Item rows come in two shapes: itemTile is the tray tab's 5-column grid
@@ -29,10 +31,11 @@ import (
 // right and the accent ring while selected. Moved files dim to 38% and
 // name 「· 已移动」.
 func (a *shelf) itemTile(c *ui.Context, item store.Item) {
-	title := itemTitle(item)
+	l := loc(c)
+	title := itemTitleIn(l, item)
 	name := title
 	if item.Missing {
-		name += " · 已移动"
+		name = l.ClipMovedName(title)
 	}
 	tile := ui.Column(c.Key(item.ID)).Height(tileH).Radius(12).AlignItems(ui.Center).
 		Padding(6, 0, 0, 0).Label(name)
@@ -71,7 +74,7 @@ func (a *shelf) itemTile(c *ui.Context, item store.Item) {
 			// 右上 16pt 黑底图钉角标：作为 tile 的子元素定位，不能放到
 			// 网格层（否则所有角标叠在网格右上角并抢走点击）。
 			ui.Row(c.Key("pin")).Absolute().Top(6).Right(10).Size(16, 16).Radius(8).Center().
-				Background(ui.Hex("#000000")).Label("已置顶").
+				Background(ui.Hex("#000000")).Label(l.ClipPinned()).
 				Children(func() {
 					ui.Icon(c, pinFill).Size(9, 9).TextColor(ink)
 				})
@@ -160,7 +163,8 @@ func formatBadge(c *ui.Context, item store.Item) {
 // right, the pin mark on pinned rows and 「↩ 复制」 on the selected one
 // while searching.
 func (a *shelf) clipRow(c *ui.Context, item store.Item) {
-	title := itemTitle(item)
+	l := loc(c)
+	title := itemTitleIn(l, item)
 	row := ui.Row(c.Key(item.ID)).Height(clipRowH).Padding(0, 8, 0, 8).Gap(8).Radius(8).
 		AlignItems(ui.Center).Label(title)
 	if a.reveal == item.ID {
@@ -189,16 +193,16 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 		a.clipRowIcon(c, item)
 		text := title
 		if item.Kind == store.KindImage {
-			text = "截图 " + item.CreatedAt.Local().Format("01-02 15:04")
+			text = l.ClipScreenshot(item.CreatedAt.Local().Format("01-02 15:04"))
 		}
 		ui.Text(c, text).SingleLine().FontSize(12).TextColor(ink).Grow(1).MinWidth(0)
 		if selected && a.focusMode {
-			ui.Text(c, "↩ 复制").SingleLine().FontSize(10.5).TextColor(ink3)
+			ui.Text(c, l.ClipCopyHint()).SingleLine().FontSize(10.5).TextColor(ink3)
 		}
 		if item.Pinned {
-			ui.Icon(c.Key("pin"), pinFill).Size(10, 10).TextColor(ink.Alpha(0.5)).Label("已置顶")
+			ui.Icon(c.Key("pin"), pinFill).Size(10, 10).TextColor(ink.Alpha(0.5)).Label(l.ClipPinned())
 		}
-		ui.Text(c, a.clipRowMeta(item)).SingleLine().FontSize(10.5).TextColor(ink3)
+		ui.Text(c, a.clipRowMeta(l, item)).SingleLine().FontSize(10.5).TextColor(ink3)
 	})
 	if row.Clicked() {
 		mods := row.ClickModifiers()
@@ -240,12 +244,12 @@ func (a *shelf) clipRowIcon(c *ui.Context, item store.Item) {
 }
 
 // clipRowMeta is the row's 「应用 · 相对时间」 line.
-func (a *shelf) clipRowMeta(item store.Item) string {
-	ago := relativeTime(item.CreatedAt, time.Now())
+func (a *shelf) clipRowMeta(l locales.Messages, item store.Item) string {
+	ago := relativeTime(l, item.CreatedAt, time.Now())
 	if item.SourceApp == "" {
 		return ago
 	}
-	return a.appName(item.SourceApp) + " · " + ago
+	return l.ClipMeta(a.appName(item.SourceApp), ago)
 }
 
 // clipAppIcon caches mac.AppIcon bitmaps per bundle id so a long list
@@ -279,8 +283,9 @@ func (a *shelf) clipAppIcon(bundle string) *ui.Bitmap {
 const appIconCacheLimit = 64
 
 // relativeTime renders the clipboard row's 「· 相对时间」: 刚刚 / N 分钟前 /
-// 今天 15:04 / 昨天 / N 天前 / M月D日.
-func relativeTime(t, now time.Time) string {
+// 今天 15:04 / 昨天 / N 天前 / M月D日, in the language of l — the clock
+// and the calendar follow the message's language.
+func relativeTime(l locales.Messages, t, now time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
@@ -288,21 +293,27 @@ func relativeTime(t, now time.Time) string {
 	d := now.Sub(local)
 	switch {
 	case d < time.Minute:
-		return "刚刚"
+		return l.ClipJustNow()
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+		return l.ClipMinutesAgo(int(d.Minutes()))
 	case d < 24*time.Hour && local.Day() == now.Day() && local.Month() == now.Month():
-		return "今天 " + local.Format("15:04")
+		return l.ClipTodayAt(local)
 	case d < 48*time.Hour:
-		return "昨天"
+		return l.ClipYesterday()
 	case d < 7*24*time.Hour:
-		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+		return l.ClipDaysAgo(int(d.Hours() / 24))
 	default:
-		return fmt.Sprintf("%d月%d日", int(local.Month()), local.Day())
+		return l.ClipDate(local)
 	}
 }
 
-func itemTitle(item store.Item) string {
+// itemTitle is itemTitleIn in the language the app shows, for the
+// surfaces outside a view (home widgets, tool cards, drag-out names).
+func itemTitle(item store.Item) string { return itemTitleIn(locales.In(i18n.Locale()), item) }
+
+// itemTitleIn is the item's title — a text preview, a screenshot's name or
+// the file's own — in the language of l.
+func itemTitleIn(l locales.Messages, item store.Item) string {
 	if item.Kind == store.KindText {
 		// 只缩短显示摘要；保存、复制和拖出仍使用完整文字。
 		const limit = 160
@@ -329,7 +340,7 @@ func itemTitle(item store.Item) string {
 		return preview.String()
 	}
 	if item.Kind == store.KindImage {
-		return "截图 " + item.CreatedAt.Local().Format("01-02 15:04:05")
+		return l.ClipScreenshot(item.CreatedAt.Local().Format("01-02 15:04:05"))
 	}
 	return filepath.Base(item.Path)
 }
@@ -340,7 +351,7 @@ func (a *shelf) dragData(item store.Item) transfer.Data {
 	}
 	if _, err := os.Stat(item.Path); err != nil {
 		a.store.Refresh()
-		a.report(fmt.Errorf("文件已移动或无法读取：%w", err))
+		a.report(errors.New(a.appLoc().StatusFileGone(err.Error())))
 		return transfer.Data{}
 	}
 	path := item.Path

@@ -42,7 +42,7 @@ var (
 // can tell only how the account is billed, with no allowance.
 const claudeSubscriptionNotice = "You are currently using your subscription to power your Claude Code usage"
 
-var errClaudeUnavailable = errors.New("Claude Code 的 /usage 暂时没有读数")
+var errClaudeUnavailable = errors.New("Claude Code's /usage reported no reading")
 
 // parseClaudeUsage reads /usage's windows; now dates a reset that names no
 // year. Windows keep the order Claude Code printed them in: the 5-hour
@@ -87,7 +87,7 @@ func parseClaudeUsage(text string, now time.Time) ([]Window, error) {
 			return nil, errClaudeUnavailable
 		}
 		first, _, _ := strings.Cut(text, "\n")
-		return nil, fmt.Errorf("Claude Code 的 /usage 没有读数：%s", clipLine(first))
+		return nil, fmt.Errorf("Claude Code's /usage had no reading: %s", clipLine(first))
 	}
 	return out, nil
 }

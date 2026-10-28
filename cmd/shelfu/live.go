@@ -28,13 +28,15 @@ package main
 //   - a switch that is off drops its events at the door.
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
+
+	"shelf/locales"
 )
 
 // The three highlight colours the activities use inside the black shell.
@@ -154,7 +156,7 @@ func (a *shelf) pushLive(ev liveEvent, hold time.Duration, now time.Time) {
 	}
 	ev.hold, ev.queuedAt = hold, now
 	baseW, _ := a.anchorSize()
-	ev.width = liveCapsuleWidth(ev, baseW)
+	ev.width = liveCapsuleWidth(a.appLoc(), ev, baseW)
 	a.live.queued = append(a.live.queued, ev)
 	if a.win != nil {
 		a.win.Invalidate()
@@ -172,10 +174,10 @@ func (a *shelf) mergeDownloadDone(paths []string) bool {
 			continue
 		}
 		ev.paths = mergePaths(ev.paths, paths)
-		ev.label = downloadDoneLabel(ev.paths)
+		ev.label = downloadDoneLabel(a.appLoc(), ev.paths)
 		ev.hold = downloadDoneHold(len(ev.paths))
 		baseW, _ := a.anchorSize()
-		ev.width = liveCapsuleWidth(*ev, baseW)
+		ev.width = liveCapsuleWidth(a.appLoc(), *ev, baseW)
 		if a.win != nil {
 			a.win.Invalidate()
 		}
@@ -192,17 +194,17 @@ func (a *shelf) pushDownloaded(paths []string, now time.Time) {
 		return
 	}
 	a.pushLive(liveEvent{
-		kind: liveDownloadDone, label: downloadDoneLabel(paths), paths: paths,
+		kind: liveDownloadDone, label: downloadDoneLabel(a.appLoc(), paths), paths: paths,
 	}, downloadDoneHold(len(paths)), now)
 }
 
 // downloadDoneLabel is the completion capsule's noun: the file's own name,
 // or the count when one scan finished several.
-func downloadDoneLabel(paths []string) string {
+func downloadDoneLabel(l locales.Messages, paths []string) string {
 	if len(paths) == 1 {
 		return filepath.Base(paths[0])
 	}
-	return fmt.Sprintf("%d 个文件", len(paths))
+	return l.LiveFiles(len(paths))
 }
 
 // downloadDoneHold is the reading time for one completion notice: four
@@ -306,7 +308,7 @@ func (a *shelf) liveEnrich(token string, levels []string) {
 		}
 		ev.levels = levels
 		baseW, _ := a.anchorSize()
-		ev.width = liveCapsuleWidth(*ev, baseW)
+		ev.width = liveCapsuleWidth(a.appLoc(), *ev, baseW)
 		return true
 	}
 	changed := false
@@ -331,14 +333,14 @@ func (a *shelf) liveShape(ev liveEvent) (w, h float32) {
 	}
 	w = ev.width
 	if w <= 0 {
-		w = liveCapsuleWidth(ev, baseW)
+		w = liveCapsuleWidth(a.appLoc(), ev, baseW)
 	}
 	return w, float32(a.capsuleBodyH())
 }
 
 // liveDownloadDoneShape is the completion capsule's box, computed from the
 // event exactly as liveShape does (used by the click test).
-func liveCapsuleWidth(ev liveEvent, baseW float32) float32 {
+func liveCapsuleWidth(l locales.Messages, ev liveEvent, baseW float32) float32 {
 	minW := float32(280)
 	switch ev.kind {
 	case liveHeadset:
@@ -368,12 +370,12 @@ func liveCapsuleWidth(ev liveEvent, baseW float32) float32 {
 			add(lv, 12)
 		}
 		if ev.kind == liveHeadsetOff {
-			add("已断开", 12)
+			add(l.LiveDisconnected(), 12)
 		} else if len(ev.levels) == 0 {
-			add("已连接", 12)
+			add(l.LiveConnected(), 12)
 		}
 	case liveDownloadDone:
-		add("已下载", 12)
+		add(l.LiveDownloaded(), 12)
 		add(ev.label, 12)
 		w += fbGap + 7 // the green dot
 	}
@@ -481,15 +483,24 @@ func (a *shelf) downloadShape() (w, h float32) {
 // liveStatusLine is the one-line description used for accessibility and
 // the report; it keeps the event's wording in one place.
 func (ev liveEvent) statusLine() string {
+	return ev.statusLineIn(locales.In(i18n.Locale()))
+}
+
+// statusLineIn is statusLine in the language of l.
+func (ev liveEvent) statusLineIn(l locales.Messages) string {
 	switch ev.kind {
 	case liveDownloadDone:
-		return "已下载 " + ev.label
+		return l.LiveStatusDownloaded(ev.label)
 	case liveHeadsetOff:
-		return ev.label + " 已断开"
+		return l.LiveStatusOff(ev.label)
 	case liveHeadset:
 		return strings.Join(append([]string{ev.label}, ev.levels...), " ")
-	case liveCharging, liveCharged, liveLow:
-		return fmt.Sprintf("%s %d%%", ev.label, ev.pct)
+	case liveCharging:
+		return l.LiveStatusCharging(ev.pct)
+	case liveCharged:
+		return l.LiveStatusCharged(ev.pct)
+	case liveLow:
+		return l.LiveStatusLow(ev.pct)
 	}
 	return ev.label
 }

@@ -84,7 +84,7 @@ type toolsPage struct {
 }
 
 func (p *toolsPage) id() pageID    { return pageTools }
-func (p *toolsPage) label() string { return "工具" }
+func (p *toolsPage) label() string { return p.host.appLoc().ToolsTitle() }
 func (p *toolsPage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, toolsNavSymbol)
 }
@@ -186,9 +186,9 @@ func (a *shelf) resetToolsEdit() {
 
 func (p *toolsPage) title() string {
 	if p.picking {
-		return "卡片目录"
+		return p.host.appLoc().ToolsCardCatalog()
 	}
-	return "工具"
+	return p.host.appLoc().ToolsTitle()
 }
 
 // overflows reports a third row of cards (or the catalogue, which is
@@ -202,7 +202,7 @@ func (p *toolsPage) actions(c *ui.Context) []ui.Element {
 	case p.editing:
 		return []ui.Element{a.toolDoneButton(c, live, "edit-done")}
 	default:
-		b := a.iconButton(c, "edit", pencilSymbol, "编辑")
+		b := a.iconButton(c, "edit", pencilSymbol, loc(c).ToolsEdit())
 		if live && b.Clicked() {
 			p.editing, p.editAt = true, time.Now()
 		}
@@ -213,7 +213,7 @@ func (p *toolsPage) actions(c *ui.Context) []ui.Element {
 // toolDoneButton is the 完成 pill at the back row's right.
 func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element {
 	b := ui.Row(c.Key(key)).Height(24).Padding(0, 12, 0, 12).Radius(12).
-		Background(accent).Center().Label("完成")
+		Background(accent).Center().Label(loc(c).Done())
 	if live && b.Clicked() {
 		if p := a.toolsPage(); p != nil {
 			if p.picking {
@@ -225,7 +225,7 @@ func (a *shelf) toolDoneButton(c *ui.Context, live bool, key string) ui.Element 
 		}
 	}
 	b.Children(func() {
-		panelLabel(c, nil, "完成", 12, 600).TextColor(ink)
+		panelLabel(c, nil, loc(c).Done(), 12, 600).TextColor(ink)
 	})
 	return b
 }
@@ -310,7 +310,7 @@ func (p *toolsPage) toolCell(c *ui.Context, cell toolCell, editing, live bool, b
 		plus := ui.Column(c.Key("tc-plus")).Absolute().Left(cell.x).Top(cell.y).
 			Width(cell.w).Height(toolCellH).Radius(14).Center().
 			BorderWidth(1.5).BorderColor(ui.RGBA(255, 255, 255, 0.25)).
-			BorderStyle(ui.BorderDashed).Label("添加卡片")
+			BorderStyle(ui.BorderDashed).Label(loc(c).ToolsAddCard())
 		if live {
 			plus.HandleInput(func(ev ui.InputEvent) bool {
 				if ev.Kind == ui.InputPointerUp && p.editing {
@@ -497,10 +497,10 @@ func (p *toolsPage) toolCardTapped(id string) {
 // toolCardTapFeedback is shared by tools-page and desktop-card taps.
 func (a *shelf) toolCardTapFeedback() {
 	if a.conv != nil && a.conv.busy() {
-		a.toastStatus("一次只跑一个任务，请稍候", time.Now().Add(2*time.Second), statusInfo)
+		a.toastStatus(a.appLoc().OneJobAtATime(), time.Now().Add(2*time.Second), statusInfo)
 		return
 	}
-	a.toastStatus("把文件拖到这里", time.Now().Add(2*time.Second), statusInfo)
+	a.toastStatus(a.appLoc().DropFilesHere(), time.Now().Add(2*time.Second), statusInfo)
 }
 
 func hypot(dx, dy float32) float64 {
@@ -604,7 +604,7 @@ func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell
 		// for its edit wobble, without moving the grid or its hit space.
 		badge := ui.Row(c.Key("minus")).Absolute().Top(2).Left(2).Size(18, 18).Radius(9).
 			Background(ui.Hex("#3A3A3C")).Border(1.5, ui.Hex("#000000")).
-			Center().Label("移除")
+			Center().Label(loc(c).Remove())
 		if live {
 			badge.HandleInput(func(ev ui.InputEvent) bool {
 				if ev.Kind == ui.InputPointerUp {
@@ -632,7 +632,7 @@ func (p *toolsPage) toolEditChrome(c *ui.Context, card ui.Element, cell toolCell
 			// tucks inside the card (5pt in), tapping it toggles the span.
 			handle := ui.Box(c.Key("span")).Absolute().Bottom(5).Right(5).Size(12, 12).
 				BorderWidth(0, 1.6, 1.6, 0).BorderColor(ink2).
-				Label(fmt.Sprintf("改为 %d 列", next))
+				Label(loc(c).ToolsSpan(next))
 			if live {
 				handle.HandleInput(func(ev ui.InputEvent) bool {
 					if ev.Kind == ui.InputPointerUp {
@@ -697,12 +697,12 @@ func (p *toolsPage) pickerBody(c *ui.Context, live bool) ui.Element {
 				Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
 			sheet.Children(func() {
 				for gi, group := range p.pickerGroups() {
-					title := "动作"
+					title := loc(c).ActionsSection()
 					if gi == 1 {
-						title = "小组件"
+						title = loc(c).Widgets()
 					}
 					panelLabel(c, nil, title, 11, 600).TextColor(ink3).Margin(2, 0, 6, 0)
-					ui.Grid(c.Key("plist-"+title)).ColumnTracks(ui.Fr(1), ui.Fr(1)).
+					ui.Grid(c.Key(fmt.Sprintf("plist-%d", gi))).ColumnTracks(ui.Fr(1), ui.Fr(1)).
 						GapY(4).GapX(10).FillWidth().Children(func() {
 						for _, def := range group {
 							p.pickRow(c, def, placed[def.id], live)
@@ -723,7 +723,7 @@ func (p *toolsPage) pickerBody(c *ui.Context, live bool) ui.Element {
 func (p *toolsPage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui.Element {
 	a := p.host
 	row := ui.Row(c.Key("pi-"+def.id)).Height(toolPickRowH).Radius(8).
-		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.title)
+		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.name(loc(c)))
 	if !added && live {
 		if row.Hovered() {
 			row.Background(fill2)
@@ -744,16 +744,16 @@ func (p *toolsPage) pickRow(c *ui.Context, def toolCardDef, added, live bool) ui
 			iconCol, textCol = ink3, ink3
 		}
 		ui.Icon(c, def.icon).Size(15, 15).TextColor(iconCol)
-		fitText(c, def.title, 12, 500, 88).TextColor(textCol)
+		fitText(c, def.name(loc(c)), 12, 500, 88).TextColor(textCol)
 		ui.Box(c).Grow(1)
-		size := "1 列"
+		size := loc(c).Columns(1)
 		if def.variableSpan {
-			size = "1 / 2 列"
+			size = loc(c).ColumnsBoth()
 		} else if def.span == 2 {
-			size = "2 列"
+			size = loc(c).Columns(2)
 		}
 		if added {
-			size += " · 已添加"
+			size = loc(c).AddedSuffix(size)
 		}
 		fitText(c, size, 10, 0, 60).TextColor(ink3)
 	})

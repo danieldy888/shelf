@@ -345,13 +345,14 @@ func (f *usageFeature) requestRefresh() {
 	}
 	// A held-back quota source is what makes a click look dead when the
 	// local scan is instant: say when it may be asked again.
+	l := f.host.appLoc()
 	switch {
 	case wait > 0:
-		f.host.toastStatus("刚查过，"+usageWait(wait)+"后可再刷新", time.Time{}, statusInfo)
+		f.host.toastStatus(l.UsageRefreshHeld(usageWait(l, wait)), time.Time{}, statusInfo)
 	case started:
-		f.host.toastProgress("正在刷新…", time.Time{})
+		f.host.toastProgress(l.UsageRefreshing(), time.Time{})
 	default:
-		f.host.toastStatus("没有可刷新的来源", time.Time{}, statusInfo)
+		f.host.toastStatus(l.UsageNothingToRefresh(), time.Time{}, statusInfo)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"shelf/internal/mac"
 	"shelf/internal/settings"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 func main() {
@@ -51,16 +51,15 @@ func main() {
 			switch {
 			case errors.Is(merr, errLegacyRootLocked):
 				log.Printf("%s: %v", appName, merr)
-				exitWithDialog("旧版 Shelf 仍在运行",
-					"旧版 Shelf 正在使用它的数据目录，本次没有迁移任何内容，也没有创建新的数据目录。\n\n"+
-						"请先在旧版 Shelf 的菜单栏图标里选择「退出 Shelf」，再重新打开 "+appName+"。\n\n"+
-						"旧数据目录："+oldRoot+"\n新数据目录："+root)
+				lm := systemLoc()
+				exitWithDialog(lm.StartupLegacyRunningTitle(),
+					lm.StartupLegacyRunningDetail(appName, oldRoot, root))
 				return
 			case merr != nil:
 				log.Printf("%s: 数据迁移失败：%v", appName, merr)
-				exitWithDialog("无法迁移数据",
-					"旧数据目录保持原样，本次启动已停止，以免以空数据启动；新数据目录尚未创建。\n\n"+
-						"旧数据目录："+oldRoot+"\n新数据目录："+root+"\n\n"+merr.Error())
+				lm := systemLoc()
+				exitWithDialog(lm.StartupMigrateFailedTitle(),
+					lm.StartupMigrateFailedDetail(oldRoot, root, merr.Error()))
 				return
 			case migrated:
 				log.Printf("%s: 数据已从 %s 迁移到 %s，旧目录保留为备份", appName, oldRoot, root)
@@ -72,11 +71,12 @@ func main() {
 	if err != nil {
 		// 历史未成功打开时不创建托盘、快捷键或监控，也不改写原件。
 		log.Printf("%s: %v", appName, err)
-		message := "无法读取 " + appName + " 历史"
-		detail := "历史文件保持原样，本次启动已停止。请先备份并检查数据目录中的 state.json。\n\n数据目录：" + *dataDir + "\n\n" + err.Error()
+		lm := systemLoc()
+		message := lm.StartupHistoryUnreadable(appName)
+		detail := lm.StartupHistoryUnreadableDetail(*dataDir, err.Error())
 		if errors.Is(err, store.ErrLocked) {
-			message = appName + " 已在运行"
-			detail = "同一个数据目录同时只能被一个实例使用，本实例将退出，不会改动已有历史。\n\n数据目录：" + *dataDir
+			message = lm.StartupAlreadyRunning(appName)
+			detail = lm.StartupAlreadyRunningDetail(*dataDir)
 		}
 		exitWithDialog(message, detail)
 		return
@@ -93,7 +93,7 @@ func main() {
 	s.SetTextLimit(prefs.ClipboardLimit)
 	if perr != nil {
 		a.settingsBroken = true
-		a.notice("设置文件无法读取，本次使用默认设置：" + perr.Error())
+		a.notice(startupLoc(prefs).StartupSettingsBroken(perr.Error()))
 	}
 	mygo.App.SetName(appName)
 	// The language of settings.json wins over the system's: "" follows the
@@ -174,6 +174,19 @@ func exitWithDialog(message, detail string) {
 	}
 }
 
+// systemLoc says the messages of the language the system shows, for the
+// startup path that runs before the shelf knows its language.
+func systemLoc() locales.Messages { return locales.In(mygo.App.Locale()) }
+
+// startupLoc says the messages of the language this launch will show: the
+// one settings.json names, or the system's when it follows the system.
+func startupLoc(prefs settings.Settings) locales.Messages {
+	if tag := languageTag(prefs.Language); tag != "" {
+		return locales.In(tag)
+	}
+	return systemLoc()
+}
+
 func (a *shelf) ready(show bool) {
 	a.locale = mygo.App.Locale()
 	a.newNotchWindow()
@@ -208,13 +221,13 @@ func (a *shelf) ready(show bool) {
 		a.tray.PopUpMenu()
 	})
 	if err := mygo.GlobalShortcut.Register(trayShortcut, a.toggle); err != nil {
-		a.notice(fmt.Sprintf("快捷键被占用；可点击菜单栏图标。%v", err))
+		a.notice(a.appLoc().StartupShortcutBusy(err.Error()))
 	}
 	if err := mygo.GlobalShortcut.Register(clipboardShortcut, a.openClipboardSearch); err != nil {
-		a.notice(fmt.Sprintf("剪贴板搜索快捷键被占用；可点击菜单栏图标。%v", err))
+		a.notice(a.appLoc().StartupClipboardShortcutBusy(err.Error()))
 	}
 	if err := mygo.GlobalShortcut.Register(ocrShortcut, a.startScreenOCR); err != nil {
-		a.notice(fmt.Sprintf("框选文字快捷键被占用；可用菜单栏图标的「框选文字」。%v", err))
+		a.notice(a.appLoc().StartupCaptureShortcutBusy(err.Error()))
 	}
 	a.applyClipboardHistory()
 	a.modules = append(a.modules, &retentionModule{host: a})
@@ -279,7 +292,7 @@ func (a *shelf) ready(show bool) {
 	})
 	if a.store != nil {
 		if merr := a.store.MigrationError(); merr != nil {
-			a.notice("迁移前备份失败，已停止写入以保护原文件：" + merr.Error())
+			a.notice(a.appLoc().StartupBackupFailed(merr.Error()))
 		}
 	}
 	if show {
@@ -325,28 +338,30 @@ func (a *shelf) newNotchWindow() {
 // system-permission state, which the user changes in System Settings, and
 // the current settings.
 func (a *shelf) trayMenu() *mygo.Menu {
+	l := a.appLoc()
 	return mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "显示 / 收起 ShelfU", Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
+		{Label: l.TrayShowShelf(), Click: func(*mygo.MenuItem, *mygo.Window) { a.toggle() }},
 		a.permissionMenuItem(),
-		{Label: "自动清理", Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
-		{Label: "剪贴板记录", Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
-		{Label: "正在播放", Type: mygo.MenuItemCheckbox, Checked: a.settings.IslandNowPlaying, Disabled: a.settingsBroken,
+		{Label: l.TrayRetention(), Type: mygo.MenuItemSubmenu, Submenu: a.retentionMenu()},
+		{Label: l.TrayClipboard(), Type: mygo.MenuItemSubmenu, Submenu: a.clipboardMenu()},
+		{Label: l.TrayNowPlaying(), Type: mygo.MenuItemCheckbox, Checked: a.settings.IslandNowPlaying, Disabled: a.settingsBroken,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = !s.IslandNowPlaying })
 			}},
-		{Label: "保持唤醒", Type: mygo.MenuItemSubmenu, Submenu: a.awakeMenu()},
-		{Label: "框选文字", Click: func(*mygo.MenuItem, *mygo.Window) { a.startScreenOCR() }},
+		{Label: l.AwakeTitle(), Type: mygo.MenuItemSubmenu, Submenu: a.awakeMenu()},
+		{Label: l.ItemCaptureText(), Click: func(*mygo.MenuItem, *mygo.Window) { a.startScreenOCR() }},
 		mygo.Separator(),
-		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
+		{Label: l.TraySettings(), Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		a.updateMenu(),
 		mygo.Separator(),
-		{Label: "退出 ShelfU", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+		{Label: l.TrayQuit(), Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
 }
 
 // retentionMenu offers the retention periods. It is disabled while
 // settings.json could not be read, so a broken file is never overwritten.
 func (a *shelf) retentionMenu() []*mygo.MenuItem {
+	l := a.appLoc()
 	choice := func(label string, days int) *mygo.MenuItem {
 		current := a.settings.RetentionDays
 		if current < 0 {
@@ -357,9 +372,9 @@ func (a *shelf) retentionMenu() []*mygo.MenuItem {
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.setRetention(days) },
 		}
 	}
-	items := []*mygo.MenuItem{choice("不自动清理", 0)}
+	items := []*mygo.MenuItem{choice(l.RetentionNever(), 0)}
 	for _, d := range retentionChoices {
-		items = append(items, choice(fmt.Sprintf("清理超过 %d 天的内容", d), d))
+		items = append(items, choice(l.RetentionDays(d), d))
 	}
 	return items
 }
@@ -380,6 +395,7 @@ func (a *shelf) setRetention(days int) {
 // clipboardMenu offers the retained text limits. A broken settings file locks
 // these choices, but never disables the clipboard recorder itself.
 func (a *shelf) clipboardMenu() []*mygo.MenuItem {
+	l := a.appLoc()
 	var items []*mygo.MenuItem
 	limit := a.settings.ClipboardLimit
 	if limit < 1 {
@@ -387,7 +403,7 @@ func (a *shelf) clipboardMenu() []*mygo.MenuItem {
 	}
 	for _, n := range clipboardLimitChoices {
 		items = append(items, &mygo.MenuItem{
-			Label: fmt.Sprintf("保留 %d 条", n), Type: mygo.MenuItemRadio, Checked: limit == n, Disabled: a.settingsBroken,
+			Label: l.ClipMenuKeep(n), Type: mygo.MenuItemRadio, Checked: limit == n, Disabled: a.settingsBroken,
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.setClipboardLimit(n) },
 		})
 	}

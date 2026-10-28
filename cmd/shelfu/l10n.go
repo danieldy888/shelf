@@ -70,6 +70,6 @@ func (a *shelf) retitleWindows() {
 		}
 	}
 	if a.rn != nil && a.rn.win != nil {
-		a.rn.win.SetTitle(renameTitle(len(a.rn.items)))
+		a.rn.win.SetTitle(a.renameTitle(len(a.rn.items)))
 	}
 }

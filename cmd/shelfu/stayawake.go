@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/locales"
 )
 
 // awakeModule keeps the Mac from idle-sleeping for a chosen span, meant
@@ -38,17 +39,22 @@ type awakeModule struct {
 	now     func() time.Time
 }
 
-// awakeDurations are the timed choices of the 保持唤醒 submenu, in order;
-// a duration of 0 is 一直.
-var awakeDurations = []struct {
+// awakeDuration is one choice of the 保持唤醒 submenu: its label and the
+// span it holds, 0 for 一直.
+type awakeDuration struct {
 	label string
 	d     time.Duration
-}{
-	{"30 分钟", 30 * time.Minute},
-	{"1 小时", time.Hour},
-	{"2 小时", 2 * time.Hour},
-	{"4 小时", 4 * time.Hour},
-	{"一直（直到关闭）", 0},
+}
+
+// awakeDurations are the timed choices of the 保持唤醒 submenu, in order.
+func awakeDurations(l locales.Messages) []awakeDuration {
+	return []awakeDuration{
+		{l.AwakeMinutes(30), 30 * time.Minute},
+		{l.AwakeHours(1), time.Hour},
+		{l.AwakeHours(2), 2 * time.Hour},
+		{l.AwakeHours(4), 4 * time.Hour},
+		{l.AwakeForever(), 0},
+	}
 }
 
 // newAwakeModule wires the feature into the shell; the quit handler makes
@@ -65,9 +71,10 @@ func newAwakeModule(host *shelf) *awakeModule {
 // while nothing is held. Rebuilt with the menu on every right-click.
 func (a *shelf) awakeMenu() []*mygo.MenuItem {
 	m := a.awake
+	l := a.appLoc()
 
 	var items []*mygo.MenuItem
-	for _, c := range awakeDurations {
+	for _, c := range awakeDurations(l) {
 		d := c.d
 		items = append(items, &mygo.MenuItem{
 			Label: c.label, Type: mygo.MenuItemRadio,
@@ -78,12 +85,12 @@ func (a *shelf) awakeMenu() []*mygo.MenuItem {
 	items = append(items,
 		mygo.Separator(),
 		&mygo.MenuItem{
-			Label: "屏幕也保持亮着", Type: mygo.MenuItemCheckbox, Checked: m.wantsDisplay(),
+			Label: l.AwakeKeepScreen(), Type: mygo.MenuItemCheckbox, Checked: m.wantsDisplay(),
 			Click: func(*mygo.MenuItem, *mygo.Window) { m.setDisplay(time.Now(), !m.display) },
 		},
 		mygo.Separator(),
 		&mygo.MenuItem{
-			Label: "关闭", Disabled: !m.active(),
+			Label: l.AwakeOff(), Disabled: !m.active(),
 			Click: func(*mygo.MenuItem, *mygo.Window) { m.stop(time.Now()) },
 		},
 	)
@@ -174,7 +181,7 @@ func (m *awakeModule) wantKind() mac.PowerAssertionKind {
 // fail reports a user-requested assertion failure in the panel's toast or
 // the closed notch's capsule without opening the panel over another app.
 func (m *awakeModule) fail(err error) {
-	m.host.toastStatus("无法开启保持唤醒："+err.Error(), m.clock().Add(4*time.Second), statusErr)
+	m.host.toastStatus(m.host.appLoc().AwakeFailed(err.Error()), m.clock().Add(4*time.Second), statusErr)
 }
 
 // tick releases a timed hold at its deadline and keeps the countdown
@@ -213,14 +220,15 @@ func (m *awakeModule) remainText(now time.Time) string {
 	if !m.active() {
 		return ""
 	}
+	l := m.host.appLoc()
 	if m.until.IsZero() {
-		return "直到关闭"
+		return l.AwakeUntilOff()
 	}
 	rem := m.until.Sub(now)
 	if rem < 0 {
 		rem = 0
 	}
-	return "剩余 " + mac.FormatClock(rem.Seconds())
+	return l.AwakeRemaining(mac.FormatClock(rem.Seconds()))
 }
 
 func (m *awakeModule) clock() time.Time {
@@ -256,8 +264,9 @@ func (m *awakeModule) chip(c *ui.Context) ui.Element {
 	}
 	now := m.clock()
 	remain := m.remainText(now)
+	l := loc(c)
 	chip := ui.Row(c.Key("awake-chip")).Size(chipH, chipH).Radius(chipH / 2).Background(fill1).
-		Center().Label("保持唤醒").Tooltip("保持唤醒 · " + remain)
+		Center().Label(l.AwakeTitle()).Tooltip(l.AwakeChipTooltip(remain))
 	chip.Children(func() {
 		ui.Icon(c, awakeSymbol).Size(13, 13).TextColor(ink)
 	})

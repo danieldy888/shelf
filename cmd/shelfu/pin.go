@@ -518,7 +518,7 @@ func (a *shelf) unpin(it *pinItem, putBack bool) bool {
 	}) {
 		it.wantKill = false // do not retry a failed menu action every tick
 		if noRoom {
-			a.toastStatus("主页没有空位，先移除一个小组件", time.Now().Add(3*time.Second), statusInfo)
+			a.toastStatus(a.appLoc().HomeNoSpace(), time.Now().Add(3*time.Second), statusInfo)
 		}
 		return false
 	}
@@ -747,7 +747,7 @@ func (a *shelf) pinReceive(it *pinItem, data transfer.Data) {
 		}
 	}
 	if err := a.receive(data); err != nil {
-		a.toastStatus("放入失败："+err.Error(), time.Time{}, statusErr)
+		a.toastStatus(a.appLoc().PinDropFailed(err.Error()), time.Time{}, statusErr)
 	}
 	it.dropAt = time.Now().Add(pinHoldAfter)
 	it.invalidate()

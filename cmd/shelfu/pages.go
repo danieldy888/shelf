@@ -3,12 +3,12 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // pageID names one page of the expanded panel. Pages are self-contained
@@ -40,6 +40,15 @@ type panelPage interface {
 	// widest enabled page name, so the icons behind it never move.
 	title() string
 	actions(c *ui.Context) []ui.Element // the back row's right side, appended in order
+}
+
+// pageText is a page whose name it says in a given language. label and
+// title carry no context, so the panel asks for the name in the language
+// of its window here; a page without it falls back to its own label and
+// title (see pageLabel and pageTitle in panel.go).
+type pageText interface {
+	labelIn(l locales.Messages) string
+	titleIn(l locales.Messages) string
 }
 
 // ensurePages registers the built-in pages once; later pages are appended
@@ -142,8 +151,9 @@ type trayPage struct {
 	scroll ui.ScrollState // where the grid is scrolled to
 }
 
-func (p *trayPage) id() pageID    { return pageTray }
-func (p *trayPage) label() string { return "托盘" }
+func (p *trayPage) id() pageID                        { return pageTray }
+func (p *trayPage) label() string                     { return locales.PageTray() }
+func (p *trayPage) labelIn(l locales.Messages) string { return l.PageTray() }
 func (p *trayPage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, trayNavSymbol)
 }
@@ -181,8 +191,8 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	a := p.host
 	list := p.items()
 	if len(list) == 0 {
-		hint := "文件、文件夹、文字和图片\n复制的文字与截图也会自动收好"
-		return a.emptyState(c, shelfSymbol, "把文件拖到这里", hint)
+		l := loc(c)
+		return a.emptyState(c, shelfSymbol, l.PageTrayEmptyTitle(), l.PageTrayEmptyHint())
 	}
 	rows := (len(list) + gridCols - 1) / gridCols
 	listH := float32(rows*(tileH+gridGap) - gridGap)
@@ -204,22 +214,24 @@ func (p *trayPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	})
 }
 
-func (p *trayPage) title() string { return "托盘" }
+func (p *trayPage) title() string                     { return locales.PageTray() }
+func (p *trayPage) titleIn(l locales.Messages) string { return l.PageTray() }
 
 func (p *trayPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
+	l := loc(c)
 	live := a.tab == pageTray
 	list := p.items()
 	var out []ui.Element
 	if len(list) > 0 {
-		hint := "⌘ / ⇧ 多选"
+		hint := l.PageMultiHint()
 		if n := a.selection.count(); n > 1 {
-			hint = fmt.Sprintf("已选 %d 项", n)
+			hint = l.PageSelectedCount(n)
 		}
 		out = append(out, ui.Text(c.Key("multi-hint"), hint).SingleLine().FontSize(10.5).FontWeight(600).TextColor(ink3))
 	}
 	if gone := a.clearable(list, p.id()); len(gone) > 0 {
-		b := a.iconButton(c, "clear", trashSymbol, "清空")
+		b := a.iconButton(c, "clear", trashSymbol, l.PageClear())
 		if b.Clicked() && live {
 			a.removeFrom(gone, p.id())
 		}
@@ -236,8 +248,9 @@ type clipboardPage struct {
 	scroll ui.ScrollState // where the list is scrolled to
 }
 
-func (p *clipboardPage) id() pageID    { return pageClipboard }
-func (p *clipboardPage) label() string { return "剪贴板" }
+func (p *clipboardPage) id() pageID                        { return pageClipboard }
+func (p *clipboardPage) label() string                     { return locales.PageClipboard() }
+func (p *clipboardPage) labelIn(l locales.Messages) string { return l.PageClipboard() }
 func (p *clipboardPage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, clipNavSymbol)
 }
@@ -284,9 +297,10 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	a := p.host
 	list := p.items()
 	if len(list) == 0 {
-		icon, title, hint := textSymbol, "还没有剪贴板记录", "在其他应用按 ⌘C，文字和截图会自动收好"
+		l := loc(c)
+		icon, title, hint := textSymbol, l.PageClipEmptyTitle(), l.PageClipEmptyHint()
 		if a.search != "" {
-			icon, title, hint = searchSymbol, "没有匹配的内容", "换个关键词，或按 Esc 清空搜索"
+			icon, title, hint = searchSymbol, l.PageClipNoMatchTitle(), l.PageClipNoMatchHint()
 		}
 		return a.emptyState(c, icon, title, hint)
 	}
@@ -307,7 +321,8 @@ func (p *clipboardPage) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	})
 }
 
-func (p *clipboardPage) title() string { return "剪贴板" }
+func (p *clipboardPage) title() string                     { return locales.PageClipboard() }
+func (p *clipboardPage) titleIn(l locales.Messages) string { return l.PageClipboard() }
 
 // actions is the back row's right side: the compact search box and, when
 // there is something to clear, the trash button. While the page is the
@@ -316,7 +331,7 @@ func (p *clipboardPage) actions(c *ui.Context) []ui.Element {
 	a := p.host
 	out := []ui.Element{p.host.searchField(c, p.host.tab == pageClipboard)}
 	if gone := a.clearable(p.items(), p.id()); len(gone) > 0 {
-		b := a.iconButton(c, "clear", trashSymbol, "清空")
+		b := a.iconButton(c, "clear", trashSymbol, loc(c).PageClear())
 		if b.Clicked() && a.tab == pageClipboard {
 			a.removeFrom(gone, p.id())
 		}

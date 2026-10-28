@@ -155,9 +155,10 @@ func (it *pinItem) pressAt(px, py float64) {
 // takes it off the desktop without putting it back on the page.
 func (it *pinItem) pinMenu(e ui.Element) {
 	a := it.owner
+	l := a.appLoc()
 	e.ContextMenu(func(m *ui.Menu) {
 		if it.edge != pinFree {
-			if m.Item("始终展开").Checked(it.always).Chosen() {
+			if m.Item(l.PinAlways()).Checked(it.always).Chosen() {
 				it.always = !it.always
 				// Clearing it restarts the leave-delay rather than
 				// collapsing the card under the cursor mid-hover.
@@ -166,10 +167,10 @@ func (it *pinItem) pinMenu(e ui.Element) {
 			}
 			m.Separator()
 		}
-		if m.Item("放回刘海").Chosen() {
+		if m.Item(l.PinPutBack()).Chosen() {
 			it.wantKill, it.putBack = true, true
 		}
-		if m.Item("从桌面移除").Chosen() {
+		if m.Item(l.PinRemoveDesktop()).Chosen() {
 			it.wantKill, it.putBack = true, false
 		}
 	})

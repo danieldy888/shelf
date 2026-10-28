@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -53,9 +52,9 @@ func (p *homePage) homeWidgetBody(c *ui.Context, card ui.Element, w layout.Widge
 		card.Center().Gap(5).Children(func() {
 			if def != nil {
 				ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-				fitText(c, def.title, 12, 600, homeSpanW(w.W)-20).TextColor(ink)
+				fitText(c, def.name(loc(c)), 12, 600, homeSpanW(w.W)-20).TextColor(ink)
 			}
-			fitText(c, fmt.Sprintf("%d × %d", w.W, w.H), 10, 0, homeSpanW(w.W)-20).TextColor(ink3)
+			fitText(c, loc(c).CellSize(w.W, w.H), 10, 0, homeSpanW(w.W)-20).TextColor(ink3)
 		})
 		return
 	}
@@ -89,7 +88,7 @@ func (p *homePage) musicBody(c *ui.Context, card ui.Element, w layout.Widget) {
 				Opacity(0.6).Center().Children(func() {
 				ui.Icon(c, musicSymbol).Size(18, 18).TextColor(ink3)
 			})
-			fitText(c, "没有在播放", 11, 0, homeSpanW(w.W)-20).TextColor(ink3)
+			fitText(c, loc(c).HomeNoPlayback(), 11, 0, homeSpanW(w.W)-20).TextColor(ink3)
 		})
 		return
 	}
@@ -145,9 +144,9 @@ func (p *homePage) musicFull(c *ui.Context, card ui.Element, st mac.NowPlayingSt
 			panelLabel(c, nil, remLabel, 9.5, 500).TextColor(ink3).Width(rw)
 		})
 		ui.Row(c.Key("hw-ctrl")).Justify(ui.Center).AlignItems(ui.Center).Gap(18).Children(func() {
-			m.controlButton(c, "hw-prev", prevFill, "上一首", mac.NPPrevious, 26, 15)
+			m.controlButton(c, "hw-prev", prevFill, loc(c).PreviousTrack(), mac.NPPrevious, 26, 15)
 			m.controlButton(c, "hw-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, 30, 19)
-			m.controlButton(c, "hw-next", nextFill, "下一首", mac.NPNext, 26, 15)
+			m.controlButton(c, "hw-next", nextFill, loc(c).NextTrack(), mac.NPNext, 26, 15)
 		})
 		p.volumeRow(c)
 	})
@@ -200,7 +199,7 @@ func (p *homePage) progressBar(c *ui.Context, key string, frac float32, enabled 
 		frac = 0
 	}
 	frac = min(max(frac, 0), 1)
-	bar := ui.Row(c.Key(key)).Width(width).Height(12).Label("播放进度")
+	bar := ui.Row(c.Key(key)).Width(width).Height(12).Label(loc(c).PlaybackPosition())
 	bar.PointerPosition()
 	if enabled {
 		bar.HandleInput(func(ev ui.InputEvent) bool {
@@ -258,7 +257,7 @@ func (p *homePage) volumeRow(c *ui.Context) {
 	}
 	row := ui.Row(c.Key("hw-vol")).AlignItems(ui.Center).Gap(6)
 	if !ok {
-		row.Opacity(0.4).Tooltip("此设备不支持调音量")
+		row.Opacity(0.4).Tooltip(loc(c).VolumeUnsupported())
 	}
 	row.Children(func() {
 		ui.Icon(c, volLoSymbol).Size(12, 12).TextColor(ink3)
@@ -271,7 +270,7 @@ func (p *homePage) volumeRow(c *ui.Context) {
 // once through the replaceable control.
 func (p *homePage) volumeBar(c *ui.Context, frac float32, enabled bool) ui.Element {
 	const volBarW = float32(139)
-	bar := ui.Row(c.Key("hw-volbar")).Width(volBarW).Height(12).Label("音量")
+	bar := ui.Row(c.Key("hw-volbar")).Width(volBarW).Height(12).Label(loc(c).Volume())
 	bar.PointerPosition()
 	if enabled {
 		bar.HandleInput(func(ev ui.InputEvent) bool {
@@ -343,7 +342,7 @@ func (p *homePage) commitVolume(v float32, now time.Time) {
 		p.volOK = false
 		p.volAt = now
 		p.volLoaded = true
-		p.host.toastStatus("此设备不支持调音量", time.Now().Add(2*time.Second), statusInfo)
+		p.host.toastStatus(p.host.appLoc().VolumeUnsupported(), time.Now().Add(2*time.Second), statusInfo)
 		return
 	}
 	p.vol, p.volOK, p.volAt, p.volLoaded = v, true, now, true
@@ -351,20 +350,22 @@ func (p *homePage) commitVolume(v float32, now time.Time) {
 
 // awakeBody draws the keep-awake widget for its size.
 func (p *homePage) awakeBody(c *ui.Context, card ui.Element, w layout.Widget) {
+	l := loc(c)
 	m := p.host.awake
 	on := m != nil && m.active()
-	big := "关"
-	small := "点按开启"
+	big := l.AwakeOff()
+	small := l.AwakeTapStart()
 	col := ink3
 	if on {
-		big, small, col = "一直", "剩余时间", awakeWarn
+		big, small, col = l.AwakeAlways(), l.AwakeTimeLeft(), awakeWarn
 		if !m.until.IsZero() {
 			big = mac.FormatClock(max(0, m.until.Sub(time.Now()).Seconds()))
 		}
 	}
+	line := l.AwakeLine(big, small)
 	if w.W == 1 && w.H == 1 {
 		card.Padding(9, 10, 9, 10).Children(func() {
-			fitText(c, "保持唤醒", 11, 600, homeCellW()-20).TextColor(ink2)
+			fitText(c, l.KeepAwake(), 11, 600, homeCellW()-20).TextColor(ink2)
 			ui.Box(c).Height(4)
 			fitText(c, big, 19, 700, homeCellW()-20).TextColor(col)
 			fitText(c, small, 10, 0, homeCellW()-20).TextColor(ink3)
@@ -376,24 +377,20 @@ func (p *homePage) awakeBody(c *ui.Context, card ui.Element, w layout.Widget) {
 			ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 				ui.Icon(c, cupSymbol).Size(18, 18).TextColor(ink)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-					fitText(c, "保持唤醒", 11, 600, homeSpanW(w.W)-52).TextColor(ink2)
-					fitText(c, big+" · "+small, 9.5, 0, homeSpanW(w.W)-52).TextColor(col)
+					fitText(c, l.KeepAwake(), 11, 600, homeSpanW(w.W)-52).TextColor(ink2)
+					fitText(c, line, 9.5, 0, homeSpanW(w.W)-52).TextColor(col)
 				})
 				if on {
 					ui.Box(c.Key("home-awake-dot")).Size(6, 6).Radius(3).Background(awakeWarn)
 				}
 			})
 			if w.H == 2 {
-				chips := awakeDurations
+				chips := awakeChipSpans
 				for start := 0; start < len(chips); start += 2 {
 					end := min(start+2, len(chips))
 					ui.Row(c.Key(fmt.Sprintf("home-awake-chips-%d", start))).Gap(4).Children(func() {
-						for _, choice := range chips[start:end] {
-							label := choice.label
-							if i := strings.Index(label, "（"); i >= 0 {
-								label = label[:i]
-							}
-							p.host.awakeChip(c, "home-chip-"+label, label, choice.d)
+						for _, d := range chips[start:end] {
+							p.host.awakeChip(c, fmt.Sprintf("home-chip-%d", d/time.Minute), awakeChipLabel(l, d), d)
 						}
 					})
 				}
@@ -410,20 +407,21 @@ func (p *homePage) usageBody(c *ui.Context, card ui.Element, w layout.Widget) {
 	if p.host.usage != nil {
 		five, week, ok = p.host.usage.leastWindow()
 	}
-	label := "AI 用量"
-	sub := "暂无数据"
+	l := loc(c)
+	label := l.AiUsage()
+	sub := l.NoData()
 	if ok {
 		win := five
 		if win == nil {
 			win = week
 		}
 		if win != nil {
-			label = fmt.Sprintf("5 小时 %.0f%%", max(0, 100-win.UsedPct))
+			label = l.UsageFiveHour(fmt.Sprintf("%.0f", max(0, 100-win.UsedPct)))
 			if win == week {
-				label = fmt.Sprintf("每周 %.0f%%", max(0, 100-win.UsedPct))
+				label = l.UsageWeekly(fmt.Sprintf("%.0f", max(0, 100-win.UsedPct)))
 			}
 			if five != nil && week != nil {
-				sub = fmt.Sprintf("每周 %.0f%%", max(0, 100-week.UsedPct))
+				sub = l.UsageWeekly(fmt.Sprintf("%.0f", max(0, 100-week.UsedPct)))
 			}
 		}
 	}
@@ -444,7 +442,7 @@ func (p *homePage) usageBody(c *ui.Context, card ui.Element, w layout.Widget) {
 			ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 				p.usageRing(c, 48, five, week)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					fitText(c, "AI 用量", 11, 600, homeSpanW(w.W)-88).TextColor(ink2)
+					fitText(c, l.AiUsage(), 11, 600, homeSpanW(w.W)-88).TextColor(ink2)
 					fitText(c, label, 10, 0, homeSpanW(w.W)-88).TextColor(ink)
 					fitText(c, sub, 9.5, 0, homeSpanW(w.W)-88).TextColor(ink3)
 				})
@@ -479,7 +477,7 @@ func (p *homePage) recentBody(c *ui.Context, card ui.Element, w layout.Widget) {
 		thumb, cols = 24, 2
 	}
 	card.Padding(9, 10, 9, 10).Children(func() {
-		fitText(c, "最近文件", 11, 600, homeSpanW(w.W)-20).TextColor(ink2)
+		fitText(c, loc(c).RecentFiles(), 11, 600, homeSpanW(w.W)-20).TextColor(ink2)
 		ui.Box(c).Height(6)
 		rows := 1
 		if w.H == 2 {
@@ -498,7 +496,7 @@ func (p *homePage) recentBody(c *ui.Context, card ui.Element, w layout.Widget) {
 				})
 			}
 			if len(items) == 0 {
-				fitText(c, "还没有文件", 10, 0, homeSpanW(w.W)-20).TextColor(ink3)
+				fitText(c, loc(c).NoFilesYet(), 10, 0, homeSpanW(w.W)-20).TextColor(ink3)
 			}
 		})
 	})
@@ -508,9 +506,9 @@ func (p *homePage) recentBody(c *ui.Context, card ui.Element, w layout.Widget) {
 // it.
 func (p *homePage) clipBody(c *ui.Context, card ui.Element, w layout.Widget) {
 	it, ok := p.host.latestClipboardItem()
-	title, sub := "", "还没有记录"
+	title, sub := "", loc(c).NoRecords()
 	if ok {
-		title, sub = itemTitle(it), "点按复制"
+		title, sub = itemTitle(it), loc(c).TapToCopy()
 	}
 	switch {
 	case w.W == 1 && w.H == 1:
@@ -518,13 +516,13 @@ func (p *homePage) clipBody(c *ui.Context, card ui.Element, w layout.Widget) {
 			ui.Icon(c, clipNavSymbol).Size(20, 20).TextColor(ink2)
 			label := title
 			if label == "" {
-				label = "剪贴板最新"
+				label = loc(c).LatestClip()
 			}
 			ui.Text(c, label).SingleLine().FontSize(9.5).TextColor(ink).MaxWidth(homeCellW() - 16)
 		})
 	case w.H == 2:
 		card.Padding(9, 10, 9, 10).Children(func() {
-			fitText(c, "剪贴板最新", 11, 600, homeSpanW(w.W)-20).TextColor(ink2)
+			fitText(c, loc(c).LatestClip(), 11, 600, homeSpanW(w.W)-20).TextColor(ink2)
 			ui.Box(c).Height(5)
 			if ok {
 				ui.Text(c, title).SingleLine().FontSize(11.5).FontWeight(600).TextColor(ink)
@@ -544,7 +542,7 @@ func (p *homePage) clipBody(c *ui.Context, card ui.Element, w layout.Widget) {
 				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 					label := title
 					if label == "" {
-						label = "剪贴板最新"
+						label = loc(c).LatestClip()
 					}
 					ui.Text(c, label).SingleLine().FontSize(11.5).FontWeight(600).TextColor(ink)
 					fitText(c, sub, 10, 0, homeSpanW(w.W)-69).TextColor(ink3)

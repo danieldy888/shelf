@@ -26,6 +26,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/locales"
 )
 
 const (
@@ -73,13 +74,16 @@ type permissionTimer interface {
 // systemPermission is one item of the unified entry: the probe that reports
 // the live state and the user-initiated request for that one permission.
 // short names it inside a sentence (the row's caption and the group's note),
-// gloss is the one-line reason that note gives for it.
+// gloss is the one-line reason that note gives for it. l is the language the
+// copy is in, so a sentence built from a list of them (the group's note, the
+// row's caption) uses that language's separators without asking again.
 type systemPermission struct {
 	id      string
 	title   string
 	short   string
 	gloss   string
 	detail  string
+	l       locales.Messages
 	enabled func() bool
 	request func() bool
 }
@@ -87,15 +91,22 @@ type systemPermission struct {
 // systemPermissions is the single source of the list, in the order the
 // guided flow walks it: Full Disk Access first, because it is the one the
 // user notices (every drag out of Downloads/Desktop/Documents asks until it
-// is on).
+// is on). It says the source language; systemPermissionSet says it in the
+// language a window or a menu shows.
 func systemPermissions() []systemPermission {
+	return systemPermissionSet(locales.In(""))
+}
+
+// systemPermissionSet is the one list said in the language of l.
+func systemPermissionSet(l locales.Messages) []systemPermission {
 	return []systemPermission{
 		{
 			id:     fullDiskPermissionID,
-			title:  "文件访问 · 完整磁盘访问",
-			short:  "完整磁盘访问",
-			gloss:  "拖入不再弹窗",
-			detail: "从下载、桌面、文稿等文件夹拖入时不再弹窗询问",
+			title:  l.PermFullDiskTitle(),
+			short:  l.PermFullDiskShort(),
+			gloss:  l.PermFullDiskGloss(),
+			detail: l.PermFullDiskDetail(),
+			l:      l,
 			enabled: func() bool {
 				return fullDiskAccessProbe()
 			},
@@ -105,10 +116,11 @@ func systemPermissions() []systemPermission {
 		},
 		{
 			id:     accessibilityPermissionID,
-			title:  "刘海拖放保护 · 辅助功能",
-			short:  "辅助功能",
-			gloss:  "刘海拖放保护",
-			detail: "拖文件到刘海时，挡住系统弹出的桌面栏",
+			title:  l.PermAccessibilityTitle(),
+			short:  l.PermAccessibilityShort(),
+			gloss:  l.PermAccessibilityGloss(),
+			detail: l.PermAccessibilityDetail(),
+			l:      l,
 			enabled: func() bool {
 				return accessibilityProbe()
 			},
@@ -118,10 +130,11 @@ func systemPermissions() []systemPermission {
 		},
 		{
 			id:     screenCapturePermissionID,
-			title:  "框选文字 · 屏幕录制",
-			short:  "屏幕录制",
-			gloss:  "框选文字",
-			detail: "只在你框选时截取所选区域，在本机识别",
+			title:  l.PermScreenTitle(),
+			short:  l.PermScreenShort(),
+			gloss:  l.PermScreenGloss(),
+			detail: l.PermScreenDetail(),
+			l:      l,
 			enabled: func() bool {
 				return screenCaptureProbe()
 			},
@@ -133,7 +146,12 @@ func systemPermissions() []systemPermission {
 }
 
 func permissionByID(id string) (systemPermission, bool) {
-	for _, p := range systemPermissions() {
+	return permissionIn(systemPermissions(), id)
+}
+
+// permissionIn finds the item of list that has id.
+func permissionIn(list []systemPermission, id string) (systemPermission, bool) {
+	for _, p := range list {
 		if p.id == id {
 			return p, true
 		}
@@ -142,8 +160,14 @@ func permissionByID(id string) (systemPermission, bool) {
 }
 
 func missingSystemPermissions() []systemPermission {
+	return missingPermissions(systemPermissions())
+}
+
+// missingPermissions filters list to the permissions the system has not
+// granted.
+func missingPermissions(list []systemPermission) []systemPermission {
 	var missing []systemPermission
-	for _, p := range systemPermissions() {
+	for _, p := range list {
 		if !p.enabled() {
 			missing = append(missing, p)
 		}
@@ -152,37 +176,47 @@ func missingSystemPermissions() []systemPermission {
 }
 
 // permissionShortNames joins the given permissions' short names the way a
-// Chinese sentence lists them: 完整磁盘访问、辅助功能、屏幕录制.
+// sentence in their language lists them: 完整磁盘访问、辅助功能、屏幕录制,
+// or Full Disk Access, Accessibility, Screen Recording.
 func permissionShortNames(ps []systemPermission) string {
 	names := make([]string, len(ps))
 	for i, p := range ps {
 		names[i] = p.short
 	}
-	return strings.Join(names, "、")
+	l := locales.In("")
+	if len(ps) > 0 {
+		l = ps[0].l
+	}
+	return strings.Join(names, l.PermListSeparator())
 }
 
 // permissionsFootText is the note under the group's card: the whole list in
 // one sentence, built from the list itself so a fourth permission could
 // never leave a stale count or a stale name behind.
 func permissionsFootText(ps []systemPermission) string {
+	l := locales.In("")
+	if len(ps) > 0 {
+		l = ps[0].l
+	}
+	sep := l.PermListSeparator()
 	parts := make([]string, len(ps))
 	for i, p := range ps {
-		parts[i] = p.short + "（" + p.gloss + "）"
+		parts[i] = l.PermNoteItem(p.short, p.gloss)
 	}
-	return fmt.Sprintf("一个开关开启全部 %d 项：%s。macOS 要求每一项都由你在系统设置里打开。",
-		len(ps), strings.Join(parts, "、"))
+	return l.PermFoot(len(ps), strings.Join(parts, sep))
 }
 
 // permissionMenuItem is the tray item that replaces the old single
 // permission entry. It counts what is missing at menu-build time, because
 // the menu is rebuilt on every right-click.
 func (a *shelf) permissionMenuItem() *mygo.MenuItem {
+	l := a.appLoc()
 	missing := missingSystemPermissions()
 	if len(missing) == 0 {
-		return &mygo.MenuItem{Label: "系统权限已全部开启", Disabled: true}
+		return &mygo.MenuItem{Label: l.PermMenuAllOn(), Disabled: true}
 	}
 	return &mygo.MenuItem{
-		Label: fmt.Sprintf("开启系统权限（还差 %d 项）…", len(missing)),
+		Label: l.PermMenuMissing(len(missing)),
 		Click: func(*mygo.MenuItem, *mygo.Window) { a.showPermissions() },
 	}
 }
@@ -421,45 +455,47 @@ func (a *shelf) relaunchShelf() {
 	relaunchQuit()
 }
 
-// permissionsTitle is the group's heading and the title of its one row.
-const permissionsTitle = "系统权限"
-
 // settingsPermissionsSection is the 系统权限 group, first in the window: one
 // row, one switch, one list. It is never tied to settings.json, so it keeps
 // working while the file is broken — exactly like the old 刘海拖放保护 row
-// did.
+// did. The heading is also the title of its one row.
 func (a *shelf) settingsPermissionsSection(c *ui.Context) {
-	permissions := systemPermissions()
-	missing := missingSystemPermissions()
-	settingsSection(c, permissionsTitle, permissionsFootText(permissions), false, func() {
+	l := loc(c)
+	permissions := systemPermissionSet(l)
+	missing := missingPermissions(permissions)
+	settingsSection(c, l.PermTitle(), permissionsFootText(permissions), false, func() {
 		a.settingsPermissionSwitch(c, permissions, missing)
 	})
 }
 
 // permissionCaption is the row's caption: what is left, or which step of the
-// walk the user is on. Pure apart from the flow's own state.
-func (a *shelf) permissionCaption(permissions, missing []systemPermission) string {
+// walk the user is on. Pure apart from the flow's own state. permissions
+// carries the names in the language of l, so a name said here follows the
+// window rather than the source language.
+func (a *shelf) permissionCaption(l locales.Messages, permissions, missing []systemPermission) string {
 	switch a.perm.stage {
 	case permissionWaiting:
-		p, ok := a.permissionFlowCurrent()
-		if !ok {
+		if a.perm.step < 0 || a.perm.step >= len(a.perm.ids) {
 			break
 		}
-		caption := fmt.Sprintf("第 %d 项，共 %d 项：%s · 在「系统设置」里打开 ShelfU，这里会自动往下走",
-			a.perm.step+1, len(a.perm.ids), p.short)
-		if p.id == fullDiskPermissionID {
+		id := a.perm.ids[a.perm.step]
+		name := id
+		if p, ok := permissionIn(permissions, id); ok {
+			name = p.short
+		}
+		if id == fullDiskPermissionID {
 			// Full Disk Access has no list entry for an app that never asked:
 			// the request reveals the bundle in Finder for exactly this.
-			caption += "（列表里没有就点 +，或把访达里选中的 ShelfU 拖进去）"
+			return l.PermStepFullDisk(a.perm.step+1, len(a.perm.ids), name)
 		}
-		return caption
+		return l.PermStep(a.perm.step+1, len(a.perm.ids), name)
 	case permissionRelaunch:
-		return "还差最后一步：重新打开 ShelfU 才生效"
+		return l.PermRelaunchStep()
 	}
 	if len(missing) == 0 {
-		return fmt.Sprintf("已全部开启（%d/%d）", len(permissions), len(permissions))
+		return l.PermAllGranted(len(permissions), len(permissions))
 	}
-	return fmt.Sprintf("还差 %d 项：%s", len(missing), permissionShortNames(missing))
+	return l.PermMissing(len(missing), permissionShortNames(missing))
 }
 
 // settingsPermissionSwitch is the group's one row: the title and the state
@@ -469,28 +505,30 @@ func (a *shelf) permissionCaption(permissions, missing []systemPermission) strin
 // stage replaces the switch with the accent button: nothing is left to
 // switch until the app has restarted.
 func (a *shelf) settingsPermissionSwitch(c *ui.Context, permissions, missing []systemPermission) {
-	caption := a.permissionCaption(permissions, missing)
+	l := loc(c)
+	title := l.PermTitle()
+	caption := a.permissionCaption(l, permissions, missing)
 	if a.perm.stage == permissionRelaunch {
 		ui.Row(c.Key("perm-row")).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(0, 12).FillWidth().Children(func() {
-			permissionRowLabel(c, caption)
-			settingsAccentButton(c, "relaunch", "重新打开 ShelfU", func() { a.relaunchShelf() })
+			permissionRowLabel(c, title, caption)
+			settingsAccentButton(c, "relaunch", l.PermRelaunchButton(), func() { a.relaunchShelf() })
 		})
 		return
 	}
 	on := len(missing) == 0 || a.perm.stage == permissionWaiting
 	row := ui.ToggleBase(c.Key("toggle-permissions"), &on).FillWidth().AlignItems(ui.Center).
-		Gap(10).MinHeight(48).Padding(0, 12).Label(permissionsTitle)
+		Gap(10).MinHeight(48).Padding(0, 12).Label(title)
 	var sw ui.Element
 	row.Children(func() {
-		permissionRowLabel(c, caption)
+		permissionRowLabel(c, title, caption)
 		ui.Row(c.Key("perm-ctl")).AlignItems(ui.Center).Gap(8).Children(func() {
 			if a.perm.stage == permissionWaiting {
-				settingsQuietButton(c, "stop", "停止", func() {
+				settingsQuietButton(c, "stop", l.PermStop(), func() {
 					a.stopPermissionFlow()
 					a.repaintSettings()
 				})
 			}
-			sw = ui.Switch(c, &on).Label(permissionsTitle)
+			sw = ui.Switch(c, &on).Label(title)
 		})
 	})
 	if row.Changed() || sw.Changed() {
@@ -499,9 +537,9 @@ func (a *shelf) settingsPermissionSwitch(c *ui.Context, permissions, missing []s
 }
 
 // permissionRowLabel is the switch row's left column.
-func permissionRowLabel(c *ui.Context, caption string) {
+func permissionRowLabel(c *ui.Context, title, caption string) {
 	ui.Column(c.Key("perm-k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
-		ui.Text(c, permissionsTitle).SingleLine().FontSize(13).TextColor(setInk)
+		ui.Text(c, title).SingleLine().FontSize(13).TextColor(setInk)
 		ui.Text(c, caption).FontSize(11).TextColor(setInk3)
 	})
 }

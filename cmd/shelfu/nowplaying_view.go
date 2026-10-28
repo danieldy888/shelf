@@ -7,9 +7,11 @@ import (
 	"math"
 	"time"
 
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/locales"
 )
 
 // The now-playing module's drawing lives here; nowplaying_module.go owns
@@ -72,9 +74,10 @@ func (m *nowPlayingModule) peekWings(c *ui.Context, w, h, k float32) bool {
 	if !ok || !m.showsPlayer() {
 		return false
 	}
-	label := "展开 ShelfU"
+	l := loc(c)
+	label := l.PanelExpand()
 	if st.Title != "" {
-		label = "正在播放：" + st.Title + " · 展开 ShelfU"
+		label = l.NpPlayingExpand(st.Title)
 	}
 	wings := ui.Row(c.Key("np-wings")).Width(w).Height(h).
 		Padding(0, npWingsPad, npWingsBody, npWingsPad).AlignItems(ui.Center).
@@ -128,8 +131,9 @@ func (m *nowPlayingModule) miniPlayer(c *ui.Context) {
 	if !ok {
 		return
 	}
+	l := loc(c)
 	row := ui.Row(c.Key("np-mini")).Grow(1).MinWidth(0).Gap(8).AlignItems(ui.Center)
-	row.Label(st.Title).Tooltip("正在播放：" + st.Title)
+	row.Label(st.Title).Tooltip(l.NpPlaying(st.Title))
 	row.Children(func() {
 		m.coverArt(c, "np-mini-art", islandArt, islandArtR)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Justify(ui.Center).Children(func() {
@@ -154,9 +158,13 @@ func (m *nowPlayingModule) chip(c *ui.Context) ui.Element {
 	if !ok {
 		return ui.Box(c).Size(0, 0)
 	}
+	l := loc(c)
+	tip := l.NpPlayingPause(st.Title)
+	if !st.Playing {
+		tip = l.NpPlayingPlay(st.Title)
+	}
 	chip := ui.Row(c.Key("np-chip")).Height(chipH).Radius(chipH/2).Background(fill1).
-		Padding(0, 3, 0, 3).Gap(4).AlignItems(ui.Center).Label(st.Title).
-		Tooltip("正在播放：" + st.Title + " · " + playPauseLabel(st.Playing))
+		Padding(0, 3, 0, 3).Gap(4).AlignItems(ui.Center).Label(st.Title).Tooltip(tip)
 	chip.Children(func() {
 		m.coverArt(c, "np-chip-art", 16, 4)
 		m.eqBarsCompact(c, st.Playing)
@@ -168,7 +176,7 @@ func (m *nowPlayingModule) chip(c *ui.Context) ui.Element {
 // chipToggle is the play/pause button used by the mini player and the
 // chip; size is the hit box, glyph the icon's edge.
 func (m *nowPlayingModule) chipToggle(c *ui.Context, key string, playing bool, size, glyph float32) {
-	b := ui.ButtonBase(c.Key(key)).Size(size, size).Radius(size / 2).Center().Label(playPauseLabel(playing))
+	b := ui.ButtonBase(c.Key(key)).Size(size, size).Radius(size / 2).Center().Label(playPauseText(loc(c), playing))
 	b.Children(func() {
 		ui.Icon(c, toggleSymbol(playing)).Size(glyph, glyph).TextColor(ink)
 	})
@@ -262,12 +270,19 @@ func toggleSymbol(playing bool) *ui.SVG {
 	return playFill
 }
 
-// playPauseLabel names the action the button will take.
+// playPauseLabel names the action the button will take, in the language
+// the app shows; the home widgets and tool cards, built outside a view,
+// use it.
 func playPauseLabel(playing bool) string {
+	return playPauseText(locales.In(i18n.Locale()), playing)
+}
+
+// playPauseText is playPauseLabel in the language of l.
+func playPauseText(l locales.Messages, playing bool) string {
 	if playing {
-		return "暂停"
+		return l.NpPause()
 	}
-	return "播放"
+	return l.NpPlay()
 }
 
 // rememberArt stores a freshly decoded cover (or app icon) along with its

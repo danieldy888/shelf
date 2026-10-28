@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 var (
@@ -531,7 +532,7 @@ func (a *shelf) view(c *ui.Context) {
 		a.snap.drawn = false // the fold out of the snap box is over
 		a.fb.clearExpired(now, true)
 		if a.island {
-			zone.Label("展开 ShelfU")
+			zone.Label(loc(c).PanelExpand())
 		} else {
 			a.syncMousePassThrough()
 			if accepts {
@@ -830,10 +831,11 @@ func (a *shelf) bandRow(c *ui.Context, island bool) {
 			ui.Box(c.Key("band-housing")).Width(float32(a.notchW + 2*6)).Shrink(0)
 		}
 		ui.Row(c.Key("band-right")).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-			if a.iconButton(c, "settings", gearSymbol, "设置").Clicked() {
+			l := loc(c)
+			if a.iconButton(c, "settings", gearSymbol, l.PanelSettings()).Clicked() {
 				a.openSettings()
 			}
-			if a.iconButton(c, "collapse", chevronUpSymbol, "收起").Clicked() {
+			if a.iconButton(c, "collapse", chevronUpSymbol, l.PanelCollapse()).Clicked() {
 				a.hide(hideExplicit)
 			}
 		})
@@ -851,7 +853,7 @@ func (a *shelf) islandRow(c *ui.Context) {
 				a.np.miniPlayer(c)
 				return
 			}
-			panelLabel(c, "island-counts", a.countsText(), 11.5, 0).TextColor(ink3)
+			panelLabel(c, "island-counts", a.countsText(loc(c)), 11.5, 0).TextColor(ink3)
 		})
 		ui.Box(c.Key("island-sep")).Width(1).Height(30).Background(fill2)
 		ui.Row(c.Key("island-pages")).Gap(islandIconGap).AlignItems(ui.Center).Children(func() {
@@ -864,8 +866,26 @@ func (a *shelf) islandRow(c *ui.Context) {
 	})
 }
 
+// pageLabel is the page icon's tooltip and accessible name in the
+// language of c's window; a page that names itself only through label
+// (no pageText) keeps its own wording.
+func pageLabel(c *ui.Context, p panelPage) string {
+	if t, ok := p.(pageText); ok {
+		return t.labelIn(loc(c))
+	}
+	return p.label()
+}
+
+// pageTitle is the back row's page name in the language of c's window.
+func pageTitle(c *ui.Context, p panelPage) string {
+	if t, ok := p.(pageText); ok {
+		return t.titleIn(loc(c))
+	}
+	return p.title()
+}
+
 // countsText is the island's quiet line when no track is loaded.
-func (a *shelf) countsText() string {
+func (a *shelf) countsText(l locales.Messages) string {
 	tray, clip := 0, 0
 	if p, ok := a.page(pageTray).(*trayPage); ok {
 		tray = len(p.items())
@@ -873,7 +893,7 @@ func (a *shelf) countsText() string {
 	if p, ok := a.page(pageClipboard).(*clipboardPage); ok {
 		clip = len(p.items())
 	}
-	return fmt.Sprintf("托盘 %d 项 · 剪贴板 %d 条", tray, clip)
+	return l.PanelCounts(tray, clip)
 }
 
 // tabBody holds the sheet under the band. A drag's drop zone and the
@@ -886,7 +906,7 @@ func (a *shelf) tabBody(c *ui.Context, over bool) {
 		case a.drop.on && len(a.drop.files) > 0:
 			a.dropFrame(c, a.drop.files, a.drop.class)
 		case a.ocrSheet:
-			a.sheetFrame(c, func() { a.dropBar(c, "框选文字", "", "") },
+			a.sheetFrame(c, func() { a.dropBar(c, loc(c).DropOcrTitle(), "", "") },
 				func() { a.ocrSheetStage(c) })
 		default:
 			a.pageBody(c, over)
@@ -1082,7 +1102,7 @@ const (
 func (a *shelf) backTitleWidth(c *ui.Context) float32 {
 	w := float32(0)
 	for _, p := range a.enabledPages() {
-		name := p.title()
+		name := pageTitle(c, p)
 		mw, ok := a.titleWidths[name]
 		if !ok {
 			mw, _ = c.MeasureText(0, ui.Span{Text: name, Size: backTitleSize, Weight: backTitleWeight})
@@ -1106,7 +1126,7 @@ func (a *shelf) backTitleWidth(c *ui.Context) float32 {
 // tabAnimation (the value is 1 at rest).
 func (a *shelf) backRow(c *ui.Context, t float32) {
 	cur := a.currentPage()
-	name := cur.title()
+	name := pageTitle(c, cur)
 	row := ui.Row(c.Key("back-row")).Height(backRowH).FillWidth().Gap(4).AlignItems(ui.Center)
 	var navs map[pageID]ui.Element
 	row.Children(func() {
@@ -1120,7 +1140,7 @@ func (a *shelf) backRow(c *ui.Context, t float32) {
 					old := ui.Row(c.Key("back-name-out")).Absolute().Left(0).Top(0).Height(22).
 						AlignItems(ui.Center).Opacity(1 - ui.EaseIn(t/tabOutShare))
 					old.Children(func() {
-						panelLabel(c, nil, from.title(), backTitleSize, backTitleWeight).TextColor(ink2)
+						panelLabel(c, nil, pageTitle(c, from), backTitleSize, backTitleWeight).TextColor(ink2)
 					})
 				}
 			}
@@ -1189,8 +1209,9 @@ func (a *shelf) backRow(c *ui.Context, t float32) {
 // dropFrame is the page frame during a file drag: 投放 and its count in
 // the back row, the release hint on the right, the zone in the content.
 func (a *shelf) dropFrame(c *ui.Context, paths []string, class dropClass) {
+	l := loc(c)
 	a.sheetFrame(c, func() {
-		a.dropBar(c, "投放", dropCountTextFor(len(paths), class), "松开放入托盘")
+		a.dropBar(c, l.DropTitle(), dropCountTextIn(l, len(paths), class), l.DropReleaseTray())
 	}, func() {
 		a.dropStage(c, paths, class)
 	})
@@ -1213,8 +1234,9 @@ func (a *shelf) dropBar(c *ui.Context, name, count, hint string) {
 // pageIconButton is one page icon: ink when active, ink2 with a fill1
 // hover otherwise; the page's name is its tooltip and accessible label.
 func (a *shelf) pageIconButton(c *ui.Context, p panelPage, size, glyph float32, on bool) ui.Element {
+	name := pageLabel(c, p)
 	b := ui.ButtonBase(c.Key("page-"+string(p.id()))).Size(size, size).Radius(size / 2).Center().
-		Label(p.label()).Tooltip(p.label())
+		Label(name).Tooltip(name)
 	if !on && b.Hovered() {
 		b.Background(fill1)
 	}
@@ -1286,6 +1308,7 @@ func (a *shelf) clearable(list []store.Item, id pageID) []store.Item {
 // then closes the panel outright: the ⌃⌥V flow opens straight on the sheet,
 // so there is no island state to back out to (see shelf.escape).
 func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
+	placeholder := loc(c).PanelSearch()
 	wrap := ui.Row(c.Key("clip-search")).Width(clipSearchW).Height(clipSearchH).Padding(0, 8, 0, 8).Gap(5).
 		AlignItems(ui.Center).Radius(7).Background(fill1)
 	if !live {
@@ -1296,7 +1319,7 @@ func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
 			if a.search != "" {
 				ui.Text(c, a.search).SingleLine().FontSize(11).TextColor(ink)
 			} else {
-				panelLabel(c, nil, "搜索剪贴板", 11, 0).TextColor(ink3)
+				panelLabel(c, nil, placeholder, 11, 0).TextColor(ink3)
 			}
 		})
 		return wrap
@@ -1304,7 +1327,7 @@ func (a *shelf) searchField(c *ui.Context, live bool) ui.Element {
 	wrap.Children(func() {
 		ui.Icon(c, searchSymbol).Size(11, 11).TextColor(ink3)
 		in := ui.TextInputBase(c.Key("clip-query"), &a.search).Grow(1).MinWidth(0).
-			Placeholder("搜索剪贴板").Label(searchLabel).FontSize(11).TextColor(ink)
+			Placeholder(placeholder).Label(placeholder).FontSize(11).TextColor(ink)
 		if a.focusMode {
 			in.Focus()
 		}
@@ -1356,8 +1379,9 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 	stack := ui.Column(c.Key("toasts")).Absolute().Left(16).Right(16).Bottom(10).
 		AlignItems(ui.Center).Gap(6).PassThrough()
 	stack.Children(func() {
+		l := loc(c)
 		if a.tab == pageClipboard && (a.focusMode || a.search != "") {
-			a.pill(c, "hint", "↑↓ 选择 · ↩ 复制并返回 · Esc 关闭", false)
+			a.pill(c, "hint", l.PanelSearchHint(), false)
 		}
 		if a.status != "" {
 			a.statusToast(c)
@@ -1369,7 +1393,7 @@ func (a *shelf) toastLayer(c *ui.Context, over bool) {
 		// The drop zone carries its own release hint in the back row;
 		// the 松开放入 capsule stays hidden while it is up.
 		if (over || (a.dragging && !a.ownDrag)) && !a.drop.on {
-			a.pill(c, "drop", "松开放入", false)
+			a.pill(c, "drop", l.DropRelease(), false)
 		}
 	})
 }
@@ -1431,15 +1455,16 @@ func (a *shelf) statusToast(c *ui.Context) {
 func (a *shelf) updatePill(c *ui.Context, note string) {
 	p := ui.Row(c.Key("pill-update")).Height(30).Padding(0, 8, 0, 14).Radius(15).
 		AlignItems(ui.Center).Gap(8).Background(fill2)
+	l := loc(c)
 	p.Children(func() {
 		panelLabel(c, nil, note, 11, 0).TextColor(ink)
 		switch {
 		case a.updateInstalled:
-			if ui.Button(c, "重新启动").Label("重新启动 ShelfU 完成更新").Clicked() {
+			if ui.Button(c, l.PanelRestart()).Label(l.PanelRestartLabel()).Clicked() {
 				relaunchApp()
 			}
 		case a.update != nil && !a.updateInstalling:
-			if ui.Button(c, "安装更新").Label("安装更新 " + a.update.Version).Clicked() {
+			if ui.Button(c, l.PanelInstallUpdate(a.update.Version)).Label(l.PanelInstallUpdate(a.update.Version)).Clicked() {
 				a.installUpdate()
 			}
 		}
@@ -1575,8 +1600,9 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 	// 内容从壳顶内侧开始：刘海样式空出刘海那一条，灵动岛空出胶囊本身
 	// 的高度，文字落在它下面长出的那一截。
 	_, notchH := a.anchorSize()
+	l := loc(c)
 	pill := ui.Column(c.Key("peek")).Width(shellW).Height(shellH).Clip().
-		AlignItems(ui.Center).Label("展开 ShelfU").Margin(float32(a.sheetTop()), 0, 0, 0)
+		AlignItems(ui.Center).Label(l.PanelExpand()).Margin(float32(a.sheetTop()), 0, 0, 0)
 	pill.Children(func() {
 		ui.Column(c.Key("peek-body")).Width(pw).Height(ph).Opacity(min(max(peekK, 0), 1)).Children(func() {
 			ui.Box(c.Key("peek-notch")).Height(notchH)
@@ -1584,10 +1610,10 @@ func (a *shelf) peekView(c *ui.Context, shellW, shellH, openK, peekK, shake floa
 			band.Children(func() {
 				if kind == peekDrop {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
-					panelLabel(c, nil, "松开放入", 12, 600).TextColor(ink)
+					panelLabel(c, nil, l.DropRelease(), 12, 600).TextColor(ink)
 				} else if kind == peekReturn {
 					ui.Icon(c, shelfSymbol).Size(14, 14).TextColor(ink)
-					panelLabel(c, nil, "松开放回", 12, 600).TextColor(ink)
+					panelLabel(c, nil, l.DropReturn(), 12, 600).TextColor(ink)
 				} else {
 					ui.Icon(c, chevronDownSym).Size(12, 12).TextColor(ink2)
 				}
@@ -1615,7 +1641,7 @@ func (a *shelf) capsuleView(c *ui.Context, shellW, shellH, _ /* openK */, peekK,
 	col := f.color()
 	textW := cw - fbDot - fbGap - 2*fbPadX
 	box := ui.Column(c.Key("fb-capsule")).Width(shellW).Height(shellH).AlignItems(ui.Center).
-		Margin(float32(a.sheetTop()), 0, 0, 0).Label("展开 ShelfU · " + f.text)
+		Margin(float32(a.sheetTop()), 0, 0, 0).Label(loc(c).PanelExpandText(f.text))
 	if shake != 0 {
 		box.Translate(shake, 0)
 	}
@@ -1846,7 +1872,7 @@ func (a *shelf) copyClipSelection() {
 	var texts []string
 	for _, it := range items {
 		if it.Kind != store.KindText {
-			a.report(errors.New("这些项目不能一起复制；请只选一个"))
+			a.report(errors.New(a.appLoc().PanelCopyManyFailed()))
 			return
 		}
 		texts = append(texts, it.Text)

@@ -128,7 +128,7 @@ func (a *shelf) finishScreenOCR(timer *time.Timer, text string, produced bool, e
 		// the live progress capsule breathes one more beat (~400ms).
 		ocrInvalidate(a)
 	case text == "":
-		a.toastStatus("没有识别到文字", time.Now().Add(3*time.Second), statusInfo)
+		a.toastStatus(a.appLoc().OcrNoText(), time.Now().Add(3*time.Second), statusInfo)
 	default:
 		a.toastOCRCopy(text, a.copyOCRText(text))
 	}
@@ -146,7 +146,7 @@ func (a *shelf) copyDroppedText(paths []string) {
 		// must not start a second round — the two would share ocrScan,
 		// so the first to finish would kill the other's progress
 		// capsule and re-arm a new box early.
-		a.toastProgress("正在识别，请稍候", time.Now().Add(3*time.Second))
+		a.toastProgress(a.appLoc().OcrBusy(), time.Now().Add(3*time.Second))
 		return
 	}
 	a.ocrScan = true
@@ -184,7 +184,7 @@ func (a *shelf) ocrLiveStatus(now time.Time) (string, any, bool) {
 	if !a.ocrScan || now.Sub(a.ocrBusyAt) < ocrProgressDelay {
 		return "", nil, false
 	}
-	return "正在识别…", a.ocrRunID, true
+	return a.appLoc().OcrProgress(), a.ocrRunID, true
 }
 
 // ocrSheetStage is the permission card that replaces the current page's
@@ -201,29 +201,29 @@ func (a *shelf) ocrSheetStage(c *ui.Context) {
 			ui.Icon(c, ocrSymbol).Size(18, 18).TextColor(ink)
 		})
 		ui.Column(c.Key("txt")).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, "框选文字需要「屏幕录制」权限").FontSize(13).FontWeight(600).TextColor(ink)
-			ui.Text(c, "只在你框选的那一下截取所选区域，识别在本机完成，不保存截图、不联网。").
+			ui.Text(c, loc(c).OcrPermissionTitle()).FontSize(13).FontWeight(600).TextColor(ink)
+			ui.Text(c, loc(c).OcrPermissionPrivacy()).
 				FontSize(11).TextColor(ink2).Margin(4, 0, 0, 0)
-			ui.Text(c, "在「系统设置」里打开 ShelfU 的开关后，需要退出并重新打开 ShelfU 才会生效。再点「框选文字」即可。").
+			ui.Text(c, loc(c).OcrPermissionRelaunch()).
 				FontSize(11).TextColor(ink3).Margin(4, 0, 0, 0)
 			ui.Row(c.Key("acts")).Gap(8).Margin(10, 0, 0, 0).Children(func() {
 				primary := ui.ButtonBase(c.Key("grant")).Height(24).Radius(12).Padding(0, 10, 0, 10).
-					Background(accent).Center().Label("打开系统设置")
+					Background(accent).Center().Label(loc(c).OcrOpenSettings())
 				primary.Children(func() {
-					ui.Text(c, "打开系统设置").SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
+					ui.Text(c, loc(c).OcrOpenSettings()).SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
 				})
 				if primary.Clicked() {
 					ocrGrant()
 				}
 				cancel := ui.ButtonBase(c.Key("cancel")).Height(24).Radius(12).Padding(0, 10, 0, 10).
-					Center().Label("取消")
+					Center().Label(loc(c).Cancel())
 				if cancel.Hovered() {
 					cancel.Background(fill2)
 				} else {
 					cancel.Background(fill1)
 				}
 				cancel.Children(func() {
-					ui.Text(c, "取消").SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
+					ui.Text(c, loc(c).Cancel()).SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
 				})
 				if cancel.Clicked() {
 					a.ocrSheet = false

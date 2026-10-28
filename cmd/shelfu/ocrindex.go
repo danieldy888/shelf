@@ -234,7 +234,7 @@ func (o *ocrIndex) finish(id string, lines []string, err error) (gone bool, werr
 		// A real save failure on a live item: don't retry every tick, and
 		// the callback hears the error instead of copying blindly.
 		o.markFailed(id)
-		a.toastQuiet("操作失败："+err.Error(), time.Time{}, statusErr)
+		a.toastQuiet(a.appLoc().OcrFailed(err.Error()), time.Time{}, statusErr)
 		return !exists, err
 	}
 	if a.win != nil {
@@ -300,27 +300,27 @@ func (a *shelf) copyRecognizedText(item store.Item) {
 		o = &ocrIndex{host: a}
 	}
 	if item.Missing || item.Path == "" {
-		a.toastStatus("图片文件已不可用", time.Now().Add(3*time.Second), statusErr)
+		a.toastStatus(a.appLoc().OcrImageUnavailable(), time.Now().Add(3*time.Second), statusErr)
 		return
 	}
 	queued := !item.OCRDone && o.anyBusy() && !o.busy(item.ID)
 	if !o.recognizeNow(item, func(text string, err error) {
 		switch {
 		case errors.Is(err, errItemGone):
-			a.toastStatus("图片已删除，未复制", time.Now().Add(3*time.Second), statusInfo)
+			a.toastStatus(a.appLoc().OcrImageGone(), time.Now().Add(3*time.Second), statusInfo)
 		case err != nil:
 			a.report(err)
 		case text == "":
-			a.toastStatus("没有识别到文字", time.Now().Add(3*time.Second), statusInfo)
+			a.toastStatus(a.appLoc().OcrNoText(), time.Now().Add(3*time.Second), statusInfo)
 		default:
 			a.toastOCRCopy(text, a.copyOCRText(text))
 		}
 	}) {
-		a.toastProgress("正在识别，请稍候", time.Now().Add(3*time.Second))
+		a.toastProgress(a.appLoc().OcrBusy(), time.Now().Add(3*time.Second))
 		return
 	}
 	if queued {
-		a.toastProgress("正在识别，完成后自动复制", time.Now().Add(3*time.Second))
+		a.toastProgress(a.appLoc().OcrQueued(), time.Now().Add(3*time.Second))
 	}
 }
 
@@ -383,7 +383,7 @@ func ocrFold(s string) string {
 // recognized text matched the search: context dim, the hit in ink.
 func ocrSnippetLine(c *ui.Context, before, hit, after string) ui.Element {
 	return ui.RichText(c,
-		ui.Span{Text: "图中文字：", Color: ink2},
+		ui.Span{Text: loc(c).OcrSnippetPrefix(), Color: ink2},
 		ui.Span{Text: before, Color: ink2},
 		ui.Span{Text: hit, Color: ink, Weight: 600},
 		ui.Span{Text: after, Color: ink2},

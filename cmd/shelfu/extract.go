@@ -37,6 +37,7 @@ import (
 
 	"shelf/internal/mac"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // archiveExt recognizes the archive filename extensions extraction
@@ -60,14 +61,14 @@ func archiveExt(path string) string {
 // extension (「备份.tar.gz」 → 「备份」). A name that is only the extension
 // (「.zip」) would leave nothing, so its leading dots are dropped instead
 // (「zip」) — never an empty or hidden folder name.
-func archiveStem(path string) string {
+func archiveStem(l locales.Messages, path string) string {
 	base := filepath.Base(path)
 	stem := strings.TrimSuffix(base, archiveExt(path))
 	if strings.Trim(stem, ".") == "" {
 		stem = strings.TrimLeft(base, ".")
 	}
 	if stem == "" {
-		return "解压结果"
+		return l.ExtractResultFolder()
 	}
 	return stem
 }
@@ -88,9 +89,9 @@ var (
 	freeDiskSpace = realFreeDiskSpace
 )
 
-// errEncrypted marks an archive that needs a passphrase: reported as such
-// rather than let a tool block on a password prompt.
-var errEncrypted = errors.New("压缩包已加密，无法解压")
+// encryptedErr is the failure of an archive that needs a passphrase:
+// reported as such rather than let a tool block on a password prompt.
+func encryptedErr(l locales.Messages) error { return errors.New(l.ExtractEncrypted()) }
 
 // safeEntry reports whether an archive member name is safe to extract:
 // relative and never escaping the destination.
@@ -125,10 +126,10 @@ func junkEntry(name string) bool {
 // extract and their total uncompressed size — or the reason the archive
 // must be refused outright: encrypted, corrupt, or carrying unsafe
 // entries (a symlink whose target leaves the archive included).
-func zipScan(src string) (zr *zip.ReadCloser, entries []*zip.File, total int64, err error) {
+func zipScan(l locales.Messages, src string) (zr *zip.ReadCloser, entries []*zip.File, total int64, err error) {
 	zr, err = zip.OpenReader(src)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("无法读取压缩包（文件可能已损坏）：%w", err)
+		return nil, nil, 0, errors.New(l.ExtractBadArchive(err.Error()))
 	}
 	fail := func(err error) (*zip.ReadCloser, []*zip.File, int64, error) {
 		zr.Close()
@@ -136,23 +137,23 @@ func zipScan(src string) (zr *zip.ReadCloser, entries []*zip.File, total int64, 
 	}
 	for _, f := range zr.File {
 		if f.Flags&0x1 != 0 {
-			return fail(errEncrypted)
+			return fail(encryptedErr(l))
 		}
 		// Checks run on the decoded name: a GBK byte stream can carry
 		// 0x5C bytes that only become separators after decoding.
 		name := zipName(f)
 		if !safeEntry(name) {
-			return fail(fmt.Errorf("压缩包含有不安全的路径：%s", name))
+			return fail(errors.New(l.ExtractUnsafePath(name)))
 		}
 		if f.Mode()&os.ModeSymlink != 0 {
 			rc, err := f.Open()
 			if err != nil {
-				return fail(fmt.Errorf("无法读取压缩包：%w", err))
+				return fail(errors.New(l.ExtractReadFailed(err.Error())))
 			}
 			target, _ := io.ReadAll(io.LimitReader(rc, 4096))
 			rc.Close()
 			if !safeEntry(zipText(target)) {
-				return fail(fmt.Errorf("压缩包含有指向外部的符号链接：%s", name))
+				return fail(errors.New(l.ExtractUnsafeLink(name)))
 			}
 		}
 		if !junkEntry(name) {
@@ -188,14 +189,14 @@ func zipName(f *zip.File) string {
 // or, when the archive holds a single top-level folder, yields that
 // folder under a unique name of its own. dst is the archive-named folder
 // reserved by planConvert. Cancelling leaves nothing behind.
-func extractArchive(src, dst string, job *convertJob) (final string, err error) {
+func extractArchive(l locales.Messages, src, dst string, job *convertJob) (final string, err error) {
 	dir := filepath.Dir(dst)
 	ext := archiveExt(src)
 	var total int64
 	var files []*zip.File
 	isZip := ext == ".zip"
 	if isZip {
-		zr, entries, n, err := zipScan(src)
+		zr, entries, n, err := zipScan(l, src)
 		if err != nil {
 			return "", err
 		}
@@ -203,13 +204,13 @@ func extractArchive(src, dst string, job *convertJob) (final string, err error) 
 		files, total = entries, n
 	} else {
 		var err error
-		if total, err = listArchive(src, job); err != nil {
+		if total, err = listArchiveIn(l, src, job); err != nil {
 			return "", err
 		}
 	}
 	if total > 0 {
 		if free, err := freeDiskSpace(dir); err == nil && total > free {
-			return "", fmt.Errorf("磁盘空间不足：解压需要约 %s，只有 %s 可用", formatBytes(total), formatBytes(free))
+			return "", errors.New(l.ExtractNoSpace(formatBytes(l, total), formatBytes(l, free)))
 		}
 	}
 	// One extraction runs at a time, so any staging folder already there is
@@ -231,9 +232,9 @@ func extractArchive(src, dst string, job *convertJob) (final string, err error) 
 		}
 	}()
 	if isZip {
-		err = extractZipFiles(files, stage, job)
+		err = extractZipFiles(l, files, stage, job)
 	} else {
-		err = untarFiles(src, stage, job)
+		err = untarFiles(l, src, stage, job)
 	}
 	if err != nil {
 		return "", err
@@ -270,7 +271,7 @@ func extractArchive(src, dst string, job *convertJob) (final string, err error) 
 // extractZipFiles writes the scanned zip members into stage (an
 // outside-pointing link was refused by zipScan). Cancelling stops between
 // members.
-func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
+func extractZipFiles(l locales.Messages, files []*zip.File, stage string, job *convertJob) error {
 	for _, f := range files {
 		if job.cancel.Load() {
 			return errConvertCanceled
@@ -286,7 +287,7 @@ func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
 		case mode&os.ModeSymlink != 0:
 			rc, err := f.Open()
 			if err != nil {
-				return fmt.Errorf("无法解压 %s：%w", name, err)
+				return errors.New(l.ExtractEntryFailed(name, err.Error()))
 			}
 			target, _ := io.ReadAll(io.LimitReader(rc, 4096))
 			rc.Close()
@@ -294,7 +295,7 @@ func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
 				return err
 			}
 			if err := os.Symlink(string(target), dst); err != nil {
-				return fmt.Errorf("无法解压 %s：%w", name, err)
+				return errors.New(l.ExtractEntryFailed(name, err.Error()))
 			}
 		default:
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -302,7 +303,7 @@ func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
 			}
 			rc, err := f.Open()
 			if err != nil {
-				return fmt.Errorf("无法解压 %s：%w", name, err)
+				return errors.New(l.ExtractEntryFailed(name, err.Error()))
 			}
 			w, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode.Perm()|0o600)
 			if err == nil {
@@ -311,7 +312,7 @@ func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
 			}
 			rc.Close()
 			if err != nil {
-				return fmt.Errorf("无法解压 %s：%w", name, err)
+				return errors.New(l.ExtractEntryFailed(name, err.Error()))
 			}
 		}
 	}
@@ -320,11 +321,17 @@ func extractZipFiles(files []*zip.File, stage string, job *convertJob) error {
 
 // listArchive asks bsdtar for a member listing — also the format check,
 // since an unreadable archive fails here before anything is staged — and
-// rejects unsafe names.
+// rejects unsafe names. Its errors are in the source language;
+// listArchiveIn words them in the language of l.
 func listArchive(src string, job *convertJob) (total int64, err error) {
+	return listArchiveIn(locales.In(""), src, job)
+}
+
+// listArchiveIn is listArchive with its errors in the language of l.
+func listArchiveIn(l locales.Messages, src string, job *convertJob) (total int64, err error) {
 	out, err := bsdtarRun(job, "-tf", src)
 	if err != nil {
-		return 0, archiveErr(src, err)
+		return 0, archiveErr(l, src, err)
 	}
 	for _, name := range strings.Split(string(out), "\n") {
 		name = strings.TrimRight(name, "\r")
@@ -332,42 +339,42 @@ func listArchive(src string, job *convertJob) (total int64, err error) {
 			continue
 		}
 		if !safeEntry(name) {
-			return 0, fmt.Errorf("压缩包含有不安全的路径：%s", name)
+			return 0, errors.New(l.ExtractUnsafePath(name))
 		}
 	}
 	return tarUncompressedSize(src), nil
 }
 
 // untarFiles extracts a non-zip archive into stage with bsdtar.
-func untarFiles(src, stage string, job *convertJob) error {
+func untarFiles(l locales.Messages, src, stage string, job *convertJob) error {
 	if _, err := bsdtarRun(job, "-xf", src, "-C", stage); err != nil {
-		return archiveErr(src, err)
+		return archiveErr(l, src, err)
 	}
 	return nil
 }
 
 // archiveErr maps a bsdtar failure on src to a plain-language error: the
 // RAR cases bsdtar cannot handle get their own wording, and anything else
-// falls back to its (stderr-derived) message.
-func archiveErr(src string, err error) error {
+// falls back to its (stderr-derived) message, in the language of l.
+func archiveErr(l locales.Messages, src string, err error) error {
 	if errors.Is(err, errConvertCanceled) {
 		return err
 	}
 	lower := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(lower, "encrypt") || strings.Contains(lower, "passphrase") || strings.Contains(lower, "password"):
-		return errEncrypted
+		return encryptedErr(l)
 	case strings.Contains(lower, "solid archive support unavailable"):
-		return errors.New("这个 RAR 用了固实压缩，系统自带工具解不了")
+		return errors.New(l.ExtractRarSolid())
 	case multipartRar(src):
-		return errors.New("这是分卷压缩包的一部分")
+		return errors.New(l.ExtractRarPart())
 	case strings.Contains(lower, "truncated") || strings.Contains(lower, "damaged") ||
 		strings.Contains(lower, "checksum") || strings.Contains(lower, "too small block"):
-		return errors.New("无法解压：压缩包已损坏")
+		return errors.New(l.ExtractDamaged())
 	case strings.Contains(lower, "unrecognized archive format") || strings.Contains(lower, "not supported"):
-		return errors.New("无法解压：不支持的压缩格式")
+		return errors.New(l.ExtractUnsupported())
 	}
-	return fmt.Errorf("无法解压：%s", err.Error())
+	return errors.New(l.ExtractFailed(err.Error()))
 }
 
 // multipartRar reports whether the file name marks one part of a split

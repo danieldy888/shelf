@@ -28,7 +28,7 @@ type idleIslandWindow struct {
 // window; the transparent corners are what makes it read as an island.
 func idleIslandView(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
-	ui.Column(c.Key("idle-island")).Fill().Label("ShelfU 灵动岛").Draw(
+	ui.Column(c.Key("idle-island")).Fill().Label(loc(c).IslandLabel()).Draw(
 		func(p *ui.Painter, r ui.Rect) {
 			rad := min(r.W/2, r.H/2)
 			var path ui.Path

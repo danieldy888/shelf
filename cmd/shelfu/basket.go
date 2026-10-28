@@ -218,12 +218,13 @@ func (a *shelf) basketView(c *ui.Context) {
 			card.Border(2, accent)
 		}
 		card.Children(func() {
-			label := "放到这里"
+			l := loc(c)
+			label := l.BasketDropHere()
 			switch {
 			case a.basket.dropped:
-				label = "已放入 ShelfU"
+				label = l.BasketSaved()
 			case a.basket.failed:
-				label = "放入失败"
+				label = l.BasketFailed()
 			}
 			iconColor := ink
 			if a.basket.failed {
@@ -237,7 +238,7 @@ func (a *shelf) basketView(c *ui.Context) {
 			case a.basket.failed || a.basket.dropped:
 				// 完成/失败态不再显示拖入提示副标题。
 			default:
-				ui.Text(c, "松开即放入 ShelfU").SingleLine().FontSize(11).TextColor(ink3)
+				ui.Text(c, l.BasketReleaseHint()).SingleLine().FontSize(11).TextColor(ink3)
 			}
 		})
 	})

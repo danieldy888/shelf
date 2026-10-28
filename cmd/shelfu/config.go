@@ -13,7 +13,8 @@ const (
 	clipboardShortcut = "Ctrl+Alt+V"
 	// 框选文字：框一块屏幕区域，识别出的文字直接进剪贴板。
 	ocrShortcut = "Ctrl+Alt+O"
-	// searchLabel 是搜索框的无障碍名称（也是测试定位用的标签）。
+	// searchLabel 是搜索框在测试里定位用的标签；界面上的占位文字与无障碍名
+	// 称来自词条 panelSearch（随窗口语言变化）。
 	searchLabel = "搜索剪贴板"
 	// dropBandPadX 是刘海投放带的左右余量：拖拽时 ShelfU 只在「刘海宽
 	// + 两侧余量 × 投放带高」这一条里接拖放与响应鼠标。投放带高度

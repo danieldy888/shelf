@@ -4,12 +4,14 @@ package main
 
 import (
 	"archive/zip"
-	"fmt"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+
+	"shelf/locales"
 )
 
 // writeZip archives srcs — files and whole folders — into dst, each at
@@ -20,8 +22,14 @@ import (
 // entries and job.done advances per entry; cancelling stops between
 // entries with errConvertCanceled. The archive is written to a temporary
 // file beside dst and renamed into place, so a failed or cancelled run
-// leaves nothing behind.
+// leaves nothing behind. An entry's failure is worded in the source
+// language; writeZipIn words it in the language of l.
 func writeZip(dst string, srcs, roots []string, job *convertJob) (err error) {
+	return writeZipIn(locales.In(""), dst, srcs, roots, job)
+}
+
+// writeZipIn is writeZip with its errors in the language of l.
+func writeZipIn(l locales.Messages, dst string, srcs, roots []string, job *convertJob) (err error) {
 	total := 0
 	for _, src := range srcs {
 		if err := filepath.WalkDir(src, func(_ string, d fs.DirEntry, err error) error {
@@ -85,7 +93,7 @@ func writeZip(dst string, srcs, roots []string, job *convertJob) (err error) {
 				name = path.Join(name, filepath.ToSlash(rel))
 			}
 			if err := addZipEntry(zw, p, name, info); err != nil {
-				return fmt.Errorf("%s：%w", name, err)
+				return errors.New(l.ZipperEntry(name, err.Error()))
 			}
 			job.done.Add(1)
 			return nil

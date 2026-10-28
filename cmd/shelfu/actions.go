@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,12 +49,13 @@ func usable(items []store.Item) (paths, texts []string) {
 // targets, so the menu is built the same way when it opens and when an
 // item is chosen.
 func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
+	l := a.appLoc()
 	items := a.targets(item)
 	paths, texts := usable(items)
 	files := len(paths) > 0
 	// 复制图片只支持单张：截图/剪贴板图片或磁盘上的图片文件。
 	image := len(items) == 1 && convertible(items[0])
-	if m.Item("打开").Disabled(!files).Chosen() {
+	if m.Item(l.ItemOpen()).Disabled(!files).Chosen() {
 		for _, p := range paths {
 			if err := mygo.Shell.OpenPath(p); err != nil {
 				a.report(err)
@@ -63,15 +63,15 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 			}
 		}
 	}
-	if m.Item("在 Finder 中显示").Disabled(!files).Chosen() {
+	if m.Item(l.ItemShowInFinder()).Disabled(!files).Chosen() {
 		for _, p := range paths {
 			mygo.Shell.ShowItemInFolder(p)
 		}
 	}
-	if m.Item("快速查看").Disabled(!files).Chosen() {
+	if m.Item(l.ItemQuickLook()).Disabled(!files).Chosen() {
 		a.quickLook(paths)
 	}
-	if m.Item("隔空投送…").Disabled(!files && len(texts) == 0).Chosen() {
+	if m.Item(l.ItemAirDrop()).Disabled(!files && len(texts) == 0).Chosen() {
 		if err := mac.AirDrop(paths, texts); err != nil {
 			a.report(err)
 		}
@@ -86,13 +86,17 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 			break
 		}
 	}
-	if m.Item(renameTitle(len(items)) + "…").Disabled(!allRenameable).Chosen() {
+	renameLabel := l.ItemRename()
+	if len(items) > 1 {
+		renameLabel = l.ItemRenameMany(len(items))
+	}
+	if m.Item(renameLabel).Disabled(!allRenameable).Chosen() {
 		a.openRename(items)
 	}
 	m.Separator()
-	copyLabel := "复制文字"
+	copyLabel := l.ItemCopyText()
 	if files {
-		copyLabel = "复制路径"
+		copyLabel = l.ItemCopyPath()
 	}
 	if m.Item(copyLabel).Disabled(!files && len(texts) == 0).Chosen() {
 		lines := texts
@@ -102,12 +106,12 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 		a.copyText(strings.Join(lines, "\n"))
 	}
 	// 图片多一种复制方式：把图片数据放进剪贴板，而不是路径。
-	if m.Item("复制图片").Disabled(!image).Chosen() {
+	if m.Item(l.ItemCopyImage()).Disabled(!image).Chosen() {
 		a.copyItem(items[0])
 	}
 	// 单张图片（截图或图片文件）：复用已识别的结果或当场识别。
 	if image {
-		if m.Item("识别文字并复制").Disabled(a.ocrBusy(items[0])).Chosen() {
+		if m.Item(l.ItemRecognizeText()).Disabled(a.ocrBusy(items[0])).Chosen() {
 			a.copyRecognizedText(items[0])
 		}
 	}
@@ -119,9 +123,9 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 			break
 		}
 	}
-	pinLabel := "置顶"
+	pinLabel := l.ItemPin()
 	if pinned {
-		pinLabel = "取消置顶"
+		pinLabel = l.ItemUnpin()
 	}
 	if m.Item(pinLabel).Chosen() {
 		a.setPinned(items, !pinned)
@@ -129,14 +133,14 @@ func (a *shelf) itemMenu(m *ui.Menu, item store.Item) {
 	// 剪贴板来源：一键把这个应用加入不再记录列表。ShelfU 自己识别出的
 	// 文字没有可排除的应用（clipSourceOCR 不是 bundle id）。
 	if item.Source == store.SourceClipboard && item.SourceApp != "" && item.SourceApp != clipSourceOCR {
-		if m.Item("不再记录来自「" + a.appName(item.SourceApp) + "」的内容").Disabled(a.settingsBroken).Chosen() {
+		if m.Item(l.ItemExcludeApp(a.appName(item.SourceApp))).Disabled(a.settingsBroken).Chosen() {
 			a.excludeClipboardApp(item.SourceApp)
 		}
 	}
 	m.Separator()
-	removeLabel := "移除"
+	removeLabel := l.ItemRemove()
 	if len(items) > 1 {
-		removeLabel = fmt.Sprintf("移除 %d 项", len(items))
+		removeLabel = l.ItemRemoveMany(len(items))
 	}
 	if m.Item(removeLabel).Chosen() {
 		a.remove(items)
@@ -178,7 +182,7 @@ const clipSourceOCR = "shelf:ocr"
 
 // ocrClipLabel is what an OCR row's source reads, in the row meta line and
 // the toolbar's app name lookup.
-const ocrClipLabel = "框选文字"
+func (a *shelf) ocrClipLabel() string { return a.appLoc().ItemCaptureText() }
 
 // copyText puts text on the clipboard without recording it again and
 // reports whether the write went through; callers that hide the shelf
@@ -189,7 +193,7 @@ func (a *shelf) copyText(text string) bool {
 		return false
 	}
 	a.clip.skipCurrent()
-	a.toastStatus("已复制 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second), statusOK)
+	a.toastStatus(a.appLoc().ItemCopied(), time.Now().Add(3*time.Second), statusOK)
 	return true
 }
 
@@ -234,9 +238,9 @@ func (a *shelf) toastOCRCopy(text string, r ocrCopy) {
 	switch {
 	case !r.copied:
 	case r.recordErr != nil:
-		a.toastStatus("已复制，但没能记进剪贴板页："+r.recordErr.Error(), time.Time{}, statusErr)
+		a.toastStatus(a.appLoc().ItemOCRCopyRecordFailed(r.recordErr.Error()), time.Time{}, statusErr)
 	default:
-		a.toastStatus(fmt.Sprintf("已复制识别出的文字 · %d 字", utf8.RuneCountInString(text)),
+		a.toastStatus(a.appLoc().ItemOCRCopied(utf8.RuneCountInString(text)),
 			time.Now().Add(3*time.Second), statusOK)
 	}
 }
@@ -258,10 +262,10 @@ func (a *shelf) copyItem(item store.Item) bool {
 			return false
 		}
 		a.clip.skipCurrent()
-		a.toastStatus("已复制图片 · 在其他应用按 ⌘V 粘贴", time.Now().Add(3*time.Second), statusOK)
+		a.toastStatus(a.appLoc().ItemCopiedImage(), time.Now().Add(3*time.Second), statusOK)
 		return true
 	}
-	a.report(errors.New("这一项不能复制到剪贴板"))
+	a.report(errors.New(a.appLoc().ItemNotCopyable()))
 	return false
 }
 
@@ -322,7 +326,7 @@ func (a *shelf) setPinned(items []store.Item, pinned bool) {
 // the lookup (running apps, then the bundle on disk) runs once per app.
 func (a *shelf) appName(bundleID string) string {
 	if bundleID == clipSourceOCR {
-		return ocrClipLabel
+		return a.ocrClipLabel()
 	}
 	if name, ok := a.appNames[bundleID]; ok {
 		return name
@@ -354,7 +358,7 @@ func (a *shelf) excludeClipboardApp(bundleID string) {
 			return
 		}
 	}
-	a.toastStatus("已不再记录来自「"+name+"」的内容", time.Now().Add(3*time.Second), statusOK)
+	a.toastStatus(a.appLoc().ItemExcludedApp(name), time.Now().Add(3*time.Second), statusOK)
 }
 
 // removeExcludedApp takes bundleID out of the excludedApps setting — the
@@ -501,7 +505,7 @@ func (a *shelf) dragOut(item store.Item) transfer.Data {
 		all = append(all, a.dragData(it).Items()...)
 	}
 	if len(all) == 0 {
-		a.report(errors.New("选中的项目都已无法读取"))
+		a.report(errors.New(a.appLoc().ItemUnreadable()))
 		return transfer.Data{}
 	}
 	return transfer.New(all...)

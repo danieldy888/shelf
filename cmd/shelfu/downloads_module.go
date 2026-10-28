@@ -240,7 +240,7 @@ func (m *downloadsModule) chip(c *ui.Context) ui.Element {
 	if f.total <= 0 {
 		text = downloadMegabytes(f.done)
 	}
-	label := "下载 " + f.name + " " + text
+	label := loc(c).DownloadChip(f.name, text)
 	chip := ui.Row(c.Key("dl-chip")).Height(chipH).Radius(chipH/2).Background(fill1).
 		Padding(0, 3, 0, 7).Gap(4).AlignItems(ui.Center).Label(label).Tooltip(label)
 	chip.Children(func() {

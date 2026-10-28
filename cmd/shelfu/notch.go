@@ -3,7 +3,7 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"math"
 	"sync/atomic"
 	"time"
@@ -798,7 +798,7 @@ func (a *shelf) holdKeys() {
 	}
 	if !a.escHeld {
 		if err := registerKey("Escape", a.escape); err != nil {
-			a.report(fmt.Errorf("Esc 被其他应用占用，请用快捷键或收起按钮：%w", err))
+			a.report(errors.New(a.appLoc().StatusEscBusy(err.Error())))
 		} else {
 			a.escHeld = true
 		}

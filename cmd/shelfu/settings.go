@@ -9,7 +9,6 @@ package main
 // in one place repaints the other while it is open.
 
 import (
-	"fmt"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -257,9 +256,9 @@ func (a *shelf) settingsView(c *ui.Context) {
 					ui.Column(c.Key("broken")).Padding(10, 12).Gap(4).Radius(10).
 						Background(ui.RGBA(255, 69, 58, 0.12)).
 						Border(0.5, ui.RGBA(255, 69, 58, 0.35)).Children(func() {
-						ui.Text(c, "settings.json 无法读取").FontSize(12).FontWeight(600).TextColor(settingsTheme.Danger)
-						ui.Text(c, "以下设置已按默认值运行，且被锁定以免覆盖原文件。请备份并修复数据文件夹中的 settings.json 后重新打开 ShelfU。").
-							FontSize(11).TextColor(setInk3)
+						l := loc(c)
+						ui.Text(c, l.SettingsBrokenTitle()).FontSize(12).FontWeight(600).TextColor(settingsTheme.Danger)
+						ui.Text(c, l.SettingsBrokenBody()).FontSize(11).TextColor(setInk3)
 					})
 				}
 				a.settingsPermissionsSection(c)
@@ -279,6 +278,8 @@ func (a *shelf) settingsView(c *ui.Context) {
 // rounded card (white 5% fill, 0.5pt edge) holding the group's rows.
 // disabled greys and locks the whole card. foot, when not empty, is the
 // System Settings-style note under the card, aligned with the row text.
+// title is the heading the user reads, in the window's language, and also
+// names the group's element.
 func settingsSection(c *ui.Context, title, foot string, disabled bool, fn func()) {
 	ui.Column(c.Key("sec-" + title)).FillWidth().Children(func() {
 		ui.Text(c, title).SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3).Padding(0, 0, 6, 4)
@@ -365,17 +366,17 @@ func choiceSegments(current int, choices []int, format func(int) string) (labels
 // broken.
 func (a *shelf) settingsGeneralSection(c *ui.Context) {
 	l := loc(c)
-	settingsSection(c, "通用", "", false, func() {
+	settingsSection(c, l.General(), "", false, func() {
 		loginCap, capColor := "", setInk3
 		if a.loginErr != "" {
 			loginCap, capColor = a.loginErr, settingsTheme.Danger
 		}
-		settingsToggleCap(c, "login", "开机时自动启动", loginCap, capColor, a.loginOn, a.applyOpenAtLogin)
+		settingsToggleCap(c, "login", l.SettingsLoginRow(), loginCap, capColor, a.loginOn, a.applyOpenAtLogin)
 		settingsSep(c, "login")
 		// 自动检查更新存 settings.json，文件损坏时随其余偏好一起锁定；
 		// 登录项不依赖该文件，保持可用。
 		ui.Column(c.Key("autocheck")).Disabled(a.settingsBroken).FillWidth().Children(func() {
-			settingsToggleCap(c, "autocheck", "自动检查更新", "只连接 GitHub，安装前会先问你", setInk3,
+			settingsToggleCap(c, "autocheck", l.SettingsAutoCheckRow(), l.SettingsAutoCheckCaption(), setInk3,
 				a.settings.AutoCheckUpdates, a.setAutoCheckUpdates)
 		})
 		settingsSep(c, "shellstyle")
@@ -407,8 +408,8 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 		if a.island {
 			settingsSep(c, "islandpos")
 			ui.Column(c.Key("islandpos")).Disabled(a.settingsBroken).FillWidth().Children(func() {
-				settingsRowCap(c, "islandpos", "灵动岛位置", "按住小岛拖到任意位置，松手后留在那里", func() {
-					if ui.Button(c, "恢复默认位置").FontSize(12).Label("恢复默认位置").Clicked() {
+				settingsRowCap(c, "islandpos", l.SettingsIslandPosRow(), l.SettingsIslandPosCaption(), func() {
+					if ui.Button(c, l.SettingsIslandReset()).FontSize(12).Label(l.SettingsIslandReset()).Clicked() {
 						a.resetIslandPosition()
 					}
 				})
@@ -416,7 +417,7 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 		}
 		settingsSep(c, "snap")
 		ui.Column(c.Key("snap")).Disabled(a.settingsBroken).FillWidth().Children(func() {
-			settingsToggleCap(c, "snap", "拖窗口到刘海分屏", "把窗口拖到刘海，松手就排好", setInk3,
+			settingsToggleCap(c, "snap", l.SettingsSnapRow(), l.SettingsSnapCaption(), setInk3,
 				a.settings.SnapWindows, a.setSnapWindows)
 		})
 	})
@@ -484,16 +485,17 @@ func (a *shelf) applyOpenAtLogin(on bool) {
 // applySettings path as every other preference; the modules read them on
 // each tick, so a change applies at once.
 func (a *shelf) settingsLiveSection(c *ui.Context) {
-	settingsSection(c, "实时活动", "", a.settingsBroken, func() {
-		settingsToggle(c, "live-charging", "充电提示", a.settings.LiveActivities.Charging, func(on bool) {
+	l := loc(c)
+	settingsSection(c, l.SettingsLiveSection(), "", a.settingsBroken, func() {
+		settingsToggle(c, "live-charging", l.SettingsLiveCharging(), a.settings.LiveActivities.Charging, func(on bool) {
 			a.setLiveActivity(func(s *settings.Settings) { s.LiveActivities.Charging = on })
 		})
 		settingsSep(c, "live-charging")
-		settingsToggle(c, "live-headphones", "耳机连接提示", a.settings.LiveActivities.Headphones, func(on bool) {
+		settingsToggle(c, "live-headphones", l.SettingsLiveHeadphones(), a.settings.LiveActivities.Headphones, func(on bool) {
 			a.setLiveActivity(func(s *settings.Settings) { s.LiveActivities.Headphones = on })
 		})
 		settingsSep(c, "live-headphones")
-		settingsToggle(c, "live-downloads", "下载进度", a.settings.LiveActivities.Downloads, func(on bool) {
+		settingsToggle(c, "live-downloads", l.SettingsLiveDownloads(), a.settings.LiveActivities.Downloads, func(on bool) {
 			a.setLiveActivity(func(s *settings.Settings) { s.LiveActivities.Downloads = on })
 		})
 	})
@@ -509,21 +511,22 @@ func (a *shelf) setLiveActivity(mutate func(*settings.Settings)) {
 // settingsClipboardSection contains the retained count and excluded apps,
 // through the same setters the tray menu uses. Recording is always enabled.
 func (a *shelf) settingsClipboardSection(c *ui.Context) {
-	settingsSection(c, "剪贴板", "", a.settingsBroken, func() {
+	l := loc(c)
+	settingsSection(c, l.SettingsClipboardSection(), "", a.settingsBroken, func() {
 		limit := a.settings.ClipboardLimit
 		if limit < 1 {
 			limit = settings.Default().ClipboardLimit
 		}
 		labels, values, selected := choiceSegments(limit, clipboardLimitChoices, strconv.Itoa)
-		settingsRow(c, "limit", "保留条数", func() {
-			if sg := ui.Segmented(c, &selected, labels...).Label("保留条数"); sg.Changed() {
+		settingsRow(c, "limit", l.SettingsClipboardLimitRow(), func() {
+			if sg := ui.Segmented(c, &selected, labels...).Label(l.SettingsClipboardLimitRow()); sg.Changed() {
 				a.setClipboardLimit(values[selected])
 			}
 		})
 		settingsSep(c, "limit")
-		settingsRowCap(c, "excl", "排除的应用", "在剪贴板条目上右键可添加", func() {
+		settingsRowCap(c, "excl", l.SettingsClipboardExcludedRow(), l.SettingsClipboardExcludedCaption(), func() {
 			if len(a.settings.ExcludedApps) == 0 {
-				ui.Text(c, "无").SingleLine().FontSize(12).TextColor(setInk3)
+				ui.Text(c, l.SettingsClipboardExcludedNone()).SingleLine().FontSize(12).TextColor(setInk3)
 			}
 		})
 		for _, id := range a.settings.ExcludedApps {
@@ -539,7 +542,8 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 					ui.Text(c, a.appName(bundleID)).SingleLine().FontSize(13).TextColor(setInk)
 					ui.Text(c, bundleID).SingleLine().FontSize(11).TextColor(setInk3)
 				})
-				if ui.Button(c, "移除").FontSize(12).Label("移除 " + bundleID).Clicked() {
+				if ui.Button(c, l.SettingsClipboardRemove()).FontSize(12).
+					Label(l.SettingsClipboardRemoveLabel(bundleID)).Clicked() {
 					a.removeExcludedApp(bundleID)
 				}
 			})
@@ -556,6 +560,7 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 // The privacy note lives under the card, as System Settings does. Every
 // change still goes through applySettings.
 func (a *shelf) settingsAIUsageSection(c *ui.Context) {
+	l := loc(c)
 	// col is one of the table's two right columns: 64pt wide, centred.
 	col := func(key string, fn func()) {
 		ui.Box(c.Key("c-" + key)).Width(64).Center().TextAlign(ui.Center).Children(fn)
@@ -591,17 +596,16 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 					ui.Text(c, "—").SingleLine().FontSize(12).TextColor(setInk3)
 					return
 				}
-				check(qKey, "套餐额度 "+name, quota, qApply)
+				check(qKey, l.SettingsAIQuotaCheck(name), quota, qApply)
 			})
 			col("local-"+key, func() {
-				check(lKey, "本机用量 "+name, local, lApply)
+				check(lKey, l.SettingsAILocalCheck(name), local, lApply)
 			})
 		})
 	}
-	settingsSection(c, "AI 用量",
-		"会读取本机这些工具已保存的登录信息，并让 Claude Code 读取它自己的用量，不发给其他任何地方。",
+	settingsSection(c, l.SettingsAISection(), l.SettingsAIFoot(),
 		a.settingsBroken, func() {
-			settingsToggle(c, "aiusage", "在刘海里显示 AI 用量", a.settings.AIUsage.Enabled,
+			settingsToggle(c, "aiusage", l.SettingsAIEnableRow(), a.settings.AIUsage.Enabled,
 				func(on bool) { a.setAIUsage(func(s *settings.Settings) { s.AIUsage.Enabled = on }) })
 			settingsSep(c, "aiusage")
 			// Disabled alone already halves the table's opacity; ×0.8 lands
@@ -614,10 +618,10 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 				ui.Row(c.Key("aiusage-head")).AlignItems(ui.Center).Gap(10).MinHeight(26).Padding(0, 12).FillWidth().Children(func() {
 					ui.Box(c.Key("hd-pad")).Grow(1)
 					col("hd-quota", func() {
-						ui.Text(c, "套餐额度").SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3)
+						ui.Text(c, l.SettingsAIQuotaColumn()).SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3)
 					})
 					col("hd-local", func() {
-						ui.Text(c, "本机用量").SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3)
+						ui.Text(c, l.SettingsAILocalColumn()).SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3)
 					})
 				})
 				settingsSep(c, "head")
@@ -637,12 +641,13 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 					func(s *settings.Settings, on bool) { s.AIUsage.LocalOmp = on })
 			})
 			settingsSep(c, "quota-show")
-			settingsRow(c, "quota-show", "额度显示", func() {
+			settingsRow(c, "quota-show", l.SettingsAIQuotaDisplayRow(), func() {
 				shown := 0
 				if a.settings.AIUsage.QuotaLeft {
 					shown = 1
 				}
-				sg := ui.Segmented(c, &shown, "已用", "剩余").Label("额度显示")
+				sg := ui.Segmented(c, &shown, l.SettingsAIQuotaUsed(), l.SettingsAIQuotaLeft()).
+					Label(l.SettingsAIQuotaDisplayRow())
 				if !a.settings.AIUsage.Enabled {
 					sg.Disabled(true)
 				}
@@ -656,24 +661,25 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 // settingsTraySection: 自动清理旧内容, 拖出后从托盘移除 and 刘海显示正在
 // 播放 — the same setters as the tray's 自动清理 submenu and 正在播放 item.
 func (a *shelf) settingsTraySection(c *ui.Context) {
-	settingsSection(c, "托盘", "", a.settingsBroken, func() {
+	l := loc(c)
+	settingsSection(c, l.SettingsTraySection(), "", a.settingsBroken, func() {
 		days := max(0, a.settings.RetentionDays)
 		labels, values, selected := choiceSegments(days, retentionChoices, func(n int) string {
 			if n <= 0 {
-				return "从不"
+				return l.SettingsRetentionNever()
 			}
-			return fmt.Sprintf("%d 天", n)
+			return l.SettingsRetentionDays(n)
 		})
-		settingsRow(c, "retention", "自动清理旧内容", func() {
-			if sg := ui.Segmented(c, &selected, labels...).Label("自动清理旧内容"); sg.Changed() {
+		settingsRow(c, "retention", l.SettingsRetentionRow(), func() {
+			if sg := ui.Segmented(c, &selected, labels...).Label(l.SettingsRetentionRow()); sg.Changed() {
 				a.setRetention(values[selected])
 			}
 		})
 		settingsSep(c, "retention")
-		settingsToggleCap(c, "dragout", "拖出后从托盘移除", "置顶的项目会保留", setInk3,
+		settingsToggleCap(c, "dragout", l.SettingsDragOutRow(), l.SettingsDragOutCaption(), setInk3,
 			a.settings.RemoveAfterDrag, a.setRemoveAfterDrag)
 		settingsSep(c, "dragout")
-		settingsToggle(c, "np", "刘海显示正在播放", a.settings.IslandNowPlaying, func(on bool) {
+		settingsToggle(c, "np", l.SettingsNowPlayingRow(), a.settings.IslandNowPlaying, func(on bool) {
 			a.setNowPlaying(func(s *settings.Settings) { s.IslandNowPlaying = on })
 		})
 	})
@@ -682,16 +688,17 @@ func (a *shelf) settingsTraySection(c *ui.Context) {
 // settingsShortcutsSection lists the global shortcuts read-only; they are
 // compiled in (config.go), not preferences.
 func (a *shelf) settingsShortcutsSection(c *ui.Context) {
-	settingsSection(c, "快捷键", "", false, func() {
-		settingsRow(c, "sc-tray", "显示 / 收起", func() {
+	l := loc(c)
+	settingsSection(c, l.SettingsShortcutsSection(), "", false, func() {
+		settingsRow(c, "sc-tray", l.SettingsShortcutTray(), func() {
 			ui.Text(c, shortcutHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})
 		settingsSep(c, "sc")
-		settingsRow(c, "sc-clip", "剪贴板搜索", func() {
+		settingsRow(c, "sc-clip", l.SettingsShortcutClipboard(), func() {
 			ui.Text(c, clipboardHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})
 		settingsSep(c, "sc-ocr")
-		settingsRow(c, "sc-ocr", "框选文字", func() {
+		settingsRow(c, "sc-ocr", l.SettingsShortcutOCR(), func() {
 			ui.Text(c, ocrHint).SingleLine().FontSize(13).TextColor(setInk2)
 		})
 	})
@@ -700,9 +707,10 @@ func (a *shelf) settingsShortcutsSection(c *ui.Context) {
 // settingsFooter: the app version (from the bundle's Info.plist when
 // packaged) and the button that opens the data folder in Finder.
 func (a *shelf) settingsFooter(c *ui.Context) {
+	l := loc(c)
 	ui.Row(c.Key("footer")).AlignItems(ui.Center).Gap(10).Padding(0, 4).FillWidth().Children(func() {
-		ui.Text(c, appName+" "+appVersion()).SingleLine().FontSize(11).TextColor(setInk3).Grow(1)
-		if ui.Button(c, "打开数据文件夹").FontSize(12).Clicked() {
+		ui.Text(c, l.SettingsVersionLine(appName, appVersion())).SingleLine().FontSize(11).TextColor(setInk3).Grow(1)
+		if ui.Button(c, l.SettingsOpenDataFolder()).FontSize(12).Clicked() {
 			if err := openPath(a.dataDir); err != nil {
 				a.report(err)
 			}

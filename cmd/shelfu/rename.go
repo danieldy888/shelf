@@ -10,7 +10,6 @@ package main
 // this file owns the window and its view.
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 
 	"shelf/internal/mac"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // renameWidth/renameHeight size the 重新命名 window: a normal titled
@@ -154,7 +154,7 @@ func (r *renameUI) startOK() bool {
 
 // plan is the live preview of the current inputs over the chosen items.
 func (r *renameUI) plan() renamePlan {
-	return planRename(r.items, r.params())
+	return planRenameIn(r.host.appLoc(), r.items, r.params())
 }
 
 // blocked reports whether 改名 must stay disabled: a conflicting row, no
@@ -198,12 +198,12 @@ func undoBlockedName(ops []renameOp) string {
 }
 
 // undoErr words a failed undo: a taken original name is named outright,
-// everything else keeps the executor's explanation.
-func undoErr(ops []renameOp, err error) string {
+// everything else keeps the executor's explanation, in the language of l.
+func undoErr(l locales.Messages, ops []renameOp, err error) string {
 	if name := undoBlockedName(ops); name != "" {
-		return fmt.Sprintf("无法撤销：「%s」这个名字已被别的文件占用", name)
+		return l.RenameUndoNameTaken(name)
 	}
-	return "无法撤销：" + err.Error()
+	return l.RenameUndoFailed(err.Error())
 }
 
 // repaint redraws the rename window and the panel (the 撤销 pill lives
@@ -275,13 +275,14 @@ func (r *renameUI) apply() {
 	if r.blocked(pl) {
 		return
 	}
-	if err := execRename(pl.ops); err != nil {
+	l := r.host.appLoc()
+	if err := execRenameIn(l, pl.ops); err != nil {
 		r.setErr(err.Error())
 		return
 	}
 	next, orig := r.pathUpdates(pl)
 	if _, err := r.host.store.UpdatePaths(next); err != nil {
-		r.setErr("无法保存托盘记录：" + err.Error() + renameRestore(pl.ops))
+		r.setErr(saveErr(l, err, renameRestore(l, pl.ops)))
 		return
 	}
 	for id := range next {
@@ -294,12 +295,19 @@ func (r *renameUI) apply() {
 }
 
 // renameRestore puts the disk names back after the tray could not record
-// the batch, and words what happened for the inline error.
-func renameRestore(ops []renameOp) string {
-	if err := execRename(undoOps(ops)); err != nil {
-		return "；" + err.Error()
+// the batch, and returns what the failed rollback said in the language of
+// l, nil when every name is back.
+func renameRestore(l locales.Messages, ops []renameOp) error {
+	return execRenameIn(l, undoOps(ops))
+}
+
+// saveErr words a failed tray save: a rollback that could not put every
+// name back says so, a clean one says the names were restored.
+func saveErr(l locales.Messages, err, restore error) string {
+	if restore != nil {
+		return l.RenameSaveFailedRestore(err.Error(), restore.Error())
 	}
-	return "，已全部恢复原状"
+	return l.RenameSaveFailedRestored(err.Error())
 }
 
 // undo moves the last batch's files back to their original names — never
@@ -311,14 +319,15 @@ func (r *renameUI) undo() {
 	if d == nil {
 		return
 	}
-	if err := execRename(d.ops); err != nil {
-		r.fail(undoErr(d.ops, err))
+	l := r.host.appLoc()
+	if err := execRenameIn(l, d.ops); err != nil {
+		r.fail(undoErr(l, d.ops, err))
 		return
 	}
 	if _, err := r.host.store.UpdatePaths(d.paths); err != nil {
 		// The names are back but the tray could not record it: rename
 		// forward again so tray and disk agree, and keep 撤销 available.
-		r.setErr("无法保存托盘记录：" + err.Error() + renameRestore(d.ops))
+		r.setErr(saveErr(l, err, renameRestore(l, d.ops)))
 		return
 	}
 	for id := range d.paths {
@@ -326,7 +335,7 @@ func (r *renameUI) undo() {
 	}
 	n := len(d.ops)
 	r.done, r.undoUntil, r.err = nil, time.Time{}, ""
-	r.host.toastStatus(fmt.Sprintf("已撤销 %d 项重命名", n), time.Now().Add(4*time.Second), statusOK)
+	r.host.toastStatus(l.RenameUndone(n), time.Now().Add(4*time.Second), statusOK)
 	r.repaint()
 }
 
@@ -364,7 +373,7 @@ func (a *shelf) openRename(items []store.Item) {
 	frame := centeredFrame(renameWidth, renameHeight,
 		mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint()).WorkArea)
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: renameTitle(len(items)), Width: renameWidth, Height: renameHeight,
+		Title: a.renameTitle(len(items)), Width: renameWidth, Height: renameHeight,
 		X: frame.X, Y: frame.Y,
 		Hidden: true, BackgroundColor: "#1E1E1F",
 		TitleBarStyle:        mygo.TitleBarHidden,
@@ -381,13 +390,21 @@ func (a *shelf) openRename(items []store.Item) {
 	renameFocus(w)
 }
 
-// renameTitle names the window and the menu item.
-func renameTitle(n int) string {
+// renameTitle names the window and the menu item in the source language;
+// renameTitleIn says it in the language of l, and a.renameTitle in the
+// language the shelf shows.
+func renameTitle(n int) string { return renameTitleIn(locales.In(""), n) }
+
+// renameTitleIn is renameTitle in the language of l.
+func renameTitleIn(l locales.Messages, n int) string {
 	if n > 1 {
-		return fmt.Sprintf("重新命名 %d 项", n)
+		return l.RenameTitleMany(n)
 	}
-	return "重新命名"
+	return l.RenameTitle()
 }
+
+// renameTitle names the 重新命名 window in the language the shelf shows.
+func (a *shelf) renameTitle(n int) string { return renameTitleIn(a.appLoc(), n) }
 
 // centeredFrame centers a w×h window inside a display work area, as the
 // Settings window centers itself.
@@ -463,11 +480,12 @@ func (a *shelf) renameUndoPill(c *ui.Context) {
 	if r == nil || r.done == nil || r.undoUntil.IsZero() || c.Now().After(r.undoUntil) {
 		return
 	}
+	l := loc(c)
 	p := ui.Row(c.Key("pill-rename-undo")).Height(30).Padding(0, 8, 0, 14).Radius(15).
 		AlignItems(ui.Center).Gap(8).Background(fill2)
 	p.Children(func() {
-		ui.Text(c, fmt.Sprintf("已重新命名 %d 项", len(r.done.ops))).SingleLine().FontSize(11).TextColor(ink)
-		if ui.Button(c, "撤销").Label("撤销重新命名").Clicked() {
+		ui.Text(c, l.RenameDoneCount(len(r.done.ops))).SingleLine().FontSize(11).TextColor(ink)
+		if ui.Button(c, l.RenameUndo()).Label(l.RenameUndoLabel()).Clicked() {
 			r.undo()
 		}
 	})
@@ -494,20 +512,22 @@ func (a *shelf) renameView(c *ui.Context) {
 		}
 	}
 	c.OnShortcut(0, ui.KeyEnter, applyOrClose)
+	l := loc(c)
 	ui.Column(c.Key("win")).Fill().Children(func() {
 		bar := c.TitleBar()
 		ui.Row(c.Key("titlebar")).Height(float32(max(bar.Height, 38))).FillWidth().
 			AlignItems(ui.Center).Justify(ui.Center).Padding(0, bar.Right, 0, bar.Left).
 			DragWindow().Children(func() {
-			ui.Text(c, renameTitle(len(r.items))).SingleLine().FontSize(13).FontWeight(600).TextColor(setInk2)
+			ui.Text(c, renameTitleIn(l, len(r.items))).SingleLine().FontSize(13).FontWeight(600).TextColor(setInk2)
 		})
 		if r.done != nil {
 			r.doneView(c)
 			return
 		}
 		ui.Column(c.Key("body")).Padding(0, 16, 0, 16).Gap(10).Fill().Children(func() {
-			if sg := ui.Segmented(c.Key("mode"), &r.mode, "替换文字", "添加文字", "名称加序号").
-				FillWidth().Label("改名方式"); sg.Changed() {
+			if sg := ui.Segmented(c.Key("mode"), &r.mode,
+				l.RenameModeReplace(), l.RenameModeAdd(), l.RenameModeFormat()).
+				FillWidth().Label(l.RenameModeLabel()); sg.Changed() {
 				r.booted = false
 			}
 			r.inputSection(c)
@@ -524,46 +544,47 @@ func (a *shelf) renameView(c *ui.Context) {
 // inputSection renders the active mode's card: the settings-window row
 // look (label left, control right) on a grouped card.
 func (r *renameUI) inputSection(c *ui.Context) {
-	title := "替换文字"
+	l := loc(c)
+	title := l.RenameModeReplace()
 	switch renameMode(r.mode) {
 	case modeAdd:
-		title = "添加文字"
+		title = l.RenameModeAdd()
 	case modeFormat:
-		title = "名称加序号"
+		title = l.RenameModeFormat()
 	}
 	settingsSection(c, title, "", false, func() {
 		switch renameMode(r.mode) {
 		case modeReplace:
-			settingsRow(c, "rn-find", "查找", func() {
-				r.field(c, "rn-find-in", &r.find, "要替换的文字")
+			settingsRow(c, "rn-find", l.RenameFindRow(), func() {
+				r.field(c, "rn-find-in", &r.find, l.RenameFindPlaceholder())
 			})
 			settingsSep(c, "rn-find")
-			settingsRow(c, "rn-with", "替换为", func() {
-				r.field(c, "rn-with-in", &r.replace, "替换后的文字")
+			settingsRow(c, "rn-with", l.RenameWithRow(), func() {
+				r.field(c, "rn-with-in", &r.replace, l.RenameWithPlaceholder())
 			})
 		case modeAdd:
-			settingsRow(c, "rn-add", "文字", func() {
-				r.field(c, "rn-add-in", &r.addText, "要添加的文字")
+			settingsRow(c, "rn-add", l.RenameAddRow(), func() {
+				r.field(c, "rn-add-in", &r.addText, l.RenameAddPlaceholder())
 			})
 			settingsSep(c, "rn-add")
-			settingsRow(c, "rn-addpos", "位置", func() {
-				ui.Segmented(c, &r.addSeg, "名称前", "名称后").Label("加在名称前或后")
+			settingsRow(c, "rn-addpos", l.RenamePositionRow(), func() {
+				ui.Segmented(c, &r.addSeg, l.RenameBefore(), l.RenameAfter()).Label(l.RenameAddPosLabel())
 			})
 		default: // modeFormat
-			settingsRow(c, "rn-name", "名称", func() {
-				r.field(c, "rn-name-in", &r.fmtName, "自定名称（可留空）")
+			settingsRow(c, "rn-name", l.RenameNameRow(), func() {
+				r.field(c, "rn-name-in", &r.fmtName, l.RenameNamePlaceholder())
 			})
 			settingsSep(c, "rn-name")
-			settingsRow(c, "rn-start", "起始号", func() {
+			settingsRow(c, "rn-start", l.RenameStartRow(), func() {
 				r.field(c, "rn-start-in", &r.fmtStartText, "1")
 			})
 			settingsSep(c, "rn-start")
-			settingsRow(c, "rn-digits", "位数", func() {
-				ui.Segmented(c, &r.digitsSeg, "1", "2", "3", "4").Label("序号位数")
+			settingsRow(c, "rn-digits", l.RenameDigitsRow(), func() {
+				ui.Segmented(c, &r.digitsSeg, "1", "2", "3", "4").Label(l.RenameDigitsLabel())
 			})
 			settingsSep(c, "rn-digits")
-			settingsRow(c, "rn-pos", "序号位置", func() {
-				ui.Segmented(c, &r.posSeg, "名称前", "名称后").Label("序号在名称前或后")
+			settingsRow(c, "rn-pos", l.RenamePosRow(), func() {
+				ui.Segmented(c, &r.posSeg, l.RenameBefore(), l.RenameAfter()).Label(l.RenamePosLabel())
 			})
 		}
 	})
@@ -599,12 +620,13 @@ func (r *renameUI) field(c *ui.Context, key string, value *string, placeholder s
 // red with their reason, unchanged rows dim. The list scrolls inside its
 // card when the batch is long.
 func (r *renameUI) previewSection(c *ui.Context) {
+	l := loc(c)
 	pl := r.plan()
 	// The preview takes whatever height the mode's card leaves, so the
 	// format mode's four rows never push 改名 below the window: the list
 	// scrolls inside its card instead.
 	ui.Column(c.Key("sec-preview")).FillWidth().Grow(1).MinHeight(0).Children(func() {
-		ui.Text(c, "预览").SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3).Padding(0, 0, 6, 4)
+		ui.Text(c, l.RenamePreview()).SingleLine().FontSize(11).FontWeight(600).TextColor(setInk3).Padding(0, 0, 6, 4)
 		ui.Column(c.Key("card-preview")).Radius(10).Background(setCard).Border(0.5, setCardEdge).
 			FillWidth().Grow(1).MinHeight(0).Children(func() {
 			ui.Scroll(c.Key("rn-preview")).Fill().MinHeight(0).TrackScroll(&r.scroll).Children(func() {
@@ -639,13 +661,13 @@ func (r *renameUI) previewSection(c *ui.Context) {
 		foot := ""
 		switch {
 		case !r.startOK() && renameMode(r.mode) == modeFormat:
-			foot = "起始号需要是数字"
+			foot = l.RenameStartNotNumber()
 		case pl.conflicts > 0:
-			foot = fmt.Sprintf("有 %d 项冲突，解决后才能改名", pl.conflicts)
+			foot = l.RenameConflicts(pl.conflicts)
 		case pl.changed == 0:
-			foot = "名字没有变化"
+			foot = l.RenameNoChange()
 		default:
-			foot = fmt.Sprintf("将重新命名 %d 项", pl.changed)
+			foot = l.RenameWillChange(pl.changed)
 		}
 		ui.Text(c, foot).FontSize(11).TextColor(setInk3).Padding(4, 12, 0, 12)
 	})
@@ -655,12 +677,13 @@ func (r *renameUI) previewSection(c *ui.Context) {
 // dialogs do — 取消 secondary, 改名 the accented default (Enter), greyed
 // while anything blocks the batch.
 func (r *renameUI) buttons(c *ui.Context, apply func()) {
+	l := loc(c)
 	blocked := r.blocked(r.plan())
 	ui.Row(c.Key("rn-buttons")).FillWidth().Justify(ui.End).Gap(8).Padding(4, 0, 0, 0).Children(func() {
-		if ui.Button(c, "取消").Label("取消改名").Clicked() {
+		if ui.Button(c, l.RenameCancel()).Label(l.RenameCancelLabel()).Clicked() {
 			r.win.Close()
 		}
-		if ui.Button(c, "改名").Label("应用改名").Disabled(blocked).Clicked() {
+		if ui.Button(c, l.RenameApply()).Label(l.RenameApplyLabel()).Disabled(blocked).Clicked() {
 			apply()
 		}
 	})
@@ -670,17 +693,18 @@ func (r *renameUI) buttons(c *ui.Context, apply func()) {
 // with 撤销 (which restores the original names and stays available until
 // used or a new batch applies) and 完成 to close. Enter/Esc close here.
 func (r *renameUI) doneView(c *ui.Context) {
+	l := loc(c)
 	ui.Column(c.Key("done")).Fill().Center().Gap(14).Children(func() {
-		ui.Text(c, fmt.Sprintf("已重新命名 %d 项", len(r.done.ops))).FontSize(15).FontWeight(600).TextColor(setInk)
-		ui.Text(c, "托盘中的路径已同步更新").FontSize(11).TextColor(setInk3)
+		ui.Text(c, l.RenameDoneCount(len(r.done.ops))).FontSize(15).FontWeight(600).TextColor(setInk)
+		ui.Text(c, l.RenameDoneSynced()).FontSize(11).TextColor(setInk3)
 		if r.err != "" {
 			ui.Text(c, r.err).FontSize(11).TextColor(danger).Padding(0, 24, 0, 24)
 		}
 		ui.Row(c.Key("done-buttons")).Gap(8).Children(func() {
-			if ui.Button(c, "撤销").Label("撤销这次改名").Clicked() {
+			if ui.Button(c, l.RenameUndo()).Label(l.RenameUndoThisLabel()).Clicked() {
 				r.undo()
 			}
-			if ui.Button(c, "完成").Label("关闭改名窗口").Clicked() {
+			if ui.Button(c, l.RenameDoneClose()).Label(l.RenameDoneCloseLabel()).Clicked() {
 				r.win.Close()
 			}
 		})

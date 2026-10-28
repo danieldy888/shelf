@@ -240,13 +240,13 @@ func dragGuardCallbackAddr() uintptr {
 // Only one guard may be active; start/stop are called on the AppKit main thread.
 func StartDragGuard(region DragGuardRegion) (func(), error) {
 	if region.Width <= 0 || region.Height <= 0 {
-		return nil, errors.New("刘海拖拽保护区域无效")
+		return nil, errors.New("notch drag guard region is invalid")
 	}
 	if err := loadDragGuard(); err != nil {
 		return nil, err
 	}
 	if !axIsProcessTrusted() {
-		return nil, errors.New("ShelfU 尚未获得辅助功能授权")
+		return nil, errors.New("ShelfU has no Accessibility permission yet")
 	}
 	if dragGuardArmed.Load() != nil {
 		return nil, errors.New("mac: a drag guard is already active")

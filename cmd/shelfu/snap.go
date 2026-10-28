@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"shelf/internal/mac"
+	"shelf/locales"
 )
 
 const (
@@ -42,22 +43,39 @@ const (
 	snapConfirmTol = 2.0
 )
 
-// snapTarget is one arrangement: its name and the horizontal span of the
-// window it covers (as fractions of the visible area), drawn in the tile's
-// small screen icon.
+// snapTarget is one arrangement: the horizontal span of the window it
+// covers (as fractions of the visible area), drawn in the tile's small
+// screen icon.
 type snapTarget struct {
-	Name     string
 	From, To float32
 }
 
-// snapTargets is the design's order: 左半、全屏、右半、左 1/3、中 1/3、右 1/3.
+// snapTargets is the design's order: 左半、全屏、右半、左 1/3、中 1/3、右 1/3;
+// snapTargetName says each one.
 var snapTargets = []snapTarget{
-	{"左半", 0, 0.5},
-	{"全屏", 0, 1},
-	{"右半", 0.5, 1},
-	{"左 1/3", 0, 1.0 / 3},
-	{"中 1/3", 1.0 / 3, 2.0 / 3},
-	{"右 1/3", 2.0 / 3, 1},
+	{0, 0.5},
+	{0, 1},
+	{0.5, 1},
+	{0, 1.0 / 3},
+	{1.0 / 3, 2.0 / 3},
+	{2.0 / 3, 1},
+}
+
+// snapTargetName is the tile's name in the language of l.
+func snapTargetName(l locales.Messages, slot int) string {
+	switch slot {
+	case 0:
+		return l.SnapLeftHalf()
+	case 1:
+		return l.SnapFull()
+	case 2:
+		return l.SnapRightHalf()
+	case 3:
+		return l.SnapLeftThird()
+	case 4:
+		return l.SnapMidThird()
+	}
+	return l.SnapRightThird()
 }
 
 // snapGhost is the transparent target preview: one floating window with an
@@ -437,9 +455,9 @@ func (a *shelf) snapRelease(p mygo.Point) {
 	// as a capsule instead of landing in a pill no one can see.
 	switch {
 	case resizeErr || (target >= 0 && !resize):
-		a.toastStatus("这个窗口不能调整大小", time.Now().Add(4*time.Second), statusInfo)
+		a.toastStatus(a.appLoc().SnapCantResize(), time.Now().Add(4*time.Second), statusInfo)
 	case moveErr:
-		a.toastStatus("无法移动这个窗口", time.Now().Add(4*time.Second), statusErr)
+		a.toastStatus(a.appLoc().SnapCantMove(), time.Now().Add(4*time.Second), statusErr)
 	}
 }
 
@@ -702,7 +720,7 @@ func snapGhostView(c *ui.Context) {
 func (a *shelf) snapView(c *ui.Context) {
 	trusted := a.snap.trusted
 	ui.Column(c.Key("snap")).Width(snapW).Height(snapH).Children(func() {
-		panelLabel(c, "snap-title", "排列窗口", 11, 600).
+		panelLabel(c, "snap-title", loc(c).SnapTitle(), 11, 600).
 			Absolute().Left(14).Top(snapTitleTop).TextColor(ink3)
 		grid := ui.Column(c.Key("snap-grid")).Absolute().Left(snapPadX).Top(snapGridTop).
 			Width(3*snapTileW + 2*snapTileGap).Gap(snapTileGap)
@@ -729,10 +747,11 @@ func (a *shelf) snapView(c *ui.Context) {
 // region, then its name. The hovered tile takes the accent fill and edge.
 func (a *shelf) snapTile(c *ui.Context, slot int, trusted bool) {
 	t := snapTargets[slot]
+	name := snapTargetName(loc(c), slot)
 	hot := trusted && a.snap.hot == slot
 	tile := ui.Row(c.Key(fmt.Sprintf("snap-tile-%d", slot))).Width(snapTileW).Height(snapTileH).
 		Radius(snapTileR).Padding(0, 10).Gap(8).AlignItems(ui.Center).
-		Label(t.Name)
+		Label(name)
 	if hot {
 		tile.Background(accent.Alpha(0.28)).Border(1.5, accent)
 	} else {
@@ -749,11 +768,11 @@ func (a *shelf) snapTile(c *ui.Context, slot int, trusted bool) {
 			x := r.X + r.W*t.From
 			p.Fill(ui.Rect{X: x, Y: r.Y + 1.4, W: r.W * (t.To - t.From), H: r.H - 2.8}, inner, 1)
 		})
-		name := panelLabel(c, fmt.Sprintf("snap-name-%d", slot), t.Name, 11.5, 600)
+		n := panelLabel(c, fmt.Sprintf("snap-name-%d", slot), name, 11.5, 600)
 		if hot {
-			name.TextColor(ink)
+			n.TextColor(ink)
 		} else {
-			name.TextColor(ink2)
+			n.TextColor(ink2)
 		}
 	})
 }
@@ -767,14 +786,14 @@ func (a *shelf) snapPermissionRow(c *ui.Context) {
 			Background(ui.RGBA(0, 0, 0, 0.9)).Border(0.5, fill2).
 			Padding(0, 10).Gap(8).AlignItems(ui.Center)
 		row.Children(func() {
-			ui.Text(c, "需要「辅助功能」权限").SingleLine().FontSize(11.5).TextColor(ink2)
+			ui.Text(c, loc(c).SnapNeedsAccess()).SingleLine().FontSize(11.5).TextColor(ink2)
 			b := ui.ButtonBase(c.Key("snap-perm-open")).Height(20).Radius(10).
-				Padding(0, 10).Center().Background(accent).Label("开启")
+				Padding(0, 10).Center().Background(accent).Label(loc(c).SnapEnable())
 			if b.Hovered() {
 				b.Background(accent.Alpha(0.8))
 			}
 			b.Children(func() {
-				ui.Text(c, "开启").SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
+				ui.Text(c, loc(c).SnapEnable()).SingleLine().FontSize(11).FontWeight(600).TextColor(ink)
 			})
 			if b.Clicked() {
 				a.openSnapPermissions()

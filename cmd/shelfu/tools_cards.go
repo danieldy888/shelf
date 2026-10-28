@@ -23,7 +23,6 @@ package main
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo/transfer"
@@ -33,6 +32,7 @@ import (
 	"shelf/internal/layout"
 	"shelf/internal/mac"
 	"shelf/internal/store"
+	"shelf/locales"
 )
 
 // cardKind separates one-shot actions from widgets with their own state.
@@ -124,6 +124,43 @@ func toolCardDefFor(id string) *toolCardDef {
 	return nil
 }
 
+// name is the card's title in the language of l: the catalog keeps the
+// source language's title for the shapes that read the table itself, and
+// this switch says the id in the language the user reads.
+func (d *toolCardDef) name(l locales.Messages) string {
+	switch d.id {
+	case "ocr":
+		return l.CardOcr()
+	case "fit1m":
+		return l.CardFit1M()
+	case "topdf":
+		return l.CardToPDF()
+	case "tojpeg":
+		return l.CardToJPEG()
+	case "toword":
+		return l.CardToWord()
+	case "extract":
+		return l.CardExtract()
+	case "resize":
+		return l.CardResize()
+	case "zip":
+		return l.CardZip()
+	case "airdrop":
+		return l.CardAirDrop()
+	case "playing":
+		return l.Music()
+	case "awake":
+		return l.KeepAwake()
+	case "recent":
+		return l.RecentFiles()
+	case "clip":
+		return l.LatestClip()
+	case "usage":
+		return l.AiUsage()
+	}
+	return d.title
+}
+
 // toolCardSurface is where a card draws: the tool page's normal form,
 // its name-only editing form, or a desktop pin window (task B). The
 // panel and desktop draw identically except that the pin gets the
@@ -195,7 +232,7 @@ func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface, 
 	} else {
 		sub := ""
 		if dragging {
-			sub = a.toolCardSub(def, class)
+			sub = a.toolCardSub(loc(c), def, class)
 		}
 		a.toolCardBody(c, card, def, sub, spec.Span)
 	}
@@ -214,9 +251,9 @@ func (a *shelf) toolCard(c *ui.Context, spec layout.Card, surf toolCardSurface, 
 func (a *shelf) toolCardEditBody(c *ui.Context, card ui.Element, def *toolCardDef) {
 	card.Center().Gap(5).Children(func() {
 		ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-		fitText(c, def.title, 12, 600, toolColW(def.span)-8).TextColor(ink)
+		fitText(c, def.name(loc(c)), 12, 600, toolColW(def.span)-8).TextColor(ink)
 		if def.span == 2 && def.kind == cardWidget {
-			panelLabel(c, nil, "小组件", 10, 0).TextColor(ink3)
+			panelLabel(c, nil, loc(c).Widgets(), 10, 0).TextColor(ink3)
 		}
 	})
 }
@@ -229,7 +266,7 @@ func (a *shelf) toolCardBody(c *ui.Context, card ui.Element, def *toolCardDef, s
 	if def.kind == cardAction {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-			fitText(c, def.title, 12, 600, toolColW(span)-8).TextColor(ink)
+			fitText(c, def.name(loc(c)), 12, 600, toolColW(span)-8).TextColor(ink)
 			if sub != "" {
 				fitText(c, sub, 10, 0, toolColW(span)-8).TextColor(ink3)
 			}
@@ -250,16 +287,16 @@ func (a *shelf) toolCardBody(c *ui.Context, card ui.Element, def *toolCardDef, s
 	default:
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, def.icon).Size(20, 20).TextColor(ink)
-			panelLabel(c, nil, def.title, 12, 600).TextColor(ink)
+			panelLabel(c, nil, def.name(loc(c)), 12, 600).TextColor(ink)
 		})
 	}
 }
 
 // toolCardSub is the action card's subtitle: the dragged file count
 // while files the card accepts hover, or empty otherwise.
-func (a *shelf) toolCardSub(def *toolCardDef, class dropClass) string {
+func (a *shelf) toolCardSub(l locales.Messages, def *toolCardDef, class dropClass) string {
 	if len(a.drop.files) > 0 && def.accepts(class) {
-		return dropCountTextFor(len(a.drop.files), class)
+		return dropCountTextIn(l, len(a.drop.files), class)
 	}
 	return ""
 }
@@ -268,37 +305,38 @@ func (a *shelf) toolCardSub(def *toolCardDef, class dropClass) string {
 // (design: 规则和投放区动作格相同). Images onto 转成 PDF merge into one
 // PDF past the first; the other targets map 1:1.
 func (a *shelf) toolCardDropAction(id string, paths []string) dropAction {
+	l := a.appLoc()
 	def := toolCardDefFor(id)
 	if def == nil {
-		return zipAction(len(paths))
+		return zipAction(l, len(paths))
 	}
 	switch id {
 	case "ocr":
 		// 识别文字并复制：不走转换管线，走 isOCRCopy 通道
-		return dropAction{id: id, icon: def.icon, label: "识别文字并复制", sub: dropCountTextFor(len(paths), classImages), isOCRCopy: true}
+		return dropAction{id: id, icon: def.icon, label: l.DropRecognizeCopy(), sub: dropCountTextIn(l, len(paths), classImages), isOCRCopy: true}
 	case "fit1m":
-		return dropAction{id: id, icon: def.icon, label: def.title, sub: "以内", target: toFit1M}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), sub: l.DropWithin(), target: toFit1M}
 	case "tojpeg":
-		return dropAction{id: id, icon: def.icon, label: def.title, sub: "每张一份", target: toJPEG}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), sub: l.DropPerFile(), target: toJPEG}
 	case "resize":
-		return dropAction{id: id, icon: def.icon, label: def.title, sub: "长边 1600 像素", target: toMedium}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), sub: l.DropResizeSub(), target: toMedium}
 	case "topdf":
 		if len(paths) > 1 {
-			return dropAction{id: id, icon: def.icon, label: "合成一个 PDF", sub: "按拖入顺序", target: toMergedPDF}
+			return dropAction{id: id, icon: def.icon, label: l.DropPdfMerged(), sub: l.DropPdfMergedSub(), target: toMergedPDF}
 		}
-		return dropAction{id: id, icon: def.icon, label: def.title, sub: "1 页", target: toPDF}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), sub: l.DropPdfPage(), target: toPDF}
 	case "toword":
-		return dropAction{id: id, icon: def.icon, label: def.title, sub: "识别文字", target: toWord}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), sub: l.DropRecognizeSub(), target: toWord}
 	case "extract":
 		sub := filepath.Base(paths[0])
 		if len(paths) > 1 {
-			sub = fmt.Sprintf("%d 项", len(paths))
+			sub = l.DropCountItems(len(paths))
 		}
-		return dropAction{id: id, icon: def.icon, label: def.title, sub: sub, target: toExtract}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), sub: sub, target: toExtract}
 	case "airdrop":
-		return dropAction{id: id, icon: def.icon, label: def.title, isAirDrop: true}
+		return dropAction{id: id, icon: def.icon, label: def.name(l), isAirDrop: true}
 	default: // zip and any future any-class action
-		return zipAction(len(paths))
+		return zipAction(l, len(paths))
 	}
 }
 
@@ -478,15 +516,15 @@ func (a *shelf) latestClipboardItem() (store.Item, bool) {
 
 // awakeRemain is the 保持唤醒 card's subtitle: the countdown for timed
 // holds, 一直 for the open-ended one, 关 while off.
-func (a *shelf) awakeRemain() string {
+func (a *shelf) awakeRemain(l locales.Messages) string {
 	m := a.awake
 	if m == nil || !m.active() {
-		return "关"
+		return l.AwakeOff()
 	}
 	if m.duration == 0 {
-		return "一直"
+		return l.AwakeAlways()
 	}
-	return "剩 " + m.remainText(time.Now())
+	return l.ToolsAwakeRemain(m.remainText(time.Now()))
 }
 
 // toolAwakeBody is the 保持唤醒 widget: the 1-column form centres
@@ -507,8 +545,8 @@ func (a *shelf) toolAwakeBodyNarrow(c *ui.Context, card ui.Element) {
 	on := m != nil && m.active()
 	card.Center().Gap(5).Children(func() {
 		ui.Icon(c, cupSymbol).Size(20, 20).TextColor(ink)
-		panelLabel(c, nil, "保持唤醒", 12, 600).TextColor(ink)
-		panelLabel(c, nil, a.awakeRemain(), 10, 0).TextColor(ink3)
+		panelLabel(c, nil, loc(c).KeepAwake(), 12, 600).TextColor(ink)
+		panelLabel(c, nil, a.awakeRemain(loc(c)), 10, 0).TextColor(ink3)
 		if on {
 			ui.Box(c.Key("on-dot")).Absolute().Top(8).Right(8).Size(6, 6).Radius(3).Background(awakeWarn)
 		}
@@ -524,24 +562,39 @@ func (a *shelf) toolAwakeBodyWide(c *ui.Context, card ui.Element) {
 			ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 				ui.Icon(c, cupSymbol).Size(20, 20).TextColor(ink)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					panelLabel(c, nil, "保持唤醒", 12, 600).TextColor(ink)
-					panelLabel(c, nil, a.awakeRemain(), 10, 0).TextColor(ink3)
+					panelLabel(c, nil, loc(c).KeepAwake(), 12, 600).TextColor(ink)
+					panelLabel(c, nil, a.awakeRemain(loc(c)), 10, 0).TextColor(ink3)
 				})
 				if on {
 					ui.Box(c.Key("on-dot")).Size(6, 6).Radius(3).Background(awakeWarn)
 				}
 			})
 			ui.Row(c.Key("awake-chips")).Gap(6).Margin(8, 0, 0, 0).Children(func() {
-				for _, choice := range awakeDurations {
-					label := choice.label
-					if i := strings.Index(label, "（"); i >= 0 {
-						label = label[:i]
-					}
-					a.awakeChip(c, "chip-"+label, label, choice.d)
+				for _, d := range awakeChipSpans {
+					a.awakeChip(c, fmt.Sprintf("chip-%d", d/time.Minute), awakeChipLabel(loc(c), d), d)
 				}
 			})
 		})
 	})
+}
+
+// awakeChipSpans are the 保持唤醒 cards' duration pills, shortest first;
+// 0 is 一直. The tray menu lists the same choices in its own file.
+var awakeChipSpans = []time.Duration{30 * time.Minute, time.Hour, 2 * time.Hour, 4 * time.Hour, 0}
+
+// awakeChipLabel is the pill name of span d.
+func awakeChipLabel(l locales.Messages, d time.Duration) string {
+	switch d {
+	case 30 * time.Minute:
+		return l.Awake30m()
+	case time.Hour:
+		return l.Awake1h()
+	case 2 * time.Hour:
+		return l.Awake2h()
+	case 4 * time.Hour:
+		return l.Awake4h()
+	}
+	return l.AwakeAlways()
 }
 
 // awakeChip is one duration pill of the 2-column 保持唤醒 card; the held
@@ -585,8 +638,8 @@ func (a *shelf) toolRecentBody(c *ui.Context, card ui.Element) {
 	card.Padding(0, 12, 0, 12).Justify(ui.Center).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				panelLabel(c, nil, "最近文件", 12, 600).TextColor(ink)
-				panelLabel(c, nil, "拖出即可", 10, 0).TextColor(ink3)
+				panelLabel(c, nil, loc(c).RecentFiles(), 12, 600).TextColor(ink)
+				panelLabel(c, nil, loc(c).DragOut(), 10, 0).TextColor(ink3)
 			})
 			ui.Row(c.Key("recent-thumbs")).Gap(6).AlignItems(ui.Center).Children(func() {
 				items := a.itemsFor(pageTray)
@@ -655,10 +708,10 @@ func (a *shelf) toolClipBody(c *ui.Context, card ui.Element) {
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 				if it, ok := a.latestClipboardItem(); ok {
 					ui.Text(c, itemTitle(it)).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
-					panelLabel(c, nil, "点按复制", 10, 0).TextColor(ink3)
+					panelLabel(c, nil, loc(c).TapToCopy(), 10, 0).TextColor(ink3)
 				} else {
-					panelLabel(c, nil, "剪贴板最新", 12, 600).TextColor(ink)
-					panelLabel(c, nil, "还没有剪贴板记录", 10, 0).TextColor(ink3)
+					panelLabel(c, nil, loc(c).LatestClip(), 12, 600).TextColor(ink)
+					panelLabel(c, nil, loc(c).NoClipItems(), 10, 0).TextColor(ink3)
 				}
 			})
 		})
@@ -678,14 +731,14 @@ func (a *shelf) toolUsageBody(c *ui.Context, card ui.Element) {
 		ui.Row(c).AlignItems(ui.Center).Gap(10).FillWidth().Children(func() {
 			a.toolUsageRing(c, five, week)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				panelLabel(c, nil, "AI 用量", 12, 600).TextColor(ink)
-				sub := "暂无数据"
+				panelLabel(c, nil, loc(c).AiUsage(), 12, 600).TextColor(ink)
+				sub := loc(c).NoData()
 				if ok {
 					w := five
 					if w == nil {
 						w = week
 					}
-					sub = fmt.Sprintf("剩余 %.0f%%", max(0, 100-w.UsedPct))
+					sub = loc(c).PercentLeft(fmt.Sprintf("%.0f", max(0, 100-w.UsedPct)))
 				}
 				panelLabel(c, nil, sub, 10, 0).TextColor(ink3)
 			})
@@ -717,7 +770,7 @@ func (a *shelf) toolPlayingBody(c *ui.Context, card ui.Element) {
 	if m == nil {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, musicSymbol).Size(20, 20).TextColor(ink3)
-			panelLabel(c, nil, "正在播放", 12, 600).TextColor(ink3)
+			panelLabel(c, nil, loc(c).NowPlaying(), 12, 600).TextColor(ink3)
 		})
 		return
 	}
@@ -725,8 +778,8 @@ func (a *shelf) toolPlayingBody(c *ui.Context, card ui.Element) {
 	if !ok {
 		card.Center().Gap(5).Children(func() {
 			ui.Icon(c, musicSymbol).Size(20, 20).TextColor(ink3)
-			panelLabel(c, nil, "正在播放", 12, 600).TextColor(ink)
-			panelLabel(c, nil, "没有内容", 10, 0).TextColor(ink3)
+			panelLabel(c, nil, loc(c).NowPlaying(), 12, 600).TextColor(ink)
+			panelLabel(c, nil, loc(c).NothingPlaying(), 10, 0).TextColor(ink3)
 		})
 		return
 	}
@@ -740,9 +793,9 @@ func (a *shelf) toolPlayingBody(c *ui.Context, card ui.Element) {
 				}
 			})
 			ui.Row(c.Key("tc-np-ctl")).Gap(10).AlignItems(ui.Center).Children(func() {
-				m.controlButton(c, "tc-np-prev", prevFill, "上一首", mac.NPPrevious, 15, 15)
+				m.controlButton(c, "tc-np-prev", prevFill, loc(c).PreviousTrack(), mac.NPPrevious, 15, 15)
 				m.controlButton(c, "tc-np-toggle", toggleSymbol(st.Playing), playPauseLabel(st.Playing), mac.NPPlayPause, 15, 15)
-				m.controlButton(c, "tc-np-next", nextFill, "下一首", mac.NPNext, 15, 15)
+				m.controlButton(c, "tc-np-next", nextFill, loc(c).NextTrack(), mac.NPNext, 15, 15)
 			})
 		})
 	})

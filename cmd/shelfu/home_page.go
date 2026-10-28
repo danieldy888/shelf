@@ -11,7 +11,6 @@ package main
 // desktop.
 
 import (
-	"fmt"
 	"math"
 	"slices"
 	"time"
@@ -117,7 +116,7 @@ type homePage struct {
 }
 
 func (p *homePage) id() pageID    { return pageHome }
-func (p *homePage) label() string { return "主页" }
+func (p *homePage) label() string { return p.host.appLoc().HomeTitle() }
 func (p *homePage) icon(c *ui.Context, _ bool) ui.Element {
 	return ui.Icon(c, homeNavSymbol)
 }
@@ -126,9 +125,9 @@ func (p *homePage) enabled() bool { return true }
 // title is the back row's page name (the P interface).
 func (p *homePage) title() string {
 	if p.picking {
-		return "小组件目录"
+		return p.host.appLoc().HomeWidgetCatalog()
 	}
-	return "主页"
+	return p.host.appLoc().HomeTitle()
 }
 
 // actions is the back row's right side: the pencil, or 完成 while
@@ -142,7 +141,7 @@ func (p *homePage) actions(c *ui.Context) []ui.Element {
 		var out []ui.Element
 		if p.editing && !p.picking && p.homePickable() {
 			if _, _, free := p.homeFreeSpot(); !free {
-				b := a.iconButton(c, "home-add", plusSymbol, "添加小组件")
+				b := a.iconButton(c, "home-add", plusSymbol, loc(c).HomeAddWidget())
 				if live && b.Clicked() {
 					p.picking, p.press = true, nil
 				}
@@ -151,7 +150,7 @@ func (p *homePage) actions(c *ui.Context) []ui.Element {
 		}
 		return append(out, a.homeDoneButton(c, live))
 	default:
-		b := a.iconButton(c, "home-edit", pencilSymbol, "编辑主页")
+		b := a.iconButton(c, "home-edit", pencilSymbol, loc(c).HomeEdit())
 		if live && b.Clicked() {
 			p.editing, p.editAt = true, time.Now()
 		}
@@ -163,7 +162,7 @@ func (p *homePage) actions(c *ui.Context) []ui.Element {
 // backs out of the picker first).
 func (a *shelf) homeDoneButton(c *ui.Context, live bool) ui.Element {
 	b := ui.Row(c.Key("home-done")).Height(24).Padding(0, 12, 0, 12).Radius(12).
-		Background(accent).Center().Label("完成")
+		Background(accent).Center().Label(loc(c).Done())
 	if live && b.Clicked() {
 		if p := a.homePageOf(); p != nil {
 			if p.picking {
@@ -177,7 +176,7 @@ func (a *shelf) homeDoneButton(c *ui.Context, live bool) ui.Element {
 		}
 	}
 	b.Children(func() {
-		panelLabel(c, nil, "完成", 12, 600).TextColor(ink)
+		panelLabel(c, nil, loc(c).Done(), 12, 600).TextColor(ink)
 	})
 	return b
 }
@@ -348,7 +347,7 @@ func (p *homePage) homeAddCell(c *ui.Context, live bool) {
 	plus := ui.Column(c.Key("home-plus")).Absolute().Left(homeX(col)).Top(homeY(row)).
 		Width(homeCellW()).Height(homeCellH()).Radius(14).Center().
 		BorderWidth(1.5).BorderColor(ui.RGBA(255, 255, 255, 0.25)).
-		BorderStyle(ui.BorderDashed).Label("添加小组件")
+		BorderStyle(ui.BorderDashed).Label(loc(c).HomeAddWidget())
 	if live {
 		plus.HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind == ui.InputPointerUp {
@@ -462,7 +461,7 @@ func (p *homePage) homeWidget(c *ui.Context, w layout.Widget, live bool) {
 		return
 	}
 	card := ui.Column(c.Key("hw-" + w.ID)).Radius(14).Background(fill1).MinWidth(0).MinHeight(0).
-		Label(def.title).Clip()
+		Label(def.name(loc(c))).Clip()
 	p.homeWidgetBody(c, card, w, p.editing)
 	d := p.press
 	parked := d != nil && d.id == w.ID && (d.dragging || d.settling)
@@ -497,7 +496,7 @@ func (p *homePage) homeLifted(c *ui.Context, d homePress) {
 		return
 	}
 	card := ui.Column(c.Key("hw-lift-" + d.id)).Radius(14).Background(fill1).MinWidth(0).MinHeight(0).
-		Label(def.title).Clip()
+		Label(def.name(loc(c))).Clip()
 	p.homeWidgetBody(c, card, d.orig, true)
 	card.Absolute().Left(d.px-d.grabDX).Top(d.py-d.grabDY).
 		Width(homeSpanW(d.orig.W)).Height(homeSpanH(d.orig.H)).
@@ -707,7 +706,7 @@ func (p *homePage) homeEditChrome(c *ui.Context, card ui.Element, w layout.Widge
 	card.Children(func() {
 		badge := ui.Row(c.Key("home-minus")).Absolute().Top(2).Left(2).Size(18, 18).Radius(9).
 			Background(ui.Hex("#3A3A3C")).Border(1.5, ui.Hex("#000000")).
-			Center().Label("移除")
+			Center().Label(loc(c).Remove())
 		if live {
 			badge.HandleInput(func(ev ui.InputEvent) bool {
 				if ev.Kind == ui.InputPointerUp {
@@ -723,7 +722,7 @@ func (p *homePage) homeEditChrome(c *ui.Context, card ui.Element, w layout.Widge
 		})
 
 		handle := ui.Box(c.Key("home-size")).Absolute().Bottom(5).Right(5).Size(12, 12).
-			BorderWidth(0, 1.6, 1.6, 0).BorderColor(ink2).Label("改尺寸")
+			BorderWidth(0, 1.6, 1.6, 0).BorderColor(ink2).Label(loc(c).HomeResize())
 		if live {
 			handle.HandleInput(func(ev ui.InputEvent) bool {
 				if ev.Kind == ui.InputPointerUp {
@@ -806,9 +805,9 @@ func (p *homePage) pickerBody(c *ui.Context, live bool) ui.Element {
 		sheet := ui.Column(c.Key("home-picker")).FillWidth().Radius(14).
 			Background(ui.Hex("#1C1C1E")).Padding(10, 12, 12, 12)
 		sheet.Children(func() {
-			panelLabel(c, nil, "小组件", 11, 600).TextColor(ink3).Margin(2, 0, 6, 0)
+			panelLabel(c, nil, loc(c).Widgets(), 11, 600).TextColor(ink3).Margin(2, 0, 6, 0)
 			if len(defs) == 0 {
-				panelLabel(c, nil, "全部已在主页", 11, 0).TextColor(ink3)
+				panelLabel(c, nil, loc(c).HomeAllPlaced(), 11, 0).TextColor(ink3)
 				return
 			}
 			ui.Grid(c.Key("home-plist")).ColumnTracks(ui.Fr(1), ui.Fr(1)).
@@ -827,7 +826,7 @@ func (p *homePage) pickerBody(c *ui.Context, live bool) ui.Element {
 func (p *homePage) pickRow(c *ui.Context, def toolCardDef, live bool) ui.Element {
 	a := p.host
 	row := ui.Row(c.Key("hpi-"+def.id)).Height(toolPickRowH).Radius(8).
-		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.title)
+		AlignItems(ui.Center).Gap(8).Padding(0, 8, 0, 8).Label(def.name(loc(c)))
 	if live {
 		if row.Hovered() {
 			row.Background(fill2)
@@ -840,17 +839,17 @@ func (p *homePage) pickRow(c *ui.Context, def toolCardDef, live bool) ui.Element
 				p.picking = false
 				return true
 			}
-			a.toastStatus("主页没有空位，先移除一个小组件", time.Now().Add(2*time.Second), statusInfo)
+			a.toastStatus(loc(c).HomeNoSpace(), time.Now().Add(2*time.Second), statusInfo)
 			return true
 		})
 		row.PointerPosition()
 	}
 	row.Children(func() {
 		ui.Icon(c, def.icon).Size(15, 15).TextColor(ink)
-		panelLabel(c, nil, def.title, 12, 500).TextColor(ink)
+		panelLabel(c, nil, def.name(loc(c)), 12, 500).TextColor(ink)
 		ui.Box(c).Grow(1)
 		w, h := homeDefaultSize(def.id)
-		panelLabel(c, nil, fmt.Sprintf("%d × %d", w, h), 10, 0).TextColor(ink3)
+		panelLabel(c, nil, loc(c).CellSize(w, h), 10, 0).TextColor(ink3)
 	})
 	return row
 }
