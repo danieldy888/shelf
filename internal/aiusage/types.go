@@ -14,11 +14,21 @@ const (
 	ToolCodex  Tool = "codex"
 )
 
-// Window is one rate-limit window of a subscription quota.
+// Window is one rate-limit window of a subscription quota, as the vendor
+// named it: "5 hours", "7 days", or a model scope's "7 days · Opus".
+// Model is the normalised scope word ("opus", "sonnet", "" for the
+// unscoped weekly window).
 type Window struct {
+	Name     string
+	Model    string
 	UsedPct  float64       // 0–100
 	Length   time.Duration // 5h or 7d: identified by length, not by position
-	ResetsAt time.Time
+	ResetsAt time.Time     // zero when the vendor named none
+}
+
+// LeftPct is the window's unused share, clamped to 0–100.
+func (w Window) LeftPct() float64 {
+	return max(0, min(100, 100-w.UsedPct))
 }
 
 // QuotaStatus is how a quota fetch went.
@@ -30,19 +40,34 @@ const (
 	QuotaExpired
 	QuotaRateLimited
 	QuotaFailed
+	// QuotaNoCLI means Claude Code is not installed on this machine, so
+	// its /usage can't be read.
+	QuotaNoCLI
 )
 
-// Quota is one tool's subscription quota at FetchedAt; FiveHour and Weekly
-// are nil while the fetch could not produce them (see Status and Err).
+// Quota is one tool's subscription quota at FetchedAt; Windows is empty
+// while the fetch could not produce any (see Status and Err).
 type Quota struct {
 	Tool       Tool
 	Plan       string
-	FiveHour   *Window
-	Weekly     *Window
+	Windows    []Window
 	Status     QuotaStatus
 	FetchedAt  time.Time
 	RetryAfter time.Duration
 	Err        string
+}
+
+// Elapsed returns ws as they stand at now: a window whose reset time has
+// passed was renewed, so it reads 0 used with no reset time left to show.
+func Elapsed(ws []Window, now time.Time) []Window {
+	out := make([]Window, len(ws))
+	for i, w := range ws {
+		if !w.ResetsAt.IsZero() && !now.Before(w.ResetsAt) {
+			w.UsedPct, w.ResetsAt = 0, time.Time{}
+		}
+		out[i] = w
+	}
+	return out
 }
 
 // PaceInfo compares a window's usage against an even pace. AheadPct > 0

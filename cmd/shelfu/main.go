@@ -245,6 +245,13 @@ func (a *shelf) ready(show bool) {
 		fetchCodex:  func(ctx context.Context) aiusage.Quota { return aiusage.FetchCodex(ctx, usageEnv) },
 		fetchClaude: func(ctx context.Context) aiusage.Quota { return aiusage.FetchClaude(ctx, usageEnv) },
 		pace:        aiusage.Pace,
+		// Claude Code's own logs tell whether an allowance moved at all;
+		// the /usage read runs only when it did.
+		claudeUsedSince: func(t time.Time) bool {
+			return aiusage.ClaudeUsedSince(usageEnv.ClaudeConfigDir, usageEnv.Home, t)
+		},
+		loadLast: func() []aiusage.Quota { return aiusage.LoadLastQuotas(a.dataDir) },
+		saveLast: func(q aiusage.Quota) { _ = aiusage.SaveLastQuota(a.dataDir, q) },
 		// A fresh scanner per refresh follows the local* switches; the
 		// incremental cache in usage-cache keeps rebuilds cheap.
 		newScanner: func() usageScanner {

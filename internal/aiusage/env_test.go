@@ -89,8 +89,8 @@ func TestDefaultEnv(t *testing.T) {
 	if env.CodexBaseURL != "https://chatgpt.com/backend-api" {
 		t.Fatalf("CodexBaseURL = %q", env.CodexBaseURL)
 	}
-	if env.ClaudeBaseURL != "https://api.anthropic.com" {
-		t.Fatalf("ClaudeBaseURL = %q", env.ClaudeBaseURL)
+	if env.ClaudeAccount == nil {
+		t.Fatal("ClaudeAccount cache should be set")
 	}
 	if env.Now == nil {
 		t.Fatal("Now should be set")

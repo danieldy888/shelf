@@ -146,11 +146,12 @@ func (f *usageFeature) leastWindow() (five, week *aiusage.Window, ok bool) {
 			continue
 		}
 		q, _ := f.quotaShown(t)
-		if q.FiveHour == nil {
-			continue
-		}
-		if left := 100 - q.FiveHour.UsedPct; left < best {
-			best, five, week, ok = left, q.FiveHour, q.Weekly, true
+		for i := range q.Windows {
+			w := &q.Windows[i]
+			if w.Length >= 6*24*time.Hour || w.LeftPct() >= best {
+				continue
+			}
+			best, five, week, ok = w.LeftPct(), w, weeklyWindow(q.Windows), true
 		}
 	}
 	if ok {
@@ -162,14 +163,93 @@ func (f *usageFeature) leastWindow() (five, week *aiusage.Window, ok bool) {
 			continue
 		}
 		q, _ := f.quotaShown(t)
-		if q.Weekly == nil {
-			continue
-		}
-		if left := 100 - q.Weekly.UsedPct; left < best {
-			best, week, ok = left, q.Weekly, true
+		if w := weeklyWindow(q.Windows); w != nil && w.LeftPct() < best {
+			best, week, ok = w.LeftPct(), w, true
 		}
 	}
 	return nil, week, ok
+}
+
+// weeklyWindow picks the window the outer ring draws: the unscoped weekly
+// one, else the first weekly one a plan has.
+func weeklyWindow(ws []aiusage.Window) *aiusage.Window {
+	var fallback *aiusage.Window
+	for i := range ws {
+		if ws[i].Length < 6*24*time.Hour {
+			continue
+		}
+		if ws[i].Model == "" {
+			return &ws[i]
+		}
+		if fallback == nil {
+			fallback = &ws[i]
+		}
+	}
+	return fallback
+}
+
+// orderedWindows puts the two meters a card shows first: the 5-hour
+// session, the unscoped week, then any model-scoped weeks in the order
+// Claude Code printed them.
+func orderedWindows(ws []aiusage.Window) []aiusage.Window {
+	var five, week, rest []aiusage.Window
+	for _, w := range ws {
+		switch {
+		case w.Model == "" && w.Length < 6*24*time.Hour && len(five) == 0:
+			five = append(five, w)
+		case w.Model == "" && len(week) == 0:
+			week = append(week, w)
+		default:
+			rest = append(rest, w)
+		}
+	}
+	out := make([]aiusage.Window, 0, len(ws))
+	out = append(out, five...)
+	out = append(out, week...)
+	return append(out, rest...)
+}
+
+// windowLabel is a window's Chinese card name.
+func windowLabel(w aiusage.Window) string {
+	if w.Length >= 6*24*time.Hour {
+		if _, scope, ok := strings.Cut(w.Name, "·"); ok && w.Model != "" {
+			return "每周 · " + strings.TrimSpace(scope)
+		}
+		return "每周"
+	}
+	return "5 小时"
+}
+
+// windowShown is the share a meter fills: how much is used by default, how
+// much is left when the setting asks for it.
+func (f *usageFeature) windowShown(w aiusage.Window) float64 {
+	used := max(0, min(100, w.UsedPct))
+	if f.cfg().QuotaLeft {
+		return 100 - used
+	}
+	return used
+}
+
+// quotaPctText prints a share as Magpie does: whole numbers unchanged,
+// anything else with one decimal. "41%" and "12.5%".
+func quotaPctText(v float64) string {
+	v = max(0, min(100, v))
+	if v == math.Trunc(v) {
+		return fmt.Sprintf("%.0f%%", v)
+	}
+	return fmt.Sprintf("%.1f%%", v)
+}
+
+// windowColor is a window's dot and arc colour; a window at or above 90%
+// used is red whichever way the number is shown, as Magpie marks it.
+func windowColor(w aiusage.Window) ui.Color {
+	if max(0, min(100, w.UsedPct)) >= 90 {
+		return danger
+	}
+	if w.Length >= 6*24*time.Hour {
+		return usageWeekly
+	}
+	return usageFive
 }
 
 // title is the back row's page name; the data stamp is in actions.
@@ -305,13 +385,18 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 	case st.latest.FetchedAt.IsZero():
 		// First fetch not answered yet.
 	case st.latest.Status == aiusage.QuotaOK:
-		showNumbers = q.FiveHour != nil || q.Weekly != nil
+		showNumbers = len(q.Windows) > 0
 	case st.latest.Status == aiusage.QuotaRateLimited || st.latest.Status == aiusage.QuotaFailed:
 		showNumbers = stale // last good numbers stay, dimmed
 	}
 	if showNumbers {
-		f.windowLine(c, q.FiveHour, "5 小时", usageFive, now)
-		f.windowLine(c, q.Weekly, "每周", usageWeekly, now)
+		ordered := orderedWindows(q.Windows)
+		if len(ordered) > 2 {
+			ordered = ordered[:2] // the rest are in the hover detail
+		}
+		for _, w := range ordered {
+			f.windowLine(c, w, stale, now)
+		}
 		f.paceLine(c, q, stale, now)
 		return
 	}
@@ -340,35 +425,34 @@ func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, status aiu
 		lines = fmt.Sprintf("登录已过期\n重新打开 %s", toolName(tool))
 	case aiusage.QuotaRateLimited:
 		lines = "额度查询暂时被限流\n稍后再看"
+	case aiusage.QuotaNoCLI:
+		lines = "未找到 Claude Code\n装好后自动读取"
 	default:
 		lines = "暂时查不到额度\n稍后再看"
 	}
 	panelLines(c, lines, 10.5, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 }
 
-// windowLine is one card row: coloured dot, window name, remaining % and
-// its reset time (4:25 后重置 under a day, else 周六 02:00 重置).
-func (f *usageFeature) windowLine(c *ui.Context, w *aiusage.Window, name string, col ui.Color, now time.Time) {
-	left := -1.0
-	if w != nil {
-		left = 100 - w.UsedPct
+// windowLine is one card row: coloured dot, window name, the shown share
+// (used, or left when the setting asks) and its reset time.
+func (f *usageFeature) windowLine(c *ui.Context, w aiusage.Window, stale bool, now time.Time) {
+	name := windowLabel(w)
+	col := windowColor(w)
+	pctCol := ink
+	if col == danger {
+		pctCol = danger
 	}
-	if left >= 0 && left < 10 {
-		col = danger
+	if stale {
+		col = col.Alpha(0.45)
+		pctCol = ink3
 	}
 	ui.Row(c.Key("wl-"+name)).AlignItems(ui.Center).Gap(4).Margin(3, 0, 0, 0).Children(func() {
-		ui.Box(c).Size(6, 6).Radius(3).Background(col)
-		panelLabel(c, nil, name, 10.5, 0).TextColor(ink2).Width(32)
-		pct, pctCol := "—", ink
-		if w != nil {
-			pct = fmt.Sprintf("%.0f%%", left)
-			if left < 10 {
-				pctCol = danger
-			}
-		}
-		panelLabel(c, nil, pct, 11, 600).TextColor(pctCol).MinWidth(26)
-		if w != nil {
-			panelLabel(c, nil, usageResetShort(w.ResetsAt, now), 10.5, 0).TextColor(ink3)
+		panelLabel(c, nil, name, 10.5, 0).TextColor(ink2).Width(31)
+		// The mode rides on the number, as Magpie's 「41% used」 does, so
+		// the row states which share it shows without a second label.
+		panelLabel(c, nil, f.shownShort(w), 10, 600).TextColor(pctCol).MinWidth(26)
+		if !w.ResetsAt.IsZero() {
+			panelLabel(c, nil, usageResetShort(w.ResetsAt, now), 9.5, 0).TextColor(ink3)
 		}
 	})
 }
@@ -381,19 +465,22 @@ func (f *usageFeature) paceLine(c *ui.Context, q aiusage.Quota, stale bool, now 
 	if stale {
 		text = usageAgo(q.FetchedAt, now) + "的数据"
 	} else {
+		ordered := orderedWindows(q.Windows)
+		if len(ordered) > 2 {
+			ordered = ordered[:2]
+		}
 		lowest := 101.0
-		for _, w := range []*aiusage.Window{q.FiveHour, q.Weekly} {
-			if w != nil && 100-w.UsedPct < lowest {
-				lowest = 100 - w.UsedPct
+		for _, w := range ordered {
+			if w.LeftPct() < lowest {
+				lowest = w.LeftPct()
 			}
 		}
 		runsOut, d := false, time.Duration(0)
 		name := ""
-		for i, w := range []*aiusage.Window{q.FiveHour, q.Weekly} {
-			if pi, ok := f.paceOf(w, now); ok && !pi.LastsUntilReset {
+		for _, w := range ordered {
+			if pi, ok := f.paceOf(&w, now); ok && !pi.LastsUntilReset {
 				if !runsOut || pi.RunsOutIn < d {
-					d = pi.RunsOutIn
-					name = [...]string{"5 小时", "每周"}[i]
+					d, name = pi.RunsOutIn, windowLabel(w)
 				}
 				runsOut = true
 			}
@@ -416,10 +503,11 @@ func (f *usageFeature) quotaRing(c *ui.Context, tool aiusage.Tool, q aiusage.Quo
 	const ring = float32(usageRingSize)
 	k := ring / 64
 	e := ui.Box(c.Key("ring")).Size(ring, ring).Center()
-	has := q.FiveHour != nil || q.Weekly != nil
+	five, week := ringWindows(q.Windows)
+	has := len(q.Windows) > 0
 	e.Draw(func(p *ui.Painter, r ui.Rect) {
-		f.drawWindowRing(p, r, 28*k, 5*k, q.Weekly, usageWeekly, stale, true)
-		f.drawWindowRing(p, r, 20*k, 5*k, q.FiveHour, usageFive, stale, true)
+		f.drawWindowRing(p, r, 28*k, 5*k, week, usageWeekly, stale, true)
+		f.drawWindowRing(p, r, 20*k, 5*k, five, usageFive, stale, true)
 	})
 	e.Children(func() {
 		logo, col, size := toolLogo(tool)
@@ -428,6 +516,24 @@ func (f *usageFeature) quotaRing(c *ui.Context, tool aiusage.Tool, q aiusage.Quo
 			ic.Opacity(0.4)
 		}
 	})
+}
+
+// ringWindows picks the two windows the double ring draws: the 5-hour
+// session inside, the unscoped week outside.
+func ringWindows(ws []aiusage.Window) (five, week *aiusage.Window) {
+	for i := range ws {
+		w := &ws[i]
+		if w.Length < 6*24*time.Hour && five == nil {
+			five = w
+		}
+		if w.Length >= 6*24*time.Hour && w.Model == "" && week == nil {
+			week = w
+		}
+	}
+	if week == nil {
+		week = weeklyWindow(ws)
+	}
+	return five, week
 }
 
 // drawWindowRing paints one arc of the double ring inside r: the fill3
@@ -442,14 +548,13 @@ func (f *usageFeature) drawWindowRing(p *ui.Painter, r ui.Rect, rad, lw float32,
 	if w == nil {
 		return
 	}
-	left := max(0, min(100, 100-w.UsedPct)) / 100
-	if col == usageFive && left < 0.10 {
+	if w.UsedPct >= 90 {
 		col = danger
 	}
 	if dim {
 		col = col.Alpha(0.45)
 	}
-	strokeRingArc(p, cx, cy, rad, lw, float32(left), col)
+	strokeRingArc(p, cx, cy, rad, lw, float32(f.windowShown(*w)/100), col)
 	if tick {
 		if pi, ok := f.paceOf(w, f.deps.now()); ok {
 			expected := float32(max(0, min(100, pi.ExpectedLeftPct)) / 100)
@@ -501,19 +606,26 @@ func (f *usageFeature) popoverBody(c *ui.Context, tool aiusage.Tool) {
 			panelLabel(c, nil, q.Plan, 12, 500).TextColor(ink2)
 		}
 	})
+	five, week := ringWindows(q.Windows)
 	ui.Row(c.Key("leg")).Gap(14).Margin(6, 0, 0, 0).Children(func() {
-		if q.Weekly != nil {
+		if week != nil {
 			popLegend(c, usageWeekly, "每周 · 外圈")
 		}
-		if q.FiveHour != nil {
+		if five != nil {
 			popLegend(c, usageFive, "5 小时 · 内圈")
 		}
 	})
-	if q.FiveHour != nil {
-		f.popWindow(c, "5 小时", q.FiveHour, usageFive, now)
+	ordered := orderedWindows(q.Windows)
+	if len(ordered) > 2 {
+		// More windows than the card holds (a plan with per-model weeks):
+		// every window gets a compact meter so all of them fit the sheet.
+		for _, w := range ordered {
+			f.popCompact(c, w, now)
+		}
+		return
 	}
-	if q.Weekly != nil {
-		f.popWindow(c, "每周", q.Weekly, usageWeekly, now)
+	for _, w := range ordered {
+		f.popWindow(c, w, now)
 	}
 }
 
@@ -524,31 +636,36 @@ func popLegend(c *ui.Context, col ui.Color, s string) {
 	})
 }
 
-// popWindow is one detail block: name, remaining and long reset over the
-// track (fill3 bar, coloured remaining, white/red even-pace tick), then
-// the pace delta and the depletion estimate.
-func (f *usageFeature) popWindow(c *ui.Context, name string, w *aiusage.Window, col ui.Color, now time.Time) {
-	left := max(0, min(100, 100-w.UsedPct))
-	pi, hasPace := f.paceOf(w, now)
+// popWindow is one detail block: name, the shown share and the long reset
+// over the track (fill3 bar, coloured share, white/red even-pace tick),
+// then the pace delta and the depletion estimate.
+func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time) {
+	name := windowLabel(w)
+	shown := f.windowShown(w)
+	col := windowColor(w)
+	pi, hasPace := f.paceOf(&w, now)
 	ui.Row(c.Key("pw-"+name)).AlignItems(ui.End).Margin(12, 0, 0, 0).Children(func() {
 		panelLabel(c, nil, name, 13, 600).TextColor(ink)
-		panelLabel(c, nil, fmt.Sprintf("剩 %.0f%%", left), 11, 600).TextColor(ink2).Margin(0, 0, 0, 6)
+		panelLabel(c, nil, f.shownLabel(shown), 11, 600).TextColor(ink2).Margin(0, 0, 0, 6)
 		ui.Box(c).Grow(1)
 		panelLabel(c, nil, usageResetLong(w.ResetsAt, now), 11, 0).TextColor(ink3)
 	})
 	bar := ui.Box(c.Key("trk-"+name)).FillWidth().Height(5).Radius(3).Margin(6, 0, 0, 0)
 	bar.Draw(func(p *ui.Painter, r ui.Rect) {
 		p.Fill(r, fill3, r.H/2)
-		if wf := float32(left) / 100; wf > 0 {
+		if wf := float32(shown) / 100; wf > 0 {
 			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * wf, H: r.H}, col, r.H/2)
 		}
 		if hasPace {
-			expected := float32(max(0, min(100, pi.ExpectedLeftPct)) / 100)
+			expected := pi.ExpectedLeftPct
+			if !f.cfg().QuotaLeft {
+				expected = 100 - expected
+			}
 			tick := ui.RGB(255, 255, 255)
 			if !pi.LastsUntilReset {
 				tick = danger
 			}
-			x := r.X + r.W*expected
+			x := r.X + r.W*float32(max(0, min(100, expected))/100)
 			p.Fill(ui.Rect{X: x - 1, Y: r.Y - 3, W: 2, H: 11}, tick, 1)
 		}
 	})
@@ -571,6 +688,46 @@ func (f *usageFeature) popWindow(c *ui.Context, name string, w *aiusage.Window, 
 		}
 		panelLabel(c, nil, right, 10.5, 0).TextColor(ink3)
 	})
+}
+
+// popCompact is one line plus a thin meter: the shape a plan with more
+// than two windows uses so every window stays visible in the sheet.
+func (f *usageFeature) popCompact(c *ui.Context, w aiusage.Window, now time.Time) {
+	name := windowLabel(w)
+	shown := f.windowShown(w)
+	col := windowColor(w)
+	ui.Row(c.Key("pc-"+name)).AlignItems(ui.Center).Margin(4, 0, 0, 0).Gap(6).Children(func() {
+		panelLabel(c, nil, name, 12, 600).TextColor(ink)
+		ui.Box(c).Grow(1)
+		panelLabel(c, nil, f.shownLabel(shown), 11, 600).TextColor(ink2)
+		if !w.ResetsAt.IsZero() {
+			panelLabel(c, nil, usageResetShort(w.ResetsAt, now), 10.5, 0).TextColor(ink3)
+		}
+	})
+	ui.Box(c.Key("tk-"+name)).FillWidth().Height(3).Radius(2).Margin(3, 12, 1, 0).Draw(func(p *ui.Painter, r ui.Rect) {
+		p.Fill(r, fill3, r.H/2)
+		if wf := float32(shown) / 100; wf > 0 {
+			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * wf, H: r.H}, col, r.H/2)
+		}
+	})
+}
+
+// shownShort is the card row's share and mode: 「41% 已用」 or 「59%
+// 剩余」 at 11pt, sized to fit beside the window name.
+func (f *usageFeature) shownShort(w aiusage.Window) string {
+	v := quotaPctText(f.windowShown(w))
+	if f.cfg().QuotaLeft {
+		return v + " 剩余"
+	}
+	return v + " 已用"
+}
+
+// shownLabel names the share the meters fill: 「41% 已用」 or 「59% 剩余」.
+func (f *usageFeature) shownLabel(v float64) string {
+	if f.cfg().QuotaLeft {
+		return quotaPctText(v) + " 剩余"
+	}
+	return quotaPctText(v) + " 已用"
 }
 
 // --- local usage ---------------------------------------------------------

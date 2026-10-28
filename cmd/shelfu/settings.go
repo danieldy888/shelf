@@ -548,7 +548,7 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 		})
 	}
 	settingsSection(c, "AI 用量",
-		"会读取本机这些工具已保存的登录信息，只用来向它们的官方地址查询额度，不发给其他任何地方。",
+		"会读取本机这些工具已保存的登录信息，并让 Claude Code 读取它自己的用量，不发给其他任何地方。",
 		a.settingsBroken, func() {
 			settingsToggle(c, "aiusage", "在刘海里显示 AI 用量", a.settings.AIUsage.Enabled,
 				func(on bool) { a.setAIUsage(func(s *settings.Settings) { s.AIUsage.Enabled = on }) })
@@ -584,6 +584,20 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 					false, a.settings.AIUsage.LocalOmp,
 					nil,
 					func(s *settings.Settings, on bool) { s.AIUsage.LocalOmp = on })
+			})
+			settingsSep(c, "quota-show")
+			settingsRow(c, "quota-show", "额度显示", func() {
+				shown := 0
+				if a.settings.AIUsage.QuotaLeft {
+					shown = 1
+				}
+				sg := ui.Segmented(c, &shown, "已用", "剩余").Label("额度显示")
+				if !a.settings.AIUsage.Enabled {
+					sg.Disabled(true)
+				}
+				if sg.Changed() {
+					a.setAIUsage(func(s *settings.Settings) { s.AIUsage.QuotaLeft = shown == 1 })
+				}
 			})
 		})
 }

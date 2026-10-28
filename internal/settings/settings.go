@@ -101,6 +101,9 @@ type AIUsageSettings struct {
 	LocalOmp    bool `json:"localOmp"`
 	LocalClaude bool `json:"localClaude"`
 	LocalCodex  bool `json:"localCodex"`
+	// QuotaLeft shows how much of a quota window is left instead of how
+	// much is used; the used share is the default, as Magpie shows it.
+	QuotaLeft bool `json:"quotaLeft"`
 }
 
 // defaultClipboardLimit is the clipboard text history cap a fresh

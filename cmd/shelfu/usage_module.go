@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"sync/atomic"
 	"time"
 
@@ -26,14 +27,17 @@ const (
 	// usageLocalInterval is how often the local token summary is rebuilt
 	// while the page shows; a page visit refreshes it at once when stale.
 	usageLocalInterval = 60 * time.Second
-	// usageQuotaInterval is the fastest a quota endpoint is asked, however
-	// the refresh was started (timer or button): Claude Code 429s below
-	// that pace. A server RetryAfter holds a tool back longer.
+	// usageQuotaInterval is how often an automatic refresh asks a quota
+	// endpoint: Codex at most this fast. A server RetryAfter holds a tool
+	// back longer.
 	usageQuotaInterval = 5 * time.Minute
-	// usageQuotaManual is the shortest gap a manual refresh asks a quota
-	// endpoint again; Claude Code's own minimum is usageQuotaInterval —
-	// it 429s below that pace, whatever the trigger (PLAN.md).
+	// usageQuotaManual is the shortest gap a manual refresh asks the Codex
+	// quota endpoint again.
 	usageQuotaManual = 60 * time.Second
+	// usageClaudeFloor is the fastest any Claude Code /usage read runs,
+	// however it was started (page open, refresh button, timer): each read
+	// is a whole Claude Code process, and Magpie holds the same 30s floor.
+	usageClaudeFloor = 30 * time.Second
 	// usageQuotaTimeout and usageScanTimeout bound one round of work so a
 	// stalled source frees its busy flag instead of silencing refreshes.
 	usageQuotaTimeout = 20 * time.Second
@@ -47,6 +51,14 @@ type usageDeps struct {
 	fetchCodex  func(context.Context) aiusage.Quota
 	fetchClaude func(context.Context) aiusage.Quota
 	pace        func(aiusage.Window, time.Time) aiusage.PaceInfo
+	// claudeUsedSince reports whether Claude Code wrote a session log
+	// after t; an unused allowance is not worth an automatic /usage read.
+	// claudeWait is the random whole-minute gap before the next one.
+	claudeUsedSince func(time.Time) bool
+	claudeWait      func() time.Duration
+	// loadLast/saveLast keep the last good reading across restarts.
+	loadLast func() []aiusage.Quota
+	saveLast func(aiusage.Quota)
 	// newScanner builds a fresh local scanner per refresh so the
 	// aiUsage.local* switches apply at once; the on-disk incremental
 	// cache makes a rebuild cheap — the sources a Scanner was built
@@ -68,7 +80,9 @@ type usageScanner interface {
 type usageQuotaState struct {
 	latest, good aiusage.Quota
 	attemptAt    time.Time // when the last request was dispatched
-	retryTill    time.Time
+	ask          bool      // the user asked to see a fresh Claude reading
+	nextAt       time.Time // Claude's next unasked read is due
+	retryTill    time.Time // Codex's server RetryAfter
 	busy         bool
 	generation   int // distinguishes dispatches when fake-clock times tie
 }
@@ -110,7 +124,25 @@ func newUsageFeature(a *shelf, deps usageDeps) *usageFeature {
 	if f.deps.now == nil {
 		f.deps.now = time.Now
 	}
+	if f.deps.claudeWait == nil {
+		f.deps.claudeWait = defaultClaudeWait
+	}
+	if f.deps.loadLast != nil {
+		for _, q := range f.deps.loadLast() {
+			if q.Status != aiusage.QuotaOK || len(q.Windows) == 0 {
+				continue
+			}
+			st := &f.quota[quotaIndex(q.Tool)]
+			st.latest, st.good = q, q
+		}
+	}
 	return f
+}
+
+// defaultClaudeWait is the next unasked /usage read's gap: a whole minute
+// from 5 to 15, drawn afresh after each run as Magpie does.
+func defaultClaudeWait() time.Duration {
+	return (5 + time.Duration(rand.N(11))) * time.Minute
 }
 
 // usageSources maps the aiUsage.local* switches onto the scanner's source
@@ -197,7 +229,12 @@ func (f *usageFeature) tick(now time.Time) {
 		}
 		return
 	}
-	f.wasVisible = true
+	if !f.wasVisible {
+		f.wasVisible = true
+		// Opening the page is the user asking to see fresh numbers; the
+		// Claude floor still applies, so this only marks the ask.
+		f.askQuota(aiusage.ToolClaude)
+	}
 	// A page switch is still running: start no fetch or scan until it has
 	// settled. Reading credentials and walking the local usage logs would
 	// otherwise contend with the 240ms transition the user is watching.
@@ -211,9 +248,11 @@ func (f *usageFeature) tick(now time.Time) {
 	}
 }
 
-// ensureFresh starts the refreshes whose data is due at now: quota per
-// enabled tool every usageQuotaInterval (or its own RetryAfter), the local
-// summary every usageLocalInterval or once the chosen range has none.
+// ensureFresh starts the refreshes whose data is due at now: Codex every
+// usageQuotaInterval (or its RetryAfter), Claude at the user's ask but no
+// faster than usageClaudeFloor and otherwise on its random wait once
+// Claude Code was used, the local summary every usageLocalInterval or once
+// the chosen range has none.
 func (f *usageFeature) ensureFresh(now time.Time) {
 	for _, t := range quotaTools() {
 		if !f.quotaOn(t) {
@@ -221,6 +260,12 @@ func (f *usageFeature) ensureFresh(now time.Time) {
 		}
 		st := &f.quota[quotaIndex(t)]
 		if st.busy || now.Before(st.retryTill) {
+			continue
+		}
+		if t == aiusage.ToolClaude {
+			if f.claudeDue(st, now) {
+				f.startQuota(t)
+			}
 			continue
 		}
 		if st.attemptAt.IsZero() || now.Sub(st.attemptAt) >= usageQuotaInterval {
@@ -253,10 +298,11 @@ func (f *usageFeature) requestRefresh() {
 			continue
 		}
 		minGap := usageQuotaManual
-		if t == aiusage.ToolClaude {
-			minGap = usageQuotaInterval // Claude 429s below a 5-minute pace
-		}
 		st := &f.quota[quotaIndex(t)]
+		if t == aiusage.ToolClaude {
+			minGap = usageClaudeFloor
+			st.ask = true
+		}
 		if st.busy {
 			started = true
 			continue
@@ -311,6 +357,10 @@ func (f *usageFeature) startQuota(tool aiusage.Tool) {
 	st.busy = true
 	attempted := f.deps.now()
 	st.attemptAt = attempted
+	if tool == aiusage.ToolClaude {
+		st.ask = false
+		st.nextAt = attempted.Add(f.deps.claudeWait())
+	}
 	f.invalidate()
 	gen := f.workGen
 	st.generation = gen
@@ -331,8 +381,8 @@ func (f *usageFeature) startQuota(tool aiusage.Tool) {
 // gotQuota retains completed answers even after a page change, so reopening
 // never shows an unanswered card for a request that already finished.
 // Cancelled Codex work may be retried immediately. Claude attempts still
-// retain their five-minute floor because cancellation cannot prove that the
-// server never received the request, but the failed outcome of a cancelled
+// retain their 30-second floor because cancellation cannot prove that the
+// process never ran, but the failed outcome of a cancelled
 // fetch never replaces a previous answer (that would fake 网络不通); a first
 // look still publishes it so the card cannot sit on 正在查询…. Server
 // RetryAfter always survives.
@@ -369,8 +419,11 @@ func (f *usageFeature) gotQuota(q aiusage.Quota, gen int, attempted time.Time, a
 		return
 	}
 	st.latest = q
-	if q.Status == aiusage.QuotaOK && (q.FiveHour != nil || q.Weekly != nil) {
+	if q.Status == aiusage.QuotaOK && len(q.Windows) > 0 {
 		st.good = q
+		if f.deps.saveLast != nil {
+			f.deps.saveLast(q)
+		}
 	}
 	f.invalidate()
 }
@@ -444,10 +497,42 @@ func (f *usageFeature) gotLocal(sum aiusage.Summary, r aiusage.Range, err error,
 // false when nothing good ever arrived, so no fake numbers render.
 func (f *usageFeature) quotaShown(t aiusage.Tool) (q aiusage.Quota, stale bool) {
 	st := &f.quota[quotaIndex(t)]
-	if st.latest.Status == aiusage.QuotaOK && (st.latest.FiveHour != nil || st.latest.Weekly != nil) {
-		return st.latest, false
+	now := f.deps.now()
+	if st.latest.Status == aiusage.QuotaOK && len(st.latest.Windows) > 0 {
+		q := st.latest
+		q.Windows = aiusage.Elapsed(q.Windows, now)
+		return q, false
 	}
-	return st.good, !st.good.FetchedAt.IsZero()
+	q = st.good
+	q.Windows = aiusage.Elapsed(q.Windows, now)
+	return q, !st.good.FetchedAt.IsZero()
+}
+
+// claudeDue reports whether an unasked /usage read is due: the random
+// whole-minute gap has passed and Claude Code was used since the last
+// attempt.
+func (f *usageFeature) claudeDue(st *usageQuotaState, now time.Time) bool {
+	if st.attemptAt.IsZero() {
+		return true
+	}
+	if now.Sub(st.attemptAt) < usageClaudeFloor {
+		return false
+	}
+	if st.ask {
+		return true
+	}
+	if st.nextAt.IsZero() || now.Before(st.nextAt) {
+		return false
+	}
+	return f.deps.claudeUsedSince == nil || f.deps.claudeUsedSince(st.attemptAt)
+}
+
+// askQuota marks the next Claude read as one the user asked for.
+func (f *usageFeature) askQuota(t aiusage.Tool) {
+	if t != aiusage.ToolClaude {
+		return
+	}
+	f.quota[quotaIndex(t)].ask = true
 }
 
 // offline reports whether an enabled quota source's last fetch failed on

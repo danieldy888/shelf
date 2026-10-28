@@ -98,6 +98,7 @@ func FetchCodex(ctx context.Context, env Env) Quota {
 		return q
 	}
 	q.Plan = prettyPlan(usage.PlanType)
+	var five, week *Window
 	for _, w := range []*codexWindow{usage.RateLimit.Primary, usage.RateLimit.Secondary} {
 		if w == nil || w.UsedPct == nil || w.WindowSec <= 0 {
 			// A window without a known utilization or a known length is
@@ -109,10 +110,18 @@ func FetchCodex(ctx context.Context, env Env) Quota {
 			win.ResetsAt = time.Unix(w.ResetAt, 0)
 		}
 		if nearestSlot(win.Length) == slotWeekly {
-			setWindow(&q.Weekly, win)
+			setWindow(&week, win)
 		} else {
-			setWindow(&q.FiveHour, win)
+			setWindow(&five, win)
 		}
+	}
+	if five != nil {
+		five.Name = "5 hours"
+		q.Windows = append(q.Windows, *five)
+	}
+	if week != nil {
+		week.Name = "7 days"
+		q.Windows = append(q.Windows, *week)
 	}
 	q.Status = QuotaOK
 	return q

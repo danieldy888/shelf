@@ -400,6 +400,13 @@ func TestUsagePageStatesFitTheContentBox(t *testing.T) {
 			fx.f.hasSummary = false
 			fx.f.localErr = errors.New("读取本机记录失败：权限不足")
 		}},
+		{"full windows", true, func(fx *usageFixture) {
+			// 100% left is the widest a row gets; both readings must fit.
+			for i := range fx.codex.q.Windows {
+				fx.codex.q.Windows[i].UsedPct = 0
+			}
+			fx.a.settings.AIUsage.QuotaLeft = true
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			view, top, notes := build(t, tc.mutate)
@@ -599,4 +606,29 @@ func TestLevelSpringsBetweenTheTwoSizes(t *testing.T) {
 	if a.fx.w > islandW+1 || a.fx.h > islandH+1 {
 		t.Fatalf("back to island: shell %.1f×%.1f", a.fx.w, a.fx.h)
 	}
+}
+
+// A plan with per-model weekly windows lists them in the hover detail; the
+// compact rows must still fit the 396 × 174 content box.
+func TestUsageScopedHoverDetailStaysInsideTheContentBox(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.Local)
+	drain := fitSink(t)
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", now)
+	q := okQuota(aiusage.ToolClaude, "Pro", now)
+	q.Windows = append(q.Windows,
+		aiusage.Window{Name: "7 days · Opus", Model: "opus", UsedPct: 37, Length: 7 * 24 * time.Hour},
+		aiusage.Window{Name: "7 days · Sonnet", Model: "sonnet", UsedPct: 2, Length: 7 * 24 * time.Hour})
+	fx.claude.q = q
+	fx.a.level, fx.a.visible, fx.a.tab = 2, true, pageUsage
+	fx.f.tick(now)
+	fx.view.Frame()
+	fx.view.Move(100, 2*usageCardH+usageCardGap+usageCardH/2) // Claude's card
+	fx.view.Frame()
+	if !fx.view.HasText("每周 · Opus") {
+		t.Fatalf("the scoped windows are missing from the hover detail; texts %v", fx.view.Texts())
+	}
+	drain()
+	fx.view.Frame()
+	assertPageFits(t, fx.view, "usage-hover-scoped", drain(), fx.a.sheetTop())
 }

@@ -64,6 +64,16 @@ func codexEnv(srv *httptest.Server) Env {
 	}
 }
 
+// quotaWindow finds one named window.
+func quotaWindow(q Quota, name string) *Window {
+	for i := range q.Windows {
+		if q.Windows[i].Name == name {
+			return &q.Windows[i]
+		}
+	}
+	return nil
+}
+
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "quota", name))
@@ -89,17 +99,18 @@ func TestFetchCodexOK(t *testing.T) {
 	if q.Plan != "Plus" {
 		t.Fatalf("plan = %q", q.Plan)
 	}
-	if q.FiveHour == nil || q.Weekly == nil {
-		t.Fatal("both windows should be set")
+	five, week := quotaWindow(q, "5 hours"), quotaWindow(q, "7 days")
+	if five == nil || week == nil {
+		t.Fatalf("both windows should be set, got %+v", q.Windows)
 	}
-	if q.FiveHour.UsedPct != 37 || q.FiveHour.Length != 5*time.Hour {
-		t.Fatalf("five-hour window = %+v", q.FiveHour)
+	if five.UsedPct != 37 || five.Length != 5*time.Hour {
+		t.Fatalf("five-hour window = %+v", five)
 	}
-	if q.Weekly.UsedPct != 12 || q.Weekly.Length != 7*24*time.Hour {
-		t.Fatalf("weekly window = %+v", q.Weekly)
+	if week.UsedPct != 12 || week.Length != 7*24*time.Hour {
+		t.Fatalf("weekly window = %+v", week)
 	}
-	if q.FiveHour.ResetsAt != time.Unix(1800000000, 0) {
-		t.Fatalf("five-hour resets at %v", q.FiveHour.ResetsAt)
+	if five.ResetsAt != time.Unix(1800000000, 0) {
+		t.Fatalf("five-hour resets at %v", five.ResetsAt)
 	}
 	if *hits != 1 {
 		t.Fatalf("server hits = %d", *hits)
@@ -258,11 +269,11 @@ func TestFetchCodexWeeklyOnly(t *testing.T) {
 	if q.Status != QuotaOK {
 		t.Fatalf("status = %v", q.Status)
 	}
-	if q.FiveHour != nil {
-		t.Fatalf("five-hour should be nil, got %+v", q.FiveHour)
+	if quotaWindow(q, "5 hours") != nil {
+		t.Fatalf("five-hour should be absent, got %+v", q.Windows)
 	}
-	if q.Weekly == nil || q.Weekly.UsedPct != 64 {
-		t.Fatalf("weekly = %+v", q.Weekly)
+	if week := quotaWindow(q, "7 days"); week == nil || week.UsedPct != 64 {
+		t.Fatalf("weekly = %+v", week)
 	}
 	if q.Plan != "Pro" {
 		t.Fatalf("plan = %q", q.Plan)
@@ -281,11 +292,11 @@ func TestFetchCodexWindowsByLength(t *testing.T) {
 	if q.Status != QuotaOK {
 		t.Fatalf("status = %v", q.Status)
 	}
-	if q.FiveHour == nil || q.FiveHour.UsedPct != 21 {
-		t.Fatalf("five-hour = %+v", q.FiveHour)
+	if five := quotaWindow(q, "5 hours"); five == nil || five.UsedPct != 21 {
+		t.Fatalf("five-hour = %+v", five)
 	}
-	if q.Weekly == nil || q.Weekly.UsedPct != 55 {
-		t.Fatalf("weekly = %+v", q.Weekly)
+	if week := quotaWindow(q, "7 days"); week == nil || week.UsedPct != 55 {
+		t.Fatalf("weekly = %+v", week)
 	}
 	if q.Plan != "Pro Lite" {
 		t.Fatalf("plan = %q", q.Plan)
@@ -309,11 +320,8 @@ func TestFetchCodexMissingFields(t *testing.T) {
 	if q.Plan != "" {
 		t.Fatalf("plan = %q", q.Plan)
 	}
-	if q.FiveHour != nil {
-		t.Fatalf("missing used_percent must not publish a window, got %+v", q.FiveHour)
-	}
-	if q.Weekly != nil {
-		t.Fatalf("missing length must not publish a window, got %+v", q.Weekly)
+	if len(q.Windows) != 0 {
+		t.Fatalf("unknown windows must not publish, got %+v", q.Windows)
 	}
 }
 
