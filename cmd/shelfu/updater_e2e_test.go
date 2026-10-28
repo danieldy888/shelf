@@ -31,10 +31,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -225,22 +225,57 @@ func TestUpdateEndToEnd(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// Wait reaps the app as soon as it exits. That matters: mygo's update
+	// helper waits for the process to disappear, and an unreaped child
+	// stays visible to kill(2) as a zombie, so the helper would wait for
+	// the test's own Wait (a deadlock production never sees, where launchd
+	// reaps the app).
+	waited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waited)
+	}()
 	defer func() {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		<-waited
+		// A run that fails after staging still lets the helper swap the
+		// bundle in and open the new version once this process is gone.
+		// Leave no ShelfU instance behind.
+		cleanup := time.Now().Add(2 * time.Second)
+		for time.Now().Before(cleanup) {
+			out, _ := exec.Command("pgrep", "-f", oldApp.exe).Output()
+			pids := strings.Fields(string(out))
+			if len(pids) == 0 {
+				return
+			}
+			for _, f := range pids {
+				_ = exec.Command("kill", f).Run()
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	}()
 	want := sha256Of(t, newApp.exe)
+	// mygo v0.7.0 stages the update and installs it once the app exits, so
+	// this follows the restart path the hook takes: the running copy must
+	// exit after installing, and the helper then swaps the bundle in.
+	// Replacement is still required within 90 seconds of the launch.
 	deadline := time.Now().Add(90 * time.Second)
+	replaced := false
 	for time.Now().Before(deadline) {
 		if b, err := os.ReadFile(oldApp.exe); err == nil && fmt.Sprintf("%x", sha256.Sum256(b)) == want {
+			replaced = true
 			break
 		}
-		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-			t.Fatalf("app exited before updating:\n%s", logBuf.String())
+		select {
+		case <-waited:
+			if !strings.Contains(logBuf.String(), "已安装") {
+				t.Fatalf("app exited before updating:\n%s", logBuf.String())
+			}
+		default:
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	if sha256Of(t, oldApp.exe) != want {
+	if !replaced {
 		t.Fatalf("the installed app was not replaced within 90s; log:\n%s", logBuf.String())
 	}
 	logs := logBuf.String()
@@ -256,6 +291,26 @@ func TestUpdateEndToEnd(t *testing.T) {
 	if olds, _ := filepath.Glob(filepath.Join(filepath.Dir(oldApp.app), ".*.old-*")); len(olds) > 0 {
 		t.Errorf("swap left leftovers: %v", olds)
 	}
+	// 重新启动 ShelfU 完成更新 must start the new bundle once the helper
+	// has swapped it in: that is the path the user's menu item takes.
+	pid := 0
+	startDeadline := time.Now().Add(30 * time.Second)
+	for pid == 0 && time.Now().Before(startDeadline) {
+		out, _ := exec.Command("pgrep", "-f", oldApp.exe).Output()
+		for _, f := range strings.Fields(string(out)) {
+			if n, err := strconv.Atoi(f); err == nil && n != cmd.Process.Pid {
+				pid = n
+				break
+			}
+		}
+		if pid == 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	if pid == 0 {
+		t.Fatalf("the restarted app did not start; log:\n%s", logBuf.String())
+	}
+	defer func() { _ = exec.Command("kill", strconv.Itoa(pid)).Run() }()
 	for _, line := range strings.Split(logs, "\n") {
 		if strings.Contains(line, "ShelfU:") {
 			t.Logf("app: %s", line)
