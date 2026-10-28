@@ -59,9 +59,10 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 - Open 主页 (Home) for the music widget. At 2 × 2 it is the full player: previous / play-pause / next, a progress bar you drag to skip, and the volume bar for your default output device; at 2 × 1 it shows the cover, title and artist with play-pause; at 1 × 1 it is cover and title, and a tap toggles playback.
 
 **AI usage** (optional, off by default)
-- Enable it in Settings → AI 用量 and the island gains one more page: the left column holds a double-ring card per tool — outer ring weekly, inner ring 5-hour — and the right column holds this Mac's token usage for omp, Claude Code and Codex, over 今天 (Today) / 7 天 (7 days) / 30 天 (30 days) / 全部 (All), as four numbers and a stacked chart with its legend. The page fits one screen and never scrolls. Hover a card for its reset times; hover the token or cost number for its parts.
-- Quota checks read the login info those tools already saved on this Mac and send it only to the tools' own endpoints (chatgpt.com, api.anthropic.com) — never anywhere else, and never to sign in or refresh a login.
-- Refresh always shows progress or the wait until the next quota check. Claude Code checks stay at least five minutes apart, and server retry delays still apply.
+- Enable it in Settings → AI 用量 and the island gains one more page: the left column holds a double-ring card per tool — outer ring weekly, inner ring 5-hour — and the right column holds this Mac's token usage for omp, Claude Code and Codex, over 今天 (Today) / 7 天 (7 days) / 30 天 (30 days) / 全部 (All), as four numbers and a stacked chart with its legend. The page fits one screen and never scrolls. Hover a card for its reset times and any per-model weekly limits; hover the token or cost number for its parts.
+- Quotas show how much is used by default; switch to what is left in Settings → AI 用量 → 额度显示 (Quota Display).
+- The Claude Code quota comes from Claude Code itself: ShelfU runs your installed Claude Code's `/usage` command, so the numbers match what Claude Code reports. Claude Code must be installed; ShelfU never downloads it. The Codex quota reads the login Codex already saved on this Mac and sends it only to chatgpt.com.
+- Opening the page or pressing refresh reads the quota (Claude Code at most once every 30 seconds); while the page stays open, Claude Code is read again every 5–15 minutes, and only after you used it. The last reading is kept, so the page shows it right after a restart.
 
 **Stay awake**
 - Right-click the menu-bar icon → 保持唤醒 (Stay Awake) and your Mac won't fall asleep for 30 minutes, 1, 2 or 4 hours, or until you turn it off. Tick 屏幕也保持亮着 (Keep Screen On) to keep the display awake as well.
@@ -89,12 +90,13 @@ It lives in the menu bar, has no Dock icon, keeps everything on your Mac, and ne
 **Live activities**
 - Plug in the charger and the notch widens for a few seconds: 正在充电 (Charging) on the left, a green level bar and the percentage on the right. It also tells you once when the battery is full, and once at 20 % and 10 % while on battery.
 - Connect Bluetooth headphones and the notch shows their name — for AirPods, the left, right and case levels when macOS reports them — and again when they disconnect.
-- While a browser downloads into Downloads, the notch shows a progress ring and the percentage (or the size so far); when the download finishes, click the notice to put the file on the 托盘 (Tray). Needs Full Disk Access — see [Optional](#optional).
+- While a browser downloads into Downloads, the notch shows a progress ring and the percentage (or the size so far); when the download finishes, click the notice to put the file on the 托盘 (Tray). Several downloads that finish together share one notice, and a click puts all of them on the tray. Needs Full Disk Access — see [Optional](#optional).
 - Each one can be turned off in Settings → 实时活动 (Live Activities).
 
 **Dynamic Island style**
 - On a display without a notch, ShelfU floats as a Dynamic Island: a small black pill near the top that grows into everything the notch does.
 - On a MacBook you can choose it too: Settings → General → 刘海样式 (Notch Style) → 灵动岛 (Island). The notch style stays the default.
+- Hold the island and drag it anywhere on the screen; it stays where you let go, on each display, and the panel opens from there. Settings → General → 恢复默认位置 (Reset Position) brings it back to the top.
 
 **Arrange windows from the notch**
 - Drag any window by its title bar toward the notch: a panel offers left half, full, right half and left, middle or right third. Hover a tile to see where the window will go, let go to arrange it. Move away to cancel.
@@ -185,7 +187,7 @@ The full manual is in [docs/MANUAL.zh-CN.md](docs/MANUAL.zh-CN.md) (Chinese).
 
 ## Privacy
 
-Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network requests are the update check — shortly after launch and then once a day, ShelfU asks this repository's latest GitHub release whether a newer version exists — and, only if you enable the optional AI usage page, its quota lookups to the tools' own endpoints (nothing else is sent, and logins are never refreshed). The update request sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
+Everything stays on your Mac: no account, no telemetry, no cloud sync. The only network requests are the update check — shortly after launch and then once a day, ShelfU asks this repository's latest GitHub release whether a newer version exists — and, only if you enable the optional AI usage page, its quota lookups: the Codex quota goes to chatgpt.com with the login Codex saved, and the Claude Code quota is read by running your installed Claude Code, which talks to Anthropic itself as it always does. Nothing else is sent. The update request sends nothing but the app version in the standard User-Agent header. Turn it off in Settings → General → 自动检查更新 (Check for updates automatically); checking by hand from the menu still works.
 
 Clipboard text is stored in plain text in `~/Library/Application Support/ShelfU/`. Recording is always on. To keep an app's copies out, right-click one of its clipboard entries and exclude the app; to copy something you don't want kept, quit ShelfU first.
 
@@ -252,9 +254,10 @@ ShelfU 是住在 Mac 刘海里的工具：它把摄像头周围那块黑色刘�
 - 打开「主页」有音乐小组件：2×2 时是完整播放器（上一首 / 播放暂停 / 下一首、可拖动跳转的进度条、系统默认输出设备的音量），2×1 显示封面、歌名、歌手和播放暂停，1×1 只有封面和歌名、点一下切换播放。
 
 **AI 用量**（可选，默认关闭）
-- 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，岛上会多出一个页面图标：左栏是 Codex、Claude Code 的套餐额度卡（每张卡内外双圈：外圈每周、内圈 5 小时），右栏是这台电脑上 omp、Claude Code、Codex 的 token 用量——今天 / 7 天 / 30 天 / 全部、四个数字、按来源叠加的柱图和图例。整页一屏看全，不用滚动。悬停额度卡看重置时间；悬停 Token 或费用数字看它的组成部分。
-- 查额度时会读取这些工具保存在本机的登录信息，只用它向工具自己的官方地址（chatgpt.com、api.anthropic.com）查询，不会发给任何其他地方，也不会替你登录或刷新登录。
-- 点刷新会显示进度或下次可查的等待时间；Claude Code 查询至少间隔 5 分钟，也会遵守服务端的重试等待时间。
+- 在设置 → AI 用量里打开「在刘海里显示 AI 用量」，岛上会多出一个页面图标：左栏是 Codex、Claude Code 的套餐额度卡（每张卡内外双圈：外圈每周、内圈 5 小时），右栏是这台电脑上 omp、Claude Code、Codex 的 token 用量——今天 / 7 天 / 30 天 / 全部、四个数字、按来源叠加的柱图和图例。整页一屏看全，不用滚动。悬停额度卡看重置时间和按模型的每周额度；悬停 Token 或费用数字看它的组成部分。
+- 额度默认显示「已用」；可以在 设置… → AI 用量 →「额度显示」改成「剩余」。
+- Claude Code 的额度由 Claude Code 自己给出：ShelfU 运行你装好的 Claude Code 的 `/usage` 命令，所以数字和 Claude Code 显示的一致。需要先装好 Claude Code，ShelfU 不会替你下载。Codex 的额度读取 Codex 保存在本机的登录信息，只发给 chatgpt.com。
+- 打开这一页或点刷新时会查询额度（Claude Code 最多 30 秒查一次）；页面一直开着时，只有你用过 Claude Code 才会每 5–15 分钟再查一次。上次的结果会保存，重启后打开就能看到。
 
 **保持唤醒**
 - 右键菜单栏图标 →「保持唤醒」，选 30 分钟、1 小时、2 小时、4 小时或「一直（直到关闭）」，这段时间里 Mac 不会自动睡眠；勾选「屏幕也保持亮着」，屏幕也不会熄灭。
@@ -282,12 +285,13 @@ ShelfU 是住在 Mac 刘海里的工具：它把摄像头周围那块黑色刘�
 **实时活动**
 - 插上电源时，刘海向两边变宽几秒：左边是「正在充电」，右边是绿色电量条和电量数字。充满时提醒一次；不插电时，电量降到 20% 和 10% 各提醒一次。
 - 蓝牙耳机连上时，刘海显示耳机名字；AirPods 在系统给出电量时还会显示左耳、右耳和充电盒的电量。断开时也会提示一次。
-- 浏览器往「下载」文件夹下载文件时，刘海显示进度环和百分比（不知道总大小时显示已下载多少）；下载完成后点一下提示，文件就放进「托盘」。需要「完整磁盘访问」，见下面的[可选](#可选)。
+- 浏览器往「下载」文件夹下载文件时，刘海显示进度环和百分比（不知道总大小时显示已下载多少）；下载完成后点一下提示，文件就放进「托盘」。同时下载完的几个文件合成一条提示，点一下全部放进托盘。需要「完整磁盘访问」，见下面的[可选](#可选)。
 - 每一项都可以在 设置… →「实时活动」里关掉。
 
 **灵动岛样式**
 - 在没有刘海的屏幕上，ShelfU 变成一颗悬浮的灵动岛：屏幕顶部一颗小黑胶囊，刘海能做的事它都能做。
 - MacBook 上也可以选：设置… → 通用 →「刘海样式」→「灵动岛」。默认仍是刘海样式。
+- 按住小岛可以拖到屏幕任意位置，松手就留在那里，每块屏幕分别记住，面板从那里展开。设置… → 通用 →「恢复默认位置」让它回到屏幕顶部。
 
 **拖窗口到刘海分屏**
 - 拖着任意窗口的标题栏往刘海走，会出现排列面板：左半、全屏、右半、左 1/3、中 1/3、右 1/3。指针停在哪一格就预览窗口会落在哪儿，松手就排好；拖离刘海就取消。
@@ -378,7 +382,7 @@ ShelfU 是 Shelf 的新名字。ShelfU 第一次打开时，会把 `~/Library/Ap
 
 ## 隐私
 
-一切都留在你的 Mac 上：不用注册账号，没有遥测，没有云同步。联网请求只有两类：检查更新（启动后不久一次、之后每天一次，向本仓库 GitHub 上的最新 Release 询问有没有新版本，请求里只带一个标准的 User-Agent 头）；以及可选的 AI 用量页的额度查询——只有打开它才会发生，查询用本机已保存的登录信息，只发给工具自己的官方地址，不会发给任何其他地方，也不会刷新登录。「自动检查更新」可以在 设置… → 通用 里关闭；关闭后仍可在菜单里手动检查。
+一切都留在你的 Mac 上：不用注册账号，没有遥测，没有云同步。联网请求只有两类：检查更新（启动后不久一次、之后每天一次，向本仓库 GitHub 上的最新 Release 询问有没有新版本，请求里只带一个标准的 User-Agent 头）；以及可选的 AI 用量页的额度查询——只有打开它才会发生：Codex 的额度用 Codex 保存的登录信息发给 chatgpt.com；Claude Code 的额度通过运行你装好的 Claude Code 读取，由 Claude Code 自己照常联系 Anthropic。除此之外不发送任何内容。「自动检查更新」可以在 设置… → 通用 里关闭；关闭后仍可在菜单里手动检查。
 
 剪贴板文字以明文保存在 `~/Library/Application Support/ShelfU/`。剪贴板记录始终开启。不想记录某个应用复制的内容，右键它的剪贴板条目把应用排除；要复制不希望被保存的内容时，先退出 ShelfU 再复制。
 
