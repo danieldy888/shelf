@@ -2,13 +2,18 @@
 
 package main
 
-// Charging, full and low-battery notices. IOKit's power-source API is
-// polled by the shared tick every two seconds — one dictionary copy, no
-// run-loop source to manage — and the transitions are the events: plugging
-// in, reaching 100% on the adapter, and each of the low thresholds once per
-// discharge. A Mac without a battery never posts anything.
+// Charging, full and low-battery notices. The state comes from IOKit's
+// power-source API on the shared 30 ms tick, gated to one dictionary copy
+// every two seconds. IOKit's own run-loop source (mac.StartPowerObserver)
+// wakes that gate, so a plug-in posts on the next tick instead of at the
+// end of the poll interval; the poll stays as the fallback when the
+// observer cannot be installed and covers a missed notification. The
+// transitions are the events: plugging in, reaching 100% on the adapter,
+// and each of the low thresholds once per discharge. A Mac without a
+// battery never posts anything.
 
 import (
+	"sync/atomic"
 	"time"
 
 	"shelf/internal/mac"
@@ -16,12 +21,19 @@ import (
 
 const powerPollInterval = 2 * time.Second
 
+// powerObserver installs the system's power-source watcher; tests replace
+// it so the wake path runs without IOKit.
+var powerObserver = mac.StartPowerObserver
+
 type powerModule struct {
 	host *shelf
 	// probe is the seam: tests feed battery states instead of the machine.
 	probe func() (mac.BatteryStatus, bool)
 	now   func() time.Time
 	next  time.Time
+	// wake is set by the system's observer (from the main run loop) and
+	// opened by the next tick, so a change probes without waiting for next.
+	wake atomic.Bool
 
 	seeded bool
 	last   mac.BatteryStatus
@@ -34,8 +46,21 @@ func newPowerModule(a *shelf) *powerModule {
 	return &powerModule{host: a, probe: mac.Battery, now: time.Now}
 }
 
+// watchPower asks the system to wake the poll on every power-source
+// change. reports whether the observer was installed; when it was not, the
+// two-second poll is the whole path, exactly as before.
+func (m *powerModule) watchPower() bool {
+	if powerObserver == nil {
+		return false
+	}
+	src, err := powerObserver(func() { m.wake.Store(true) })
+	return err == nil && src != 0
+}
+
 func (m *powerModule) tick(now time.Time) {
-	if now.Before(m.next) {
+	// A woken tick skips the gate: the system just said something changed,
+	// so the state is read now rather than at the end of the interval.
+	if !m.wake.Swap(false) && now.Before(m.next) {
 		return
 	}
 	m.next = now.Add(powerPollInterval)

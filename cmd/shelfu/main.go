@@ -230,6 +230,10 @@ func (a *shelf) ready(show bool) {
 	a.pwr = newPowerModule(a)
 	a.audio = newAudioModule(a)
 	a.modules = append(a.modules, a.pwr, a.audio)
+	// IOKit's change notifications wake the battery poll, so a plug-in
+	// posts within a tick. Without the observer the two-second poll alone
+	// carries the notices, as it always did.
+	a.pwr.watchPower()
 
 	// AI 用量页：额度查询与本地用量扫描都注入为可替换的实现，页面只认
 	// internal/aiusage 的类型。额度读取本机已保存的登录信息，只发给

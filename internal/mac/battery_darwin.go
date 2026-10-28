@@ -13,9 +13,10 @@ import (
 // (IOPSCopyPowerSourcesInfo / IOPSCopyPowerSourcesList /
 // IOPSGetPowerSourceDescription). The dictionary is toll-free bridged to
 // NSDictionary, so the values are read with the same Objective-C messages
-// as the rest of this package. Polling is enough: macOS posts a run-loop
-// source for changes, but the app's tick already runs on the main thread
-// and a two-second poll costs one dictionary copy.
+// as the rest of this package. Reading it is cheap and stays a poll: the
+// caller decides when to look, and mac.StartPowerObserver
+// (power_observer_darwin.go) wakes it on IOKit's change notifications. The
+// poll is the fallback for a missing observer, not the only path.
 //
 // Main thread only, like the other ObjC-backed calls.
 
