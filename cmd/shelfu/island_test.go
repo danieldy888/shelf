@@ -460,7 +460,7 @@ func TestIslandPressOnFinishedDownloadCapsule(t *testing.T) {
 	done := islandShelf(false, settings.ShellStyleNotch)
 	done.settings.LiveActivities.Downloads = true
 	done.live = liveQueue{shown: true, until: time.Now().Add(time.Minute),
-		cur: liveEvent{kind: liveDownloadDone, label: "a.zip", path: filepath.Join(t.TempDir(), "a.zip")}}
+		cur: liveEvent{kind: liveDownloadDone, label: "a.zip", paths: []string{filepath.Join(t.TempDir(), "a.zip")}}}
 	done.fx.w, done.fx.h, done.peekProgress = 280, islandCapsuleH, 1
 	done.mouseDown(true, 0, point)
 	if done.visible {

@@ -15,12 +15,19 @@ package main
 //     reaches the screen, so a notice queued behind another keeps its full
 //     hold;
 //   - a notice that waited longer than liveQueueMaxWait is stale and is
-//     dropped, so a long queue cannot replay an old plug or low battery;
+//     dropped, so a long queue cannot replay an old plug or low battery.
+//     Download results are exempt: they are the outcome of the user's own
+//     action, not a transient system state;
+//   - a download result that arrives while another one still waits in the
+//     queue joins it, so one scan's files are one notice;
+//   - a status capsule already on screen owns the shape: the head event
+//     waits for it instead of running its hold unseen;
 //   - opening the panel cancels what is queued, so nothing pops afterwards;
 //   - a switch that is off drops its events at the door.
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,6 +67,9 @@ const (
 	liveHoldHeadset  = 3500 * time.Millisecond
 	liveHoldUnplug   = 2 * time.Second
 	liveHoldDownload = 4 * time.Second
+	// liveHoldDownloadMax bounds a batch: every further file in the same
+	// notice adds a second to read, up to this.
+	liveHoldDownloadMax = 8 * time.Second
 
 	// liveQueueMaxWait bounds how long a notice may wait behind others.
 	// Every event's own hold now starts on screen; without a bound, a
@@ -89,12 +99,14 @@ func (k liveKind) wings() bool {
 // liveEvent is one queued activity.
 type liveEvent struct {
 	kind   liveKind
-	label  string   // 正在充电 / 已充满 / 电量低 / device or file name
+	label  string   // 正在充电 / 已充满 / 电量低 / device or file name / 3 个文件
 	levels []string // 左 80% / 右 78% / 盒 50%, when the device reports them
 	pct    int
-	path   string // downloaded file, for the completion capsule's click
-	token  string // device UID: a late battery reading enriches this event
-	width  float32
+	// paths are the downloaded files, for the completion capsule's click:
+	// one scan's completions share one event.
+	paths []string
+	token string // device UID: a late battery reading enriches this event
+	width float32
 	// hold is how long the event stays once it reaches the screen;
 	// queuedAt is when it arrived, used only to drop a stale backlog.
 	hold     time.Duration
@@ -129,6 +141,9 @@ func (a *shelf) pushLive(ev liveEvent, hold time.Duration, now time.Time) {
 	if !a.liveEnabled(ev.kind) || a.visible {
 		return
 	}
+	if ev.kind == liveDownloadDone && a.mergeDownloadDone(ev.paths) {
+		return
+	}
 	ev.hold, ev.queuedAt = hold, now
 	baseW, _ := a.anchorSize()
 	ev.width = liveCapsuleWidth(ev, baseW)
@@ -136,6 +151,76 @@ func (a *shelf) pushLive(ev liveEvent, hold time.Duration, now time.Time) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
+}
+
+// mergeDownloadDone joins paths into the download result already waiting in
+// the queue, so a second completion arriving before the first is shown
+// updates that notice instead of adding another. A result already on
+// screen is not extended: its words are being read.
+func (a *shelf) mergeDownloadDone(paths []string) bool {
+	for i := range a.live.queued {
+		ev := &a.live.queued[i]
+		if ev.kind != liveDownloadDone {
+			continue
+		}
+		ev.paths = mergePaths(ev.paths, paths)
+		ev.label = downloadDoneLabel(ev.paths)
+		ev.hold = downloadDoneHold(len(ev.paths))
+		baseW, _ := a.anchorSize()
+		ev.width = liveCapsuleWidth(*ev, baseW)
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+		return true
+	}
+	return false
+}
+
+// pushDownloaded posts the completions of one scan as one notice: one file
+// names itself, several say how many, and the hold grows a little per file.
+func (a *shelf) pushDownloaded(paths []string, now time.Time) {
+	paths = mergePaths(nil, paths)
+	if len(paths) == 0 {
+		return
+	}
+	a.pushLive(liveEvent{
+		kind: liveDownloadDone, label: downloadDoneLabel(paths), paths: paths,
+	}, downloadDoneHold(len(paths)), now)
+}
+
+// downloadDoneLabel is the completion capsule's noun: the file's own name,
+// or the count when one scan finished several.
+func downloadDoneLabel(paths []string) string {
+	if len(paths) == 1 {
+		return filepath.Base(paths[0])
+	}
+	return fmt.Sprintf("%d 个文件", len(paths))
+}
+
+// downloadDoneHold is the reading time for one completion notice: four
+// seconds for the first file, a second per further file, capped so a big
+// batch cannot hold the notch all afternoon.
+func downloadDoneHold(n int) time.Duration {
+	if n < 1 {
+		n = 1
+	}
+	return min(liveHoldDownload+time.Duration(n-1)*time.Second, liveHoldDownloadMax)
+}
+
+// mergePaths appends the paths not already in list, keeping arrival order.
+func mergePaths(list, add []string) []string {
+	seen := make(map[string]bool, len(list)+len(add))
+	for _, p := range list {
+		seen[p] = true
+	}
+	for _, p := range add {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		list = append(list, p)
+	}
+	return list
 }
 
 // clearLive drops everything queued or showing; opening the panel calls it
@@ -147,7 +232,9 @@ func (a *shelf) clearLive() {
 // liveNow advances the queue and returns the event to draw. allow is false
 // while the panel is open or a file drag owns the notch; nothing is
 // started then, and the shown event is hidden (not cancelled: its hold
-// still runs).
+// still runs). A status capsule that is up owns the shape in the same way:
+// the head event is kept for later rather than spending its hold unseen
+// behind the capsule's words.
 func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 	q := &a.live
 	if q.shown {
@@ -159,7 +246,7 @@ func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 			q.cur = liveEvent{}
 		}
 	}
-	if !allow {
+	if !allow || a.capsuleUp(now) {
 		return liveEvent{}, false
 	}
 	for len(q.queued) > 0 {
@@ -168,8 +255,11 @@ func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 		if !a.liveEnabled(ev.kind) {
 			continue // its switch went off after it was queued
 		}
-		if now.Sub(ev.queuedAt) > liveQueueMaxWait {
-			continue // stale: the backlog outlived what the words meant
+		// A download result is not a transient state: the file the user
+		// asked for finished, whether or not a busy queue delayed the
+		// words. Every other kind is stale after the wait bound.
+		if ev.kind != liveDownloadDone && now.Sub(ev.queuedAt) > liveQueueMaxWait {
+			continue
 		}
 		// The hold starts now, not at arrival, so waiting behind another
 		// notice never eats this one's own duration.
@@ -294,16 +384,16 @@ func liveIconWidth(k liveKind) float32 {
 	return 13
 }
 
-// openDownloaded puts the finished file into the tray and opens its page —
-// the completion capsule's click.
+// openDownloaded puts the finished files into the tray and opens its page —
+// the completion capsule's click. A merged notice adds every file it names.
 func (a *shelf) openDownloaded(ev liveEvent) {
-	if ev.path == "" {
+	if len(ev.paths) == 0 {
 		return
 	}
 	if a.store == nil {
 		return
 	}
-	if err := a.store.AddFiles([]string{ev.path}); err != nil {
+	if err := a.store.AddFiles(ev.paths); err != nil {
 		a.report(err)
 		return
 	}

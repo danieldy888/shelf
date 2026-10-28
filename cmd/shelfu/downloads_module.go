@@ -39,9 +39,14 @@ const (
 	// starts the watcher within half a minute.
 	fullDiskProbeInterval = 30 * time.Second
 	// downloadScanFailureLimit is how many consecutive read errors of an
-	// unknown kind are tolerated before the frozen download state is
-	// dropped. A missing or non-directory Downloads folder resets at once.
+	// unknown kind are tolerated before the wings are paused. A missing or
+	// non-directory Downloads folder pauses at once.
 	downloadScanFailureLimit = 3
+	// downloadPauseMax bounds how long a pause may keep its baseline: a
+	// folder that was unreadable that long may have seen dozens of
+	// unrelated completions, so the first scan re-baselines in silence
+	// instead of naming files the user finished minutes ago.
+	downloadPauseMax = 2 * time.Minute
 )
 
 // downloadsDir is where browsers leave their temporary files. It is a seam
@@ -80,6 +85,10 @@ type downloadsModule struct {
 	prev     map[string]downloadFile
 	seeded   bool
 	failures int
+	// pausedAt is when the current string of failed scans began. The wings
+	// are cleared but the baseline is kept, so a completion that happened
+	// while the folder was unreadable still gets its notice.
+	pausedAt time.Time
 }
 
 func newDownloadsModule(a *shelf) *downloadsModule {
@@ -106,22 +115,25 @@ func (m *downloadsModule) tick(now time.Time) {
 		m.canRead = m.allowed == nil || m.allowed()
 	}
 	if !m.canRead {
-		m.reset()
+		m.pause(now)
 		return
 	}
 	dir, err := m.dir()
 	if err != nil || dir == "" {
-		m.reset()
+		m.pause(now)
 		return
 	}
 	files, err := m.scan(dir)
 	if err != nil {
 		// One transient error may pass; a folder that stays unreadable must
 		// not leave the wings frozen on an old download forever.
+		if m.pausedAt.IsZero() {
+			m.pausedAt = now
+		}
 		m.failures++
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) ||
 			m.failures >= downloadScanFailureLimit {
-			m.reset()
+			m.pause(now)
 		}
 		return // never diff against a failed scan: no false 已下载
 	}
@@ -132,31 +144,39 @@ func (m *downloadsModule) tick(now time.Time) {
 		cur[f.temp] = f
 	}
 	if m.seeded {
-		// Collected first and ordered by completion time (then target), so
-		// several downloads finishing in one scan queue in a stable order;
-		// the queue gives each its own four seconds.
-		var done []downloadFile
-		for temp, old := range m.prev {
-			if _, still := cur[temp]; still {
-				continue
+		// The pause's first good scan diffs against the kept baseline:
+		// files that finished while the folder was unreadable are results
+		// the user has not seen yet. A pause longer than downloadPauseMax
+		// re-baselines silently instead — those completions are old news.
+		if paused := m.pausedAt; paused.IsZero() || now.Sub(paused) <= downloadPauseMax {
+			// Collected first and ordered by completion time (then target),
+			// so one scan's completions form one notice in a stable order.
+			var done []downloadFile
+			for temp, old := range m.prev {
+				if _, still := cur[temp]; still {
+					continue
+				}
+				if old.target == "" || !fileExists(old.target) {
+					continue
+				}
+				done = append(done, old)
 			}
-			if old.target == "" || !fileExists(old.target) {
-				continue
+			sort.SliceStable(done, func(i, j int) bool {
+				if !done[i].mod.Equal(done[j].mod) {
+					return done[i].mod.Before(done[j].mod)
+				}
+				return done[i].target < done[j].target
+			})
+			if len(done) > 0 {
+				paths := make([]string, 0, len(done))
+				for _, old := range done {
+					paths = append(paths, old.target)
+				}
+				m.host.pushDownloaded(paths, now)
 			}
-			done = append(done, old)
-		}
-		sort.SliceStable(done, func(i, j int) bool {
-			if !done[i].mod.Equal(done[j].mod) {
-				return done[i].mod.Before(done[j].mod)
-			}
-			return done[i].target < done[j].target
-		})
-		for _, old := range done {
-			m.host.pushLive(liveEvent{
-				kind: liveDownloadDone, label: filepath.Base(old.target), path: old.target,
-			}, liveHoldDownload, now)
 		}
 	}
+	m.pausedAt = time.Time{}
 	m.seeded = true
 	m.prev = cur
 	changed := !sameDownloads(m.items, files)
@@ -166,15 +186,33 @@ func (m *downloadsModule) tick(now time.Time) {
 	}
 }
 
-// reset forgets everything in flight: used when the switch is off or the
-// folder becomes unreadable, so re-enabling starts from a fresh baseline
-// without firing completions for downloads that ran meanwhile.
+// pause stops showing the in-flight downloads but keeps what the next scan
+// must be compared with: the folder may be unreadable for a while, and a
+// download that finished inside that window is still a result worth
+// announcing. Only the switch going off forgets the baseline (reset).
+func (m *downloadsModule) pause(now time.Time) {
+	if m.pausedAt.IsZero() {
+		m.pausedAt = now
+	}
+	if len(m.items) == 0 {
+		return
+	}
+	m.items = nil
+	if m.host.win != nil {
+		m.host.win.Invalidate()
+	}
+}
+
+// reset forgets everything in flight: used when the switch is off, so
+// re-enabling starts from a fresh baseline without firing completions for
+// downloads that ran meanwhile.
 func (m *downloadsModule) reset() {
 	if len(m.items) > 0 && m.host.win != nil {
 		m.host.win.Invalidate()
 	}
 	m.items, m.prev, m.seeded = nil, map[string]downloadFile{}, false
 	m.failures = 0
+	m.pausedAt = time.Time{}
 }
 
 // active reports whether a download currently owns the wings.

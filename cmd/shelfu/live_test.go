@@ -81,8 +81,10 @@ func TestLiveQueuedNoticeKeepsItsFullHold(t *testing.T) {
 	}
 }
 
-// The backlog has a bound: a notice that waited longer than
-// liveQueueMaxWait is stale and never reaches the notch.
+// The backlog has a bound for system notices: a charging or headphone
+// notice that waited longer than liveQueueMaxWait is stale and never
+// reaches the notch. Download results are exempt — the file finished, and
+// the click is how it reaches the tray.
 func TestLiveQueueDropsStaleBacklog(t *testing.T) {
 	a := liveShelf()
 	now := time.Now()
@@ -95,6 +97,43 @@ func TestLiveQueueDropsStaleBacklog(t *testing.T) {
 	a.pushLive(liveEvent{kind: liveHeadset, label: "Sony"}, liveHoldHeadset, now.Add(-15*time.Second))
 	if _, ok := a.liveNow(now, true); !ok {
 		t.Fatal("a notice exactly at the wait bound was dropped")
+	}
+	a.clearLive()
+	a.pushLive(liveEvent{kind: liveDownloadDone, label: "a.zip", paths: []string{"/tmp/a.zip"}},
+		liveHoldDownload, now.Add(-30*time.Second))
+	if ev, ok := a.liveNow(now, true); !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("a waiting download result was dropped: %+v ok=%v", ev, ok)
+	}
+	if got, want := a.live.until, now.Add(liveHoldDownload); !got.Equal(want) {
+		t.Fatalf("the result's hold ends at %v, want its full %v", got, want)
+	}
+}
+
+// A status capsule (已复制 and friends) owns the shape while it is up: a
+// live notice queued behind it must not start its hold unseen under the
+// capsule's words. Its clock starts when the capsule ends.
+func TestLiveWaitsForTheStatusCapsule(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	a.toastStatus("已复制", now.Add(2*time.Second), statusOK)
+	a.fb.arm(now)
+	if !a.capsuleUp(now) {
+		t.Fatal("the status capsule is not up")
+	}
+	a.pushLive(liveEvent{kind: liveHeadset, label: "AirPods Pro"}, liveHoldHeadset, now)
+	if ev, ok := a.liveNow(now.Add(100*time.Millisecond), true); ok {
+		t.Fatalf("the notice took the shape from the capsule: %+v", ev)
+	}
+	if a.live.shown {
+		t.Fatal("the notice's hold started behind the capsule")
+	}
+	end := now.Add(2 * time.Second)
+	ev, ok := a.liveNow(end, true)
+	if !ok || ev.kind != liveHeadset {
+		t.Fatalf("the notice did not start when the capsule ended: %+v ok=%v", ev, ok)
+	}
+	if got, want := a.live.until, end.Add(liveHoldHeadset); !got.Equal(want) {
+		t.Fatalf("hold ends at %v, want the full %v from the capsule's end", got, want)
 	}
 }
 
@@ -223,6 +262,66 @@ func TestPowerEventsOncePerThreshold(t *testing.T) {
 	}
 }
 
+// The system's power-source observer wakes the poll: the notice for an
+// adapter attach starts on the next 30 ms tick, long before the two-second
+// interval. Without an observer the poll alone still carries it.
+func TestPowerObserverWakesThePoll(t *testing.T) {
+	a := liveShelf()
+	var wake func()
+	old := powerObserver
+	powerObserver = func(fn func()) (uintptr, error) { wake = fn; return 1, nil }
+	t.Cleanup(func() { powerObserver = old })
+
+	st := mac.BatteryStatus{Percent: 40}
+	probes := 0
+	probe := func() (mac.BatteryStatus, bool) { probes++; return st, true }
+	m := &powerModule{host: a, now: time.Now, probe: probe}
+	if !m.watchPower() || wake == nil {
+		t.Fatal("the observer was not installed through the seam")
+	}
+	now := time.Now()
+	m.tick(now) // seed on battery
+	if probes != 1 {
+		t.Fatalf("seeding probed %d times", probes)
+	}
+	// The gate holds for two seconds: a tick alone must not probe.
+	m.tick(now.Add(10 * time.Millisecond))
+	if probes != 1 {
+		t.Fatal("the tick ignored the poll gate")
+	}
+	// IOKit's notification opens the gate for the next tick.
+	st = mac.BatteryStatus{Percent: 40, External: true}
+	wake()
+	m.tick(now.Add(20 * time.Millisecond))
+	if probes != 2 {
+		t.Fatalf("the wake did not probe: %d probes", probes)
+	}
+	if len(a.live.queued) != 1 || a.live.queued[0].kind != liveCharging {
+		t.Fatalf("plugging in queued %+v", a.live.queued)
+	}
+
+	// Fallback: a Mac where the observer cannot be installed keeps the
+	// two-second poll as its only path.
+	powerObserver = func(func()) (uintptr, error) { return 0, errors.New("no IOKit") }
+	a.clearLive()
+	st = mac.BatteryStatus{Percent: 40}
+	fallback := &powerModule{host: a, now: time.Now, probe: probe}
+	if fallback.watchPower() {
+		t.Fatal("a failed observer reported success")
+	}
+	before := probes
+	fallback.tick(now)                                           // its own gate is open: one probe
+	fallback.tick(now.Add(powerPollInterval - time.Millisecond)) // the gate holds
+	if probes != before+1 {
+		t.Fatalf("the fallback probed %d times, want exactly the gated tick", probes-before)
+	}
+	st = mac.BatteryStatus{Percent: 40, External: true}
+	fallback.tick(now.Add(powerPollInterval))
+	if len(a.live.queued) != 1 {
+		t.Fatalf("the poll missed the plug-in: %+v", a.live.queued)
+	}
+}
+
 func TestAudioConnectAndDisconnect(t *testing.T) {
 	a := liveShelf()
 	devs := []mac.AudioOutput{
@@ -347,7 +446,7 @@ func TestDownloadCompletionPostsCapsule(t *testing.T) {
 		t.Fatal("the finished download still owns the wings")
 	}
 	ev, ok := a.liveNow(now.Add(time.Second), true)
-	if !ok || ev.kind != liveDownloadDone || ev.path != target || ev.label != "notes.txt" {
+	if !ok || ev.kind != liveDownloadDone || len(ev.paths) != 1 || ev.paths[0] != target || ev.label != "notes.txt" {
 		t.Fatalf("completion = %+v ok=%v", ev, ok)
 	}
 }
@@ -430,7 +529,7 @@ func TestDownloadCapsuleClickAddsToTray(t *testing.T) {
 	a := liveShelf()
 	a.store = st
 	a.dataDir = t.TempDir()
-	a.pushLive(liveEvent{kind: liveDownloadDone, label: "report.pdf", path: target}, liveHoldDownload, time.Now())
+	a.pushLive(liveEvent{kind: liveDownloadDone, label: "report.pdf", paths: []string{target}}, liveHoldDownload, time.Now())
 	ev, ok := a.liveNow(time.Now(), true)
 	if !ok {
 		t.Fatal("no completion event")
@@ -574,7 +673,8 @@ func TestAudioBatteryPerDevice(t *testing.T) {
 
 // A folder that stays unreadable must not leave a frozen download owning
 // the wings: three consecutive unknown errors (or one missing folder)
-// reset the state, and no 已下载 is invented.
+// pause the watcher — the wings go, the baseline stays — and no 已下载 is
+// invented from a failed scan.
 func TestDownloadPersistentScanFailureClearsWings(t *testing.T) {
 	a := liveShelf()
 	now := time.Now()
@@ -614,31 +714,59 @@ func TestDownloadPersistentScanFailureClearsWings(t *testing.T) {
 	}
 }
 
-// A missing folder resets at once, without waiting for the failure cap.
-func TestDownloadMissingFolderResetsAtOnce(t *testing.T) {
+// A missing folder stops the wings at once, without waiting for the
+// failure cap, but it no longer forgets what was in flight: the baseline
+// stays so the first readable scan can still name a file that finished
+// while the folder was gone.
+func TestDownloadMissingFolderPausesAtOnce(t *testing.T) {
+	old := fileExists
+	fileExists = func(string) bool { return true }
+	t.Cleanup(func() { fileExists = old })
 	a := liveShelf()
 	now := time.Now()
 	missing := &os.PathError{Op: "open", Path: "/tmp/nope", Err: syscall.ENOENT}
+	inFlight := downloadFile{temp: "/tmp/x.crdownload", name: "x", target: "/tmp/x", done: 10, mod: now}
+	items := []downloadFile{inFlight}
+	var scanErr error = missing
 	m := &downloadsModule{
 		host: a, dir: func() (string, error) { return "/tmp/nope", nil },
-		scan:    func(string) ([]downloadFile, error) { return nil, missing },
+		scan: func(string) ([]downloadFile, error) {
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			return items, nil
+		},
 		allowed: func() bool { return true }, plist: readXMLPlist,
 		now: time.Now, prev: map[string]downloadFile{},
 	}
 	m.items = []downloadFile{{temp: "/tmp/x", name: "x"}}
+	m.prev = map[string]downloadFile{inFlight.temp: inFlight}
 	m.seeded = true
 	m.tick(now)
-	if m.active() || m.seeded {
-		t.Fatalf("a missing folder kept its state: items=%+v seeded=%v", m.items, m.seeded)
+	if m.active() || len(m.items) != 0 {
+		t.Fatalf("a missing folder kept its wings: items=%+v", m.items)
+	}
+	if !m.seeded || len(m.prev) != 1 || m.pausedAt.IsZero() {
+		t.Fatalf("the missing folder forgot the baseline: seeded=%v prev=%+v pausedAt=%v",
+			m.seeded, m.prev, m.pausedAt)
 	}
 	if len(a.live.queued) != 0 {
 		t.Fatalf("the missing folder invented notices: %+v", a.live.queued)
 	}
+	// The folder is readable again within the pause window: the file that
+	// finished meanwhile is still a result the user has not seen.
+	items, scanErr = nil, nil
+	m.next = time.Time{}
+	m.tick(now.Add(5 * time.Second))
+	if len(a.live.queued) != 1 || len(a.live.queued[0].paths) != 1 || a.live.queued[0].paths[0] != "/tmp/x" {
+		t.Fatalf("the completion during the pause was lost: %+v", a.live.queued)
+	}
 }
 
-// Several downloads finishing in one scan each get their full four seconds;
-// the second used to share the first's deadline and vanish unseen.
-func TestDownloadCompletionsAllQueue(t *testing.T) {
+// Several downloads finishing in one scan are one notice that names the
+// count and holds long enough to read; two files used to be two capsules
+// racing the 15s backlog bound.
+func TestDownloadCompletionsOneNotice(t *testing.T) {
 	dir := t.TempDir()
 	writeLiveFile(t, filepath.Join(dir, "one.zip.crdownload"), []byte("1"))
 	writeLiveFile(t, filepath.Join(dir, "two.zip.crdownload"), []byte("2"))
@@ -659,17 +787,200 @@ func TestDownloadCompletionsAllQueue(t *testing.T) {
 	m.next = time.Time{}
 	doneAt := now.Add(time.Second)
 	m.tick(doneAt)
-	if len(a.live.queued) != 2 {
-		t.Fatalf("two completed downloads queued %d notices", len(a.live.queued))
+	if len(a.live.queued) != 1 {
+		t.Fatalf("two completed downloads queued %d notices, want one", len(a.live.queued))
 	}
-	if ev, ok := a.liveNow(doneAt, true); !ok || ev.kind != liveDownloadDone {
-		t.Fatalf("first completion = %+v ok=%v", ev, ok)
+	ev, ok := a.liveNow(doneAt, true)
+	if !ok || ev.kind != liveDownloadDone || len(ev.paths) != 2 {
+		t.Fatalf("completion = %+v ok=%v, want both paths", ev, ok)
 	}
-	ev, ok := a.liveNow(doneAt.Add(liveHoldDownload), true)
-	if !ok || ev.kind != liveDownloadDone {
-		t.Fatalf("second completion was dropped: %+v ok=%v", ev, ok)
+	if ev.label != "2 个文件" || ev.statusLine() != "已下载 2 个文件" {
+		t.Fatalf("batch words = %q / %q", ev.label, ev.statusLine())
 	}
-	if ev, ok := a.liveNow(doneAt.Add(2*liveHoldDownload), true); ok {
-		t.Fatalf("the second completion outlived its hold: %+v", ev)
+	if got, want := a.live.until, doneAt.Add(liveHoldDownload+time.Second); !got.Equal(want) {
+		t.Fatalf("batch hold ends at %v, want %v", got, want)
+	}
+	if ev, ok := a.liveNow(a.live.until, true); ok {
+		t.Fatalf("the batch outlived its hold: %+v", ev)
+	}
+}
+
+// A result pushed while another result still waits in the queue joins it:
+// the second completion updates the queued words instead of adding another
+// entry behind them.
+func TestDownloadDoneMergesQueuedResult(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	a.pushDownloaded([]string{"/tmp/one.zip"}, now)
+	a.pushDownloaded([]string{"/tmp/two.zip"}, now.Add(200*time.Millisecond))
+	if len(a.live.queued) != 1 {
+		t.Fatalf("two pushes queued %d notices, want one merged", len(a.live.queued))
+	}
+	ev, ok := a.liveNow(now.Add(time.Second), true)
+	if !ok || len(ev.paths) != 2 || ev.paths[0] != "/tmp/one.zip" || ev.paths[1] != "/tmp/two.zip" {
+		t.Fatalf("merged result = %+v ok=%v", ev, ok)
+	}
+	if ev.label != "2 个文件" {
+		t.Fatalf("merged label = %q", ev.label)
+	}
+	if got, want := a.live.until, now.Add(time.Second+liveHoldDownload+time.Second); !got.Equal(want) {
+		t.Fatalf("merged hold ends at %v, want %v", got, want)
+	}
+}
+
+// A whole scan's completions are one notice: the words name the count, the
+// hold grows to its cap, and the click puts every file into the tray. Five
+// files used to lose the fifth onward to the backlog bound — and that
+// dropped capsule was the only way to reach those files.
+func TestDownloadBatchNoticeAddsEveryFile(t *testing.T) {
+	dir := t.TempDir()
+	const batch = 6
+	targets := make([]string, 0, batch)
+	for i := range batch {
+		name := fmt.Sprintf("f%d.zip", i)
+		writeLiveFile(t, filepath.Join(dir, name+".crdownload"), []byte("x"))
+		targets = append(targets, filepath.Join(dir, name))
+	}
+	a := liveShelf()
+	now := time.Now()
+	m := &downloadsModule{
+		host: a, dir: func() (string, error) { return dir, nil }, scan: scanDownloadDir,
+		allowed: func() bool { return true }, plist: readXMLPlist,
+		now: time.Now, prev: map[string]downloadFile{},
+	}
+	m.tick(now)
+	for _, target := range targets {
+		if err := os.Remove(target + ".crdownload"); err != nil {
+			t.Fatal(err)
+		}
+		writeLiveFile(t, target, []byte("done"))
+	}
+	m.next = time.Time{}
+	doneAt := now.Add(time.Second)
+	m.tick(doneAt)
+	if len(a.live.queued) != 1 {
+		t.Fatalf("six completions queued %d notices, want one", len(a.live.queued))
+	}
+	ev, ok := a.liveNow(doneAt, true)
+	if !ok || len(ev.paths) != batch {
+		t.Fatalf("batch = %+v ok=%v, want %d paths", ev, ok, batch)
+	}
+	if ev.statusLine() != "已下载 6 个文件" {
+		t.Fatalf("batch words = %q", ev.statusLine())
+	}
+	if got, want := a.live.until, doneAt.Add(liveHoldDownloadMax); !got.Equal(want) {
+		t.Fatalf("batch hold ends at %v, want %v", got, want)
+	}
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a.store = st
+	a.dataDir = t.TempDir()
+	a.openDownloaded(ev)
+	found := map[string]bool{}
+	for _, it := range st.Items {
+		found[it.Path] = true
+	}
+	for _, target := range targets {
+		if !found[target] {
+			t.Fatalf("the click left %q out of the tray: %+v", target, st.Items)
+		}
+	}
+}
+
+// A pause keeps the baseline: a file that finished while the folder was
+// unreadable still gets its notice on the first good scan.
+func TestDownloadPauseKeepsCompletionDuringFailure(t *testing.T) {
+	old := fileExists
+	fileExists = func(string) bool { return true }
+	t.Cleanup(func() { fileExists = old })
+	a := liveShelf()
+	now := time.Now()
+	inFlight := downloadFile{temp: "/tmp/a.zip.crdownload", name: "a.zip", target: "/tmp/a.zip", done: 10, mod: now}
+	items := []downloadFile{inFlight}
+	var scanErr error
+	m := &downloadsModule{
+		host: a, dir: func() (string, error) { return "/tmp", nil },
+		scan: func(string) ([]downloadFile, error) {
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			return items, nil
+		},
+		allowed: func() bool { return true }, plist: readXMLPlist,
+		now: time.Now, prev: map[string]downloadFile{},
+	}
+	m.tick(now)
+	scanErr = errors.New("temporary I/O error")
+	for i := range downloadScanFailureLimit {
+		m.next = time.Time{}
+		m.tick(now.Add(time.Duration(i+1) * time.Second))
+	}
+	if m.active() || len(m.items) != 0 {
+		t.Fatalf("persistent failures left the wings up: %+v", m.items)
+	}
+	if !m.seeded || m.prev[inFlight.temp].target != "/tmp/a.zip" {
+		t.Fatalf("the pause forgot the baseline: seeded=%v prev=%+v", m.seeded, m.prev)
+	}
+	if len(a.live.queued) != 0 {
+		t.Fatalf("a failed scan invented notices: %+v", a.live.queued)
+	}
+	// The folder comes back well inside the window: the file finished
+	// during the failure still gets its notice.
+	items, scanErr = nil, nil
+	m.next = time.Time{}
+	m.tick(now.Add(4 * time.Second))
+	if len(a.live.queued) != 1 {
+		t.Fatalf("the completion during the pause was lost: %+v", a.live.queued)
+	}
+	ev := a.live.queued[0]
+	if ev.kind != liveDownloadDone || len(ev.paths) != 1 || ev.paths[0] != "/tmp/a.zip" {
+		t.Fatalf("completion = %+v", ev)
+	}
+}
+
+// A pause longer than two minutes re-baselines in silence: the files that
+// finished then are old news by the time the folder is readable again.
+func TestDownloadLongPauseRebaselinesSilently(t *testing.T) {
+	old := fileExists
+	fileExists = func(string) bool { return true }
+	t.Cleanup(func() { fileExists = old })
+	a := liveShelf()
+	now := time.Now()
+	inFlight := downloadFile{temp: "/tmp/a.zip.crdownload", name: "a.zip", target: "/tmp/a.zip", done: 10, mod: now}
+	items := []downloadFile{inFlight}
+	var scanErr error
+	m := &downloadsModule{
+		host: a, dir: func() (string, error) { return "/tmp", nil },
+		scan: func(string) ([]downloadFile, error) {
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			return items, nil
+		},
+		allowed: func() bool { return true }, plist: readXMLPlist,
+		now: time.Now, prev: map[string]downloadFile{},
+	}
+	m.tick(now)
+	scanErr = errors.New("temporary I/O error")
+	failedAt := now.Add(time.Second)
+	for i := range downloadScanFailureLimit {
+		m.next = time.Time{}
+		m.tick(failedAt.Add(time.Duration(i) * time.Second))
+	}
+	if !m.seeded || len(m.prev) != 1 {
+		t.Fatalf("the pause forgot the baseline it must re-baseline from: seeded=%v prev=%+v",
+			m.seeded, m.prev)
+	}
+	items, scanErr = nil, nil
+	m.next = time.Time{}
+	m.tick(failedAt.Add(downloadPauseMax + time.Second))
+	if len(a.live.queued) != 0 {
+		t.Fatalf("a stale pause replayed its completions: %+v", a.live.queued)
+	}
+	if len(m.prev) != 0 || !m.seeded {
+		t.Fatalf("the silent re-baseline kept old state: prev=%+v seeded=%v", m.prev, m.seeded)
 	}
 }
