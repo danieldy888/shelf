@@ -22,6 +22,8 @@ package main
 //     queue joins it, so one scan's files are one notice;
 //   - a status capsule already on screen owns the shape: the head event
 //     waits for it instead of running its hold unseen;
+//   - a capsule that comes up over a notice already running pauses its
+//     remaining hold, so the words are still readable afterwards;
 //   - opening the panel cancels what is queued, so nothing pops afterwards;
 //   - a switch that is off drops its events at the door.
 
@@ -119,6 +121,10 @@ type liveQueue struct {
 	cur    liveEvent
 	until  time.Time
 	shown  bool
+	// coveredAt is when a status capsule first covered the shown event: its
+	// remaining hold waits while it is set, so the words are still readable
+	// (and, for a download result, clickable) once the capsule folds away.
+	coveredAt time.Time
 }
 
 func (a *shelf) liveEnabled(kind liveKind) bool {
@@ -234,9 +240,23 @@ func (a *shelf) clearLive() {
 // started then, and the shown event is hidden (not cancelled: its hold
 // still runs). A status capsule that is up owns the shape in the same way:
 // the head event is kept for later rather than spending its hold unseen
-// behind the capsule's words.
+// behind the capsule's words. A capsule that comes up over a notice already
+// running pauses that notice's remaining hold instead of eating it: the
+// download result a 已复制 covers is still on screen when the capsule ends.
 func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 	q := &a.live
+	switch {
+	case q.shown && now.Before(q.until) && a.capsuleUp(now):
+		// Covered: the clock rests until the capsule is gone.
+		if q.coveredAt.IsZero() {
+			q.coveredAt = now
+		}
+		return liveEvent{}, false
+	case q.shown && !q.coveredAt.IsZero():
+		// The capsule is gone: give back the time it held the shape.
+		q.until = q.until.Add(now.Sub(q.coveredAt))
+		q.coveredAt = time.Time{}
+	}
 	if q.shown {
 		if allow && now.Before(q.until) && a.liveEnabled(q.cur.kind) {
 			return q.cur, true

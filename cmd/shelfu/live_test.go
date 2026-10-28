@@ -984,3 +984,55 @@ func TestDownloadLongPauseRebaselinesSilently(t *testing.T) {
 		t.Fatalf("the silent re-baseline kept old state: prev=%+v seeded=%v", m.prev, m.seeded)
 	}
 }
+
+// A status capsule that comes up over a notice already on screen covers its
+// words without eating its hold: the clock rests for as long as the capsule
+// shows, so a 4s download result a 已复制 covers is still readable — and
+// still clickable — when the capsule folds away. The capsule-first order
+// keeps its own rule: a notice queued behind a capsule starts after it.
+func TestLiveNoticePausesUnderTheStatusCapsule(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	a.pushDownloaded([]string{"/tmp/probe.zip"}, now)
+	ev, ok := a.liveNow(now, true)
+	if !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("the download result did not show: %+v ok=%v", ev, ok)
+	}
+	holdEnd := a.live.until
+	if want := now.Add(liveHoldDownload); !holdEnd.Equal(want) {
+		t.Fatalf("the download's hold ends at %v, want %v", holdEnd, want)
+	}
+	// 已复制 arrives one second into the hold and stays for four seconds.
+	capsuleAt, capsuleEnd := now.Add(time.Second), now.Add(5*time.Second)
+	a.toastStatus("已复制", capsuleEnd, statusOK)
+	a.fb.arm(capsuleAt)
+	if !a.capsuleUp(capsuleAt) {
+		t.Fatal("the status capsule is not up")
+	}
+	if ev, ok := a.liveNow(capsuleAt, true); ok {
+		t.Fatalf("the notice showed through the capsule: %+v", ev)
+	}
+	if ev, ok := a.liveNow(capsuleAt.Add(2*time.Second), true); ok {
+		t.Fatalf("the notice ran on under the capsule: %+v", ev)
+	}
+	if a.live.cur.kind != liveDownloadDone {
+		t.Fatalf("the covered notice was dropped: %+v", a.live.cur)
+	}
+	// The four seconds behind the capsule do not count against the hold.
+	ev, ok = a.liveNow(capsuleEnd, true)
+	if !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("the download result was lost behind the capsule: %+v ok=%v", ev, ok)
+	}
+	if want := holdEnd.Add(capsuleEnd.Sub(capsuleAt)); !a.live.until.Equal(want) {
+		t.Fatalf("the resumed hold ends at %v, want %v", a.live.until, want)
+	}
+	if !a.liveClickable(capsuleEnd) {
+		t.Fatal("the resumed download result is not clickable")
+	}
+	if _, ok := a.liveNow(a.live.until.Add(-time.Millisecond), true); !ok {
+		t.Fatal("the resumed notice ended before its extended hold")
+	}
+	if ev, ok := a.liveNow(a.live.until, true); ok {
+		t.Fatalf("the resumed notice outlived its hold: %+v", ev)
+	}
+}
