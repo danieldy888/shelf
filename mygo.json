@@ -1,7 +1,7 @@
 {
   "name": "ShelfU",
   "identifier": "local.y3.shelfu",
-  "version": "1.10.2",
+  "version": "1.10.3",
   "updates": {
     "publicKey": "U392UXk3CKWS5zmlwlygGPnVbOppcJHEMJEeKXXBbAo=",
     "github": "henryyu333/shelfu"
