@@ -43,18 +43,33 @@ const (
 	// QuotaNoCLI means Claude Code is not installed on this machine, so
 	// its /usage can't be read.
 	QuotaNoCLI
+	// QuotaLimitReached means the account's allowance ran out: the vendor
+	// refused the work ("You've hit your session limit"), so older numbers
+	// are stale news and the limit itself is what the card must say.
+	QuotaLimitReached
 )
+
+// Transient reports whether a failed status says nothing about the account
+// and may be papered over with the last good reading: a transport error or
+// a rate limit on the query itself. An answer about the account (signed
+// out, sign-in expired, allowance used up, no CLI) is shown as it came.
+func (s QuotaStatus) Transient() bool {
+	return s == QuotaRateLimited || s == QuotaFailed
+}
 
 // Quota is one tool's subscription quota at FetchedAt; Windows is empty
 // while the fetch could not produce any (see Status and Err).
 type Quota struct {
-	Tool       Tool
-	Plan       string
-	Windows    []Window
-	Status     QuotaStatus
-	FetchedAt  time.Time
-	RetryAfter time.Duration
-	Err        string
+	Tool      Tool
+	Plan      string
+	Windows   []Window
+	Status    QuotaStatus
+	FetchedAt time.Time
+	// LimitResetsAt is when the allowance a QuotaLimitReached answer
+	// blocked comes back, when the vendor's message named it.
+	LimitResetsAt time.Time
+	RetryAfter    time.Duration
+	Err           string
 }
 
 // Elapsed returns ws as they stand at now: a window whose reset time has

@@ -26,7 +26,16 @@ var (
 	// claudeDeniedRE is Claude Code's word that the account, not the
 	// reading, is in trouble; such an answer stays visible instead of
 	// being replaced by older numbers.
-	claudeDeniedRE = regexp.MustCompile(`(?i)\b(401|403)\b|not (logged|signed) in|signed out|sign-in (has )?expired|oauth session expired|could not be refreshed|token (has been )?revoked|unauthorized|forbidden|authentication (failed|required)|invalid (access )?token|(session|usage) limit|hit your limit|using your overages`)
+	claudeDeniedRE = regexp.MustCompile(`(?i)\b(401|403)\b|not (logged|signed) in|signed out|sign-in (has )?expired|oauth session expired|could not be refreshed|token (has been )?revoked|unauthorized|forbidden|authentication (failed|required)|invalid (access )?token|` + claudeLimitPattern)
+
+	// claudeLimitPattern is the allowance running out, not the sign-in
+	// lapsing: Claude Code names the window ("session", "weekly", "Opus")
+	// or just "your limit", and may add when it comes back.
+	claudeLimitPattern = `(?:(?:session|weekly|usage|daily|opus|sonnet) limit|hit your (?:[a-z]+ )?limit|using your overages|overage limit)`
+
+	// claudeLimitResetRE is the reset a limit message names, as in
+	// "You've hit your session limit · resets 3pm".
+	claudeLimitResetRE = regexp.MustCompile(`(?i)\bresets\s+(.+)$`)
 )
 
 // claudeSubscriptionNotice is what a successful /usage run prints when it
@@ -120,12 +129,31 @@ func claudeDeniedStatus(msg string) (QuotaStatus, bool) {
 	case strings.Contains(l, "not logged in"), strings.Contains(l, "not signed in"),
 		strings.Contains(l, "signed out"):
 		return QuotaNotLoggedIn, true
-	case strings.Contains(l, "usage limit"), strings.Contains(l, "hit your limit"),
-		strings.Contains(l, "overages"):
-		return QuotaRateLimited, true
+	case claudeLimitRE.MatchString(msg):
+		return QuotaLimitReached, true
 	default:
 		return QuotaExpired, true
 	}
+}
+
+// claudeLimitRE is a message about the allowance, not about the sign-in:
+// any window ("session", "weekly", "Opus") running out, or the generic
+// "You've hit your limit".
+var claudeLimitRE = regexp.MustCompile(`(?i)` + claudeLimitPattern)
+
+// claudeLimitReset reads the reset a limit message names ("… · resets
+// 3pm"): the 5-hour window for a session limit, the week for the rest,
+// since a weekly or model-scoped limit names its reset the same way.
+func claudeLimitReset(msg string, now time.Time) (time.Time, bool) {
+	m := claudeLimitResetRE.FindStringSubmatch(msg)
+	if m == nil {
+		return time.Time{}, false
+	}
+	span := 7 * 24 * time.Hour
+	if strings.Contains(strings.ToLower(msg), "session") {
+		span = 5 * time.Hour
+	}
+	return claudeResetTime(m[1], now, span)
 }
 
 const (

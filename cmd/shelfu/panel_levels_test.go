@@ -390,6 +390,11 @@ func TestUsagePageStatesFitTheContentBox(t *testing.T) {
 			fx.codex.q = aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaFailed, Err: "dial tcp: no route to host", FetchedAt: now}
 			fx.claude.q = aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaRateLimited, RetryAfter: time.Minute, FetchedAt: now}
 		}},
+		{"limit reached", false, func(fx *usageFixture) {
+			fx.codex.q = aiusage.Quota{Tool: aiusage.ToolCodex, Status: aiusage.QuotaLimitReached, FetchedAt: now}
+			fx.claude.q = aiusage.Quota{Tool: aiusage.ToolClaude, Status: aiusage.QuotaLimitReached,
+				LimitResetsAt: now.Add(2*time.Hour + 7*time.Minute), FetchedAt: now}
+		}},
 		{"first scan", false, func(fx *usageFixture) {
 			fx.f.hasSummary = false
 			fx.f.localBusy = true

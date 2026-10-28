@@ -201,7 +201,8 @@ func TestFetchClaudeDeniedMessages(t *testing.T) {
 		{"Not logged in · Please run /login", QuotaNotLoggedIn},
 		{"OAuth session expired and could not be refreshed", QuotaExpired},
 		{"API Error: 401 Unauthorized", QuotaExpired},
-		{"You've hit your limit for now", QuotaRateLimited},
+		{"You've hit your limit for now", QuotaLimitReached},
+		{"You've hit your session limit · resets 3pm", QuotaLimitReached},
 	} {
 		cli := &fakeClaudeCLI{usageOut: claudeResultJSON(tc.text, true)}
 		env := claudeEnv(t, t.TempDir())
@@ -210,6 +211,23 @@ func TestFetchClaudeDeniedMessages(t *testing.T) {
 		if q.Status != tc.want {
 			t.Fatalf("%q → status %v, want %v", tc.text, q.Status, tc.want)
 		}
+	}
+}
+
+// A limit answer carries the reset its message named, so the card can say
+// when the allowance returns.
+func TestFetchClaudeLimitReset(t *testing.T) {
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON("You've hit your weekly limit · resets Jan 12 at 10am (UTC)", true)}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaLimitReached {
+		t.Fatalf("status = %v, want QuotaLimitReached", q.Status)
+	}
+	want := time.Date(2027, 1, 12, 10, 0, 0, 0, time.UTC)
+	if !q.LimitResetsAt.Equal(want) {
+		t.Fatalf("LimitResetsAt = %v, want %v (err %q)", q.LimitResetsAt, want, q.Err)
 	}
 }
 

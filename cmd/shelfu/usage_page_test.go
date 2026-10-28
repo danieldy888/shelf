@@ -1171,7 +1171,9 @@ func TestUsageClaudeAskFloor(t *testing.T) {
 }
 
 // An unasked Claude read happens only after the random gap AND only when
-// Claude Code was used since the last attempt.
+// Claude Code was used since the last attempt. The "was it used" answer is
+// a background projects scan: one starts at most once a minute, and its
+// answer reaches the scheduler on a later tick.
 func TestUsageClaudeAutoReadNeedsUse(t *testing.T) {
 	used := false
 	fx := newUsageFixtureWith(t, true, func(d *usageDeps) {
@@ -1184,22 +1186,35 @@ func TestUsageClaudeAutoReadNeedsUse(t *testing.T) {
 	if fx.claude.calls != 1 {
 		t.Fatalf("first look calls=%d", fx.claude.calls)
 	}
+	// The gap elapsed; the first tick scans the projects tree, the answer
+	// lands, and the following ticks read it.
 	*fx.now = fx.now.Add(5 * time.Minute)
+	fx.f.tick(*fx.now)
 	fx.f.tick(*fx.now)
 	if fx.claude.calls != 1 {
 		t.Fatalf("an unused allowance must not be re-read, calls=%d", fx.claude.calls)
 	}
+	// Claude Code is used only after the last scan: a new scan is due once
+	// the probe gap has passed, and its answer is read on the next tick.
+	*fx.now = fx.now.Add(time.Minute)
 	used = true
+	fx.f.tick(*fx.now)
+	if fx.claude.calls != 1 {
+		t.Fatalf("the scan's answer must reach a later tick, calls=%d", fx.claude.calls)
+	}
 	fx.f.tick(*fx.now)
 	if fx.claude.calls != 2 {
 		t.Fatalf("a used allowance must be re-read when due, calls=%d", fx.claude.calls)
 	}
 	*fx.now = fx.now.Add(4 * time.Minute)
 	fx.f.tick(*fx.now)
+	fx.f.tick(*fx.now)
 	if fx.claude.calls != 2 {
 		t.Fatalf("the next random gap is not over yet, calls=%d", fx.claude.calls)
 	}
 	*fx.now = fx.now.Add(time.Minute)
+	fx.f.tick(*fx.now)
+	fx.f.tick(*fx.now)
 	fx.f.tick(*fx.now)
 	if fx.claude.calls != 3 {
 		t.Fatalf("the next gap elapsed, calls=%d", fx.claude.calls)
@@ -1506,4 +1521,206 @@ func TestUsageKpiCellsExplainTheirNumbersOnHover(t *testing.T) {
 			t.Fatalf("the 费用 cell lost its priced-only tip; texts %v", view.Texts())
 		}
 	})
+}
+
+// The "was Claude Code used since the last read" answer costs a walk of
+// ~/.claude/projects: it must run off the tick's thread, once at a time,
+// and no faster than once a minute, however many 30ms ticks pass.
+func TestUsageClaudeUsedProbeThrottledAndOffThread(t *testing.T) {
+	scans, started := 0, 0
+	var background []func()
+	fx := newUsageFixtureWith(t, true, func(d *usageDeps) {
+		d.claudeUsedSince = func(time.Time) bool { scans++; return false }
+		d.claudeProbe = func(fn func()) {
+			started++
+			background = append(background, fn)
+		}
+	})
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.q = okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	if fx.claude.calls != 1 {
+		t.Fatalf("first look calls=%d", fx.claude.calls)
+	}
+	// Due now: the random gap and the floor are behind it.
+	st := &fx.f.quota[quotaIndex(aiusage.ToolClaude)]
+	st.attemptAt = fx.now.Add(-time.Hour)
+	st.nextAt = *fx.now
+	base := *fx.now
+	for i := 0; i < 100; i++ {
+		fx.f.tick(base.Add(time.Duration(i) * 30 * time.Millisecond))
+	}
+	if scans != 0 {
+		t.Fatalf("the projects scan ran on the tick's goroutine %d times", scans)
+	}
+	if started != 1 {
+		t.Fatalf("100 ticks over 3s started %d projects scans, want 1", started)
+	}
+	background[0]() // the background scan runs
+	if scans != 1 {
+		t.Fatalf("the queued scan ran %d times, want 1", scans)
+	}
+	if !st.usedFor.Equal(st.attemptAt) {
+		t.Fatalf("the scan's answer belongs to %v, want the attempt at %v", st.usedFor, st.attemptAt)
+	}
+	// The answer is picked up by later ticks; none of them scans again
+	// inside the minute.
+	for i := 0; i < 100; i++ {
+		fx.f.tick(base.Add(3*time.Second + time.Duration(i)*30*time.Millisecond))
+	}
+	if started != 1 {
+		t.Fatalf("a scan started inside the probe gap (%d)", started)
+	}
+	if fx.claude.calls != 1 {
+		t.Fatalf("an unused allowance must not be re-read, calls=%d", fx.claude.calls)
+	}
+	// A minute later the tree may have changed: one fresh scan.
+	fx.f.tick(base.Add(65 * time.Second))
+	if started != 2 {
+		t.Fatalf("no scan after the probe gap: started=%d", started)
+	}
+}
+
+// An account limit is the answer, not a failed reading: it must replace the
+// previous healthy numbers instead of being hidden behind them, and it
+// names when the allowance returns.
+func TestUsageAccountLimitReplacesLastGood(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	limit := aiusage.Quota{
+		Tool: aiusage.ToolClaude, Status: aiusage.QuotaLimitReached,
+		FetchedAt:     fx.now.Add(31 * time.Second),
+		LimitResetsAt: fx.now.Add(2*time.Hour + 7*time.Minute),
+		Err:           "You've hit your session limit · resets 3pm",
+	}
+	fx.claude.qs = []aiusage.Quota{
+		windowUsed(okQuota(aiusage.ToolClaude, "Pro", *fx.now), 0, 42),
+		limit,
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	fx.view.Frame()
+	if !fx.view.HasText("42%") {
+		t.Fatalf("the healthy reading is missing; texts=%v", fx.view.Texts())
+	}
+	*fx.now = fx.now.Add(31 * time.Second)
+	fx.view.Click("刷新")
+	fx.view.Frame()
+	if !fx.view.HasText("已达到额度上限") {
+		t.Fatalf("the account limit is not shown; texts=%v", fx.view.Texts())
+	}
+	if fx.view.HasText("42%") {
+		t.Fatalf("last good numbers hid the account limit; texts=%v", fx.view.Texts())
+	}
+	if want := usageReset(limit.LimitResetsAt, *fx.now); !fx.view.HasText(want) {
+		t.Fatalf("the limit message lost the reset time %q; texts=%v", want, fx.view.Texts())
+	}
+}
+
+// A transient failure — the query itself was rate limited or did not reach
+// the endpoint — keeps the last good numbers, dimmed as stale data.
+func TestUsageTransientFailureKeepsLastGood(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	fx.codex.q = okQuota(aiusage.ToolCodex, "Plus", *fx.now)
+	fx.claude.qs = []aiusage.Quota{
+		windowUsed(okQuota(aiusage.ToolClaude, "Pro", *fx.now), 0, 42),
+		{Tool: aiusage.ToolClaude, Status: aiusage.QuotaRateLimited, FetchedAt: fx.now.Add(31 * time.Second)},
+	}
+	fx.view.Click("AI 用量")
+	fx.f.tick(*fx.now)
+	*fx.now = fx.now.Add(31 * time.Second)
+	fx.view.Click("刷新")
+	fx.view.Frame()
+	if !fx.view.HasText("42%") {
+		t.Fatalf("a transient failure dropped the last good numbers; texts=%v", fx.view.Texts())
+	}
+	if fx.view.HasText("已达到额度上限") {
+		t.Fatalf("a transient failure must not read as an account limit; texts=%v", fx.view.Texts())
+	}
+}
+
+// The white pace tick follows the displayed share, as the detail bar does:
+// expected used in 已用 mode, expected left in 剩余 mode.
+func TestUsagePaceTickFollowsMode(t *testing.T) {
+	fx := newUsageFixture(t, true)
+	pi := aiusage.PaceInfo{ExpectedLeftPct: 80, LastsUntilReset: true}
+	if got := fx.f.paceTickFraction(pi); math.Abs(got-0.2) > 1e-9 {
+		t.Fatalf("已用 mode tick = %v, want the expected used share 0.2", got)
+	}
+	fx.a.settings.AIUsage.QuotaLeft = true
+	if got := fx.f.paceTickFraction(pi); math.Abs(got-0.8) > 1e-9 {
+		t.Fatalf("剩余 mode tick = %v, want the expected left share 0.8", got)
+	}
+	// An estimate outside 0–100 stops at the ends instead of leaving the
+	// ring.
+	fx.a.settings.AIUsage.QuotaLeft = false
+	if got := fx.f.paceTickFraction(aiusage.PaceInfo{ExpectedLeftPct: 140}); got != 0 {
+		t.Fatalf("over-range tick = %v, want 0", got)
+	}
+	if got := fx.f.paceTickFraction(aiusage.PaceInfo{ExpectedLeftPct: -20}); got != 1 {
+		t.Fatalf("under-range tick = %v, want 1", got)
+	}
+}
+
+// The ring's white pace tick must sit where the arc's mode puts it: at the
+// expected used share in 已用 mode, at the expected left share in 剩余
+// mode. The tick is the only #FFF pixel in a one-window ring, so its
+// centroid angle is the fraction drawn.
+func TestQuotaRingPaceTickFollowsMode(t *testing.T) {
+	tickFraction := func(left bool, expectedLeftPct float64) float64 {
+		t.Helper()
+		fx := newUsageFixtureWith(t, true, func(d *usageDeps) {
+			d.pace = func(aiusage.Window, time.Time) aiusage.PaceInfo {
+				return aiusage.PaceInfo{ExpectedLeftPct: expectedLeftPct, LastsUntilReset: true}
+			}
+		})
+		fx.a.settings.AIUsage.QuotaLeft = left
+		q := okQuota(aiusage.ToolClaude, "Pro", *fx.now)
+		q.Windows = q.Windows[:1] // one ring, so one tick
+		// A dark card behind the ring: the standalone tester paints its own
+		// background, which would otherwise be counted as tick pixels.
+		view := ui.NewTester(func(c *ui.Context) {
+			ui.Column(c).FillWidth().FillHeight().Background(ui.RGB(10, 10, 12)).Children(func() {
+				fx.f.quotaRing(c, aiusage.ToolClaude, q, false)
+			})
+		}, usageRingSize, usageRingSize)
+		view.Frame()
+		img := view.Image()
+		b := img.Bounds()
+		cx, cy := float64(usageRingSize)/2, float64(usageRingSize)/2
+		var sx, sy, n float64
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				r, g, bl, a := img.At(x, y).RGBA()
+				if a>>8 < 250 || r>>8 < 250 || g>>8 < 250 || bl>>8 < 250 {
+					continue
+				}
+				// Only the 5-hour ring's band: nothing else is #FFF.
+				if d := math.Hypot(float64(x-b.Min.X)-cx, float64(y-b.Min.Y)-cy); d < 10 || d > 20 {
+					continue
+				}
+				sx += float64(x - b.Min.X)
+				sy += float64(y - b.Min.Y)
+				n++
+			}
+		}
+		if n == 0 {
+			t.Fatalf("no pace tick pixels at all (left=%v)", left)
+		}
+		// The tick is drawn at angle frac*2π − π/2 from the centre.
+		frac := (math.Atan2(sy/n-cy, sx/n-cx) + math.Pi/2) / (2 * math.Pi)
+		if frac < 0 {
+			frac++
+		}
+		return frac
+	}
+	// Expected left 60% is expected used 40%: the tick must cross from one
+	// reading to the other with the mode.
+	if got := tickFraction(false, 60); math.Abs(got-0.4) > 0.04 {
+		t.Fatalf("已用 mode tick at %.2f of the ring, want 0.40 (expected used)", got)
+	}
+	if got := tickFraction(true, 60); math.Abs(got-0.6) > 0.04 {
+		t.Fatalf("剩余 mode tick at %.2f of the ring, want 0.60 (expected left)", got)
+	}
 }

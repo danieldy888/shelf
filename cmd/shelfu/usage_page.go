@@ -370,7 +370,8 @@ func (f *usageFeature) quotaCard(c *ui.Context, tool aiusage.Tool) ui.Element {
 
 // quotaInfo is the card's right side. Numbers show for a good fetch (or
 // the last good one, dimmed, when the latest only failed to reach the
-// endpoint); 未登录 and 已过期 always replace numbers with their message.
+// endpoint); the account's own answers — 未登录, 已过期, 额度上限 — always
+// replace numbers with their message.
 func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuotaState, q aiusage.Quota, stale bool) {
 	now := f.deps.now()
 	ui.Row(c.Key("name")).AlignItems(ui.Center).Gap(5).Children(func() {
@@ -386,7 +387,7 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 		// First fetch not answered yet.
 	case st.latest.Status == aiusage.QuotaOK:
 		showNumbers = len(q.Windows) > 0
-	case st.latest.Status == aiusage.QuotaRateLimited || st.latest.Status == aiusage.QuotaFailed:
+	case st.latest.Status.Transient():
 		showNumbers = stale // last good numbers stay, dimmed
 	}
 	if showNumbers {
@@ -404,17 +405,17 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 		panelLabel(c, nil, "正在查询…", 11, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 		return
 	}
-	f.quotaMessage(c, tool, st.latest.Status)
+	f.quotaMessage(c, tool, st.latest, now)
 }
 
 // quotaMessage is the card's state text for the answers that produce no
-// numbers: 未登录, 已过期, 限流, 查不到.
-func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, status aiusage.QuotaStatus) {
+// numbers: 未登录, 已过期, 额度上限, 查询限流, 查不到.
+func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, q aiusage.Quota, now time.Time) {
 	// Each line must fit the 124pt info column at 10.5pt: a longer line
 	// wraps inside the card and the third line falls out of it (the page
 	// audit measures every line, so this cannot regress silently).
 	var lines string
-	switch status {
+	switch q.Status {
 	case aiusage.QuotaNotLoggedIn:
 		if tool == aiusage.ToolClaude {
 			lines = "未登录 Claude Code\n运行 claude login 后显示"
@@ -423,6 +424,13 @@ func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, status aiu
 		}
 	case aiusage.QuotaExpired:
 		lines = fmt.Sprintf("登录已过期\n重新打开 %s", toolName(tool))
+	case aiusage.QuotaLimitReached:
+		// The vendor said the allowance is used up: say so, and when it
+		// comes back if its message named the reset.
+		lines = "已达到额度上限"
+		if !q.LimitResetsAt.IsZero() {
+			lines += "\n" + usageReset(q.LimitResetsAt, now)
+		}
 	case aiusage.QuotaRateLimited:
 		lines = "额度查询暂时被限流\n稍后再看"
 	case aiusage.QuotaNoCLI:
@@ -557,10 +565,21 @@ func (f *usageFeature) drawWindowRing(p *ui.Painter, r ui.Rect, rad, lw float32,
 	strokeRingArc(p, cx, cy, rad, lw, float32(f.windowShown(*w)/100), col)
 	if tick {
 		if pi, ok := f.paceOf(w, f.deps.now()); ok {
-			expected := float32(max(0, min(100, pi.ExpectedLeftPct)) / 100)
-			strokeRingTick(p, cx, cy, rad, lw, expected)
+			strokeRingTick(p, cx, cy, rad, lw, float32(f.paceTickFraction(pi)))
 		}
 	}
+}
+
+// paceTickFraction is where the even-pace tick sits on the 0–1 scale the
+// meters fill, so the tick and the arc share one mode: the expected used
+// share when the page shows 已用, the expected left share when it shows
+// 剩余. The detail bar draws its tick from the same number.
+func (f *usageFeature) paceTickFraction(pi aiusage.PaceInfo) float64 {
+	expected := pi.ExpectedLeftPct
+	if !f.cfg().QuotaLeft {
+		expected = 100 - expected
+	}
+	return max(0, min(100, expected)) / 100
 }
 
 // strokeRingArc strokes the arc that is the fraction frac of a circle,
@@ -616,6 +635,14 @@ func (f *usageFeature) popoverBody(c *ui.Context, tool aiusage.Tool) {
 		}
 	})
 	ordered := orderedWindows(q.Windows)
+	if len(ordered) == 0 {
+		// No numbers to detail: the newest answer says why (a limit, a
+		// lapsed sign-in, a query that did not get through).
+		if st := &f.quota[quotaIndex(tool)]; !st.latest.FetchedAt.IsZero() {
+			f.quotaMessage(c, tool, st.latest, now)
+		}
+		return
+	}
 	if len(ordered) > 2 {
 		// More windows than the card holds (a plan with per-model weeks):
 		// every window gets a compact meter so all of them fit the sheet.
@@ -657,15 +684,11 @@ func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time)
 			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * wf, H: r.H}, col, r.H/2)
 		}
 		if hasPace {
-			expected := pi.ExpectedLeftPct
-			if !f.cfg().QuotaLeft {
-				expected = 100 - expected
-			}
 			tick := ui.RGB(255, 255, 255)
 			if !pi.LastsUntilReset {
 				tick = danger
 			}
-			x := r.X + r.W*float32(max(0, min(100, expected))/100)
+			x := r.X + r.W*float32(f.paceTickFraction(pi))
 			p.Fill(ui.Rect{X: x - 1, Y: r.Y - 3, W: 2, H: 11}, tick, 1)
 		}
 	})

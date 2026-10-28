@@ -388,6 +388,13 @@ func claudeFailure(q *Quota, msg string) {
 	if status, ok := claudeDeniedStatus(msg); ok {
 		q.Status = status
 		q.Err = clipLine(msg)
+		if status == QuotaLimitReached {
+			now := q.FetchedAt
+			if now.IsZero() {
+				now = time.Now()
+			}
+			q.LimitResetsAt, _ = claudeLimitReset(msg, now)
+		}
 		return
 	}
 	q.Status = QuotaFailed

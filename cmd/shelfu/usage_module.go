@@ -38,6 +38,11 @@ const (
 	// however it was started (page open, refresh button, timer): each read
 	// is a whole Claude Code process, and Magpie holds the same 30s floor.
 	usageClaudeFloor = 30 * time.Second
+	// usageClaudeProbeGap is the fastest the "was Claude Code used since
+	// the last read" projects scan repeats. The tick driving it runs every
+	// 30ms; the tree walk must not be part of that rate however idle the
+	// allowance is.
+	usageClaudeProbeGap = time.Minute
 	// usageQuotaTimeout and usageScanTimeout bound one round of work so a
 	// stalled source frees its busy flag instead of silencing refreshes.
 	usageQuotaTimeout = 20 * time.Second
@@ -56,6 +61,9 @@ type usageDeps struct {
 	// claudeWait is the random whole-minute gap before the next one.
 	claudeUsedSince func(time.Time) bool
 	claudeWait      func() time.Duration
+	// claudeProbe starts the background projects scan (defaults to
+	// goWork); tests replace it to decide when the scan runs.
+	claudeProbe func(func())
 	// loadLast/saveLast keep the last good reading across restarts.
 	loadLast func() []aiusage.Quota
 	saveLast func(aiusage.Quota)
@@ -85,6 +93,15 @@ type usageQuotaState struct {
 	retryTill    time.Time // Codex's server RetryAfter
 	busy         bool
 	generation   int // distinguishes dispatches when fake-clock times tie
+
+	// Claude's "was Claude Code used since attemptAt" probe: the answer
+	// costs a projects walk, so it runs in the background, one at a time,
+	// no faster than usageClaudeProbeGap. usedFor records which attempt
+	// the answer belongs to.
+	usedProbing bool
+	usedProbeAt time.Time
+	usedFor     time.Time
+	usedSince   bool
 }
 
 // usageFeature is the AI 用量 page: the panelPage whose ear icon and stage
@@ -493,8 +510,12 @@ func (f *usageFeature) gotLocal(sum aiusage.Summary, r aiusage.Range, err error,
 }
 
 // quotaShown is the quota a card draws: the latest answer while it was
-// good, otherwise the last good one (shown dimmed as stale data). stale is
-// false when nothing good ever arrived, so no fake numbers render.
+// good, otherwise the last good one (shown dimmed as stale data) when the
+// newest attempt only failed to reach the endpoint. An answer about the
+// account — signed out, sign-in expired, allowance used up, no CLI — is
+// returned as it came: last good numbers must never paper it over.
+// stale is false when there is nothing to fall back to, so no fake
+// numbers render.
 func (f *usageFeature) quotaShown(t aiusage.Tool) (q aiusage.Quota, stale bool) {
 	st := &f.quota[quotaIndex(t)]
 	now := f.deps.now()
@@ -503,6 +524,9 @@ func (f *usageFeature) quotaShown(t aiusage.Tool) (q aiusage.Quota, stale bool) 
 		q.Windows = aiusage.Elapsed(q.Windows, now)
 		return q, false
 	}
+	if st.latest.Status != aiusage.QuotaOK && !st.latest.FetchedAt.IsZero() && !st.latest.Status.Transient() {
+		return st.latest, false
+	}
 	q = st.good
 	q.Windows = aiusage.Elapsed(q.Windows, now)
 	return q, !st.good.FetchedAt.IsZero()
@@ -510,7 +534,9 @@ func (f *usageFeature) quotaShown(t aiusage.Tool) (q aiusage.Quota, stale bool) 
 
 // claudeDue reports whether an unasked /usage read is due: the random
 // whole-minute gap has passed and Claude Code was used since the last
-// attempt.
+// attempt. The "was it used" answer costs a walk of ~/.claude/projects, so
+// it comes from an earlier tick's background probe; a tick that finds no
+// answer yet asks for one and is not due.
 func (f *usageFeature) claudeDue(st *usageQuotaState, now time.Time) bool {
 	if st.attemptAt.IsZero() {
 		return true
@@ -524,7 +550,49 @@ func (f *usageFeature) claudeDue(st *usageQuotaState, now time.Time) bool {
 	if st.nextAt.IsZero() || now.Before(st.nextAt) {
 		return false
 	}
-	return f.deps.claudeUsedSince == nil || f.deps.claudeUsedSince(st.attemptAt)
+	if f.deps.claudeUsedSince == nil {
+		return true
+	}
+	// An answer is trusted only while it is fresh: past the probe gap the
+	// tree may have changed, so a new scan is due.
+	if !st.usedProbing && (st.usedProbeAt.IsZero() || now.Sub(st.usedProbeAt) >= usageClaudeProbeGap) {
+		f.probeClaudeUsed(st, now)
+		return false
+	}
+	return st.usedFor.Equal(st.attemptAt) && st.usedSince
+}
+
+// probeClaudeUsed starts the projects scan for st, off the main thread: the
+// walk gets slower with every session history, and this runs on a 30ms
+// monitor tick that also drives animation and drops. One scan is in flight
+// at a time and at most one starts per usageClaudeProbeGap, so an idle
+// machine never rereads the tree; the answer is left on st for a later
+// tick's claudeDue.
+func (f *usageFeature) probeClaudeUsed(st *usageQuotaState, now time.Time) {
+	used := f.deps.claudeUsedSince
+	if used == nil || st.usedProbing {
+		return
+	}
+	if !st.usedProbeAt.IsZero() && now.Sub(st.usedProbeAt) < usageClaudeProbeGap {
+		return
+	}
+	st.usedProbing = true
+	st.usedProbeAt = now
+	probeAt, since := now, st.attemptAt
+	run := f.deps.claudeProbe
+	if run == nil {
+		run = goWork
+	}
+	run(func() {
+		hit := used(since)
+		dispatchMain(func() {
+			if !st.usedProbeAt.Equal(probeAt) {
+				return // retired while scanning: a newer probe owns the state
+			}
+			st.usedProbing = false
+			st.usedFor, st.usedSince = since, hit
+		})
+	})
 }
 
 // askQuota marks the next Claude read as one the user asked for.

@@ -215,3 +215,53 @@ func TestElapsedZeroesPassedWindow(t *testing.T) {
 		t.Fatal("Elapsed must not mutate its input")
 	}
 }
+
+// An account allowance running out is its own state: the session, weekly
+// and model-scoped limits are not a lapsed sign-in, and the card must say
+// the allowance ran out instead of asking the user to log in again.
+func TestClaudeDeniedStatusAccountLimits(t *testing.T) {
+	for _, text := range []string{
+		"You've hit your session limit · resets 3pm",
+		"You've hit your weekly limit · resets Oct 30 at 2pm (Asia/Taipei)",
+		"You've hit your Opus limit",
+		"Claude AI usage limit reached",
+		"You've hit your limit for now",
+	} {
+		status, ok := claudeDeniedStatus(text)
+		if !ok || status != QuotaLimitReached {
+			t.Fatalf("%q → status %v, %v; want QuotaLimitReached", text, status, ok)
+		}
+	}
+	// The sign-in messages keep their own states.
+	if status, _ := claudeDeniedStatus("Not logged in · Please run /login"); status != QuotaNotLoggedIn {
+		t.Fatalf("not logged in → %v", status)
+	}
+	if status, _ := claudeDeniedStatus("OAuth session expired and could not be refreshed"); status != QuotaExpired {
+		t.Fatalf("expired sign-in → %v", status)
+	}
+}
+
+// A limit message names when the allowance returns; the reset is read off
+// it so the card can say so instead of leaving only the percentage of the
+// past.
+func TestClaudeLimitReset(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	got, ok := claudeLimitReset("You've hit your session limit · resets 3pm", now)
+	if !ok {
+		t.Fatal("no session reset parsed")
+	}
+	// A bare time is read in local time, as Claude Code prints it.
+	if want := time.Date(2026, 10, 28, 15, 0, 0, 0, time.Local); !got.Equal(want) {
+		t.Fatalf("session reset = %v, want %v", got, want)
+	}
+	got, ok = claudeLimitReset("You've hit your weekly limit · resets Oct 31 at 10am (UTC)", now)
+	if !ok {
+		t.Fatal("no weekly reset parsed")
+	}
+	if want := time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("weekly reset = %v, want %v", got, want)
+	}
+	if _, ok := claudeLimitReset("You've hit your limit for now", now); ok {
+		t.Fatal("a message without a reset must not invent one")
+	}
+}
