@@ -539,11 +539,11 @@ func (msgs Messages) SettingsRetentionNever() string {
 	return Catalog.Format(msgs.locale, "settingsRetentionNever", nil)
 }
 
-// SettingsRetentionDays says "{days, number} 天"
+// SettingsRetentionDays says "{days, number, ::group-off} 天"
 // in the language the app shows.
 func SettingsRetentionDays(days int) string { return In(i18n.Locale()).SettingsRetentionDays(days) }
 
-// SettingsRetentionDays says "{days, number} 天"
+// SettingsRetentionDays says "{days, number, ::group-off} 天"
 // in the language of msgs.
 func (msgs Messages) SettingsRetentionDays(days int) string {
 	return Catalog.Format(msgs.locale, "settingsRetentionDays", map[string]any{"days": days})
@@ -793,57 +793,57 @@ func (msgs Messages) PermListSeparator() string {
 	return Catalog.Format(msgs.locale, "permListSeparator", nil)
 }
 
-// PermFoot says "一个开关开启全部 {count, number} 项：{items}。macOS 要求每一项都由你在系统设置里打开。"
+// PermFoot says "一个开关开启全部 {count, number, ::group-off} 项：{items}。macOS …"
 // in the language the app shows.
 func PermFoot(count int, items string) string { return In(i18n.Locale()).PermFoot(count, items) }
 
-// PermFoot says "一个开关开启全部 {count, number} 项：{items}。macOS 要求每一项都由你在系统设置里打开。"
+// PermFoot says "一个开关开启全部 {count, number, ::group-off} 项：{items}。macOS …"
 // in the language of msgs.
 func (msgs Messages) PermFoot(count int, items string) string {
 	return Catalog.Format(msgs.locale, "permFoot", map[string]any{"count": count, "items": items})
 }
 
-// PermMissing says "还差 {count, number} 项：{names}"
+// PermMissing says "还差 {count, number, ::group-off} 项：{names}"
 // in the language the app shows.
 func PermMissing(count int, names string) string { return In(i18n.Locale()).PermMissing(count, names) }
 
-// PermMissing says "还差 {count, number} 项：{names}"
+// PermMissing says "还差 {count, number, ::group-off} 项：{names}"
 // in the language of msgs.
 func (msgs Messages) PermMissing(count int, names string) string {
 	return Catalog.Format(msgs.locale, "permMissing", map[string]any{"count": count, "names": names})
 }
 
-// PermAllGranted says "已全部开启（{granted, number}/{total, number}）"
+// PermAllGranted says "已全部开启（{granted, number, ::group-off}/{total, number, ::group-off}）"
 // in the language the app shows.
 func PermAllGranted(granted int, total int) string {
 	return In(i18n.Locale()).PermAllGranted(granted, total)
 }
 
-// PermAllGranted says "已全部开启（{granted, number}/{total, number}）"
+// PermAllGranted says "已全部开启（{granted, number, ::group-off}/{total, number, ::group-off}）"
 // in the language of msgs.
 func (msgs Messages) PermAllGranted(granted int, total int) string {
 	return Catalog.Format(msgs.locale, "permAllGranted", map[string]any{"granted": granted, "total": total})
 }
 
-// PermStep says "第 {step, number} 项，共 {total, number} 项：{short} · 在「系统设置」里打开 ShelfU…"
+// PermStep says "第 {step, number, ::group-off} 项，共 {total, number, ::group-off} 项：{short} · …"
 // in the language the app shows.
 func PermStep(step int, total int, short string) string {
 	return In(i18n.Locale()).PermStep(step, total, short)
 }
 
-// PermStep says "第 {step, number} 项，共 {total, number} 项：{short} · 在「系统设置」里打开 ShelfU…"
+// PermStep says "第 {step, number, ::group-off} 项，共 {total, number, ::group-off} 项：{short} · …"
 // in the language of msgs.
 func (msgs Messages) PermStep(step int, total int, short string) string {
 	return Catalog.Format(msgs.locale, "permStep", map[string]any{"step": step, "total": total, "short": short})
 }
 
-// PermStepFullDisk says "第 {step, number} 项，共 {total, number} 项：{short} · 在「系统设置」里打开 ShelfU…"
+// PermStepFullDisk says "第 {step, number, ::group-off} 项，共 {total, number, ::group-off} 项：{short} · …"
 // in the language the app shows.
 func PermStepFullDisk(step int, total int, short string) string {
 	return In(i18n.Locale()).PermStepFullDisk(step, total, short)
 }
 
-// PermStepFullDisk says "第 {step, number} 项，共 {total, number} 项：{short} · 在「系统设置」里打开 ShelfU…"
+// PermStepFullDisk says "第 {step, number, ::group-off} 项，共 {total, number, ::group-off} 项：{short} · …"
 // in the language of msgs.
 func (msgs Messages) PermStepFullDisk(step int, total int, short string) string {
 	return Catalog.Format(msgs.locale, "permStepFullDisk", map[string]any{"step": step, "total": total, "short": short})
@@ -889,11 +889,11 @@ func (msgs Messages) PermMenuAllOn() string {
 	return Catalog.Format(msgs.locale, "permMenuAllOn", nil)
 }
 
-// PermMenuMissing says "开启系统权限（还差 {count, number} 项）…"
+// PermMenuMissing says "开启系统权限（还差 {count, number, ::group-off} 项）…"
 // in the language the app shows.
 func PermMenuMissing(count int) string { return In(i18n.Locale()).PermMenuMissing(count) }
 
-// PermMenuMissing says "开启系统权限（还差 {count, number} 项）…"
+// PermMenuMissing says "开启系统权限（还差 {count, number, ::group-off} 项）…"
 // in the language of msgs.
 func (msgs Messages) PermMenuMissing(count int) string {
 	return Catalog.Format(msgs.locale, "permMenuMissing", map[string]any{"count": count})
@@ -1113,11 +1113,11 @@ func (msgs Messages) RetentionNever() string {
 	return Catalog.Format(msgs.locale, "retentionNever", nil)
 }
 
-// RetentionDays says "{days, plural, other {清理超过 # 天的内容}}"
+// RetentionDays says "{days, plural, other {清理超过 {days, number, ::group-off} 天的内容}}"
 // in the language the app shows.
 func RetentionDays(days int) string { return In(i18n.Locale()).RetentionDays(days) }
 
-// RetentionDays says "{days, plural, other {清理超过 # 天的内容}}"
+// RetentionDays says "{days, plural, other {清理超过 {days, number, ::group-off} 天的内容}}"
 // in the language of msgs.
 func (msgs Messages) RetentionDays(days int) string {
 	return Catalog.Format(msgs.locale, "retentionDays", map[string]any{"days": days})
@@ -1143,21 +1143,21 @@ func (msgs Messages) AwakeTitle() string {
 	return Catalog.Format(msgs.locale, "awakeTitle", nil)
 }
 
-// AwakeMinutes says "{count, plural, other {# 分钟}}"
+// AwakeMinutes says "{count, plural, other {{count, number, ::group-off} 分钟}}"
 // in the language the app shows.
 func AwakeMinutes(count int) string { return In(i18n.Locale()).AwakeMinutes(count) }
 
-// AwakeMinutes says "{count, plural, other {# 分钟}}"
+// AwakeMinutes says "{count, plural, other {{count, number, ::group-off} 分钟}}"
 // in the language of msgs.
 func (msgs Messages) AwakeMinutes(count int) string {
 	return Catalog.Format(msgs.locale, "awakeMinutes", map[string]any{"count": count})
 }
 
-// AwakeHours says "{count, plural, other {# 小时}}"
+// AwakeHours says "{count, plural, other {{count, number, ::group-off} 小时}}"
 // in the language the app shows.
 func AwakeHours(count int) string { return In(i18n.Locale()).AwakeHours(count) }
 
-// AwakeHours says "{count, plural, other {# 小时}}"
+// AwakeHours says "{count, plural, other {{count, number, ::group-off} 小时}}"
 // in the language of msgs.
 func (msgs Messages) AwakeHours(count int) string {
 	return Catalog.Format(msgs.locale, "awakeHours", map[string]any{"count": count})
@@ -1595,13 +1595,13 @@ func (msgs Messages) UpdateDownloading(version string) string {
 	return Catalog.Format(msgs.locale, "updateDownloading", map[string]any{"version": version})
 }
 
-// UpdateDownloadingPercent says "正在下载更新 v{version} · {percent, number}%"
+// UpdateDownloadingPercent says "正在下载更新 v{version} · {percent, number, ::group-off}%"
 // in the language the app shows.
 func UpdateDownloadingPercent(version string, percent int) string {
 	return In(i18n.Locale()).UpdateDownloadingPercent(version, percent)
 }
 
-// UpdateDownloadingPercent says "正在下载更新 v{version} · {percent, number}%"
+// UpdateDownloadingPercent says "正在下载更新 v{version} · {percent, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) UpdateDownloadingPercent(version string, percent int) string {
 	return Catalog.Format(msgs.locale, "updateDownloadingPercent", map[string]any{"version": version, "percent": percent})
@@ -1647,13 +1647,13 @@ func (msgs Messages) UpdateInstalling(version string) string {
 	return Catalog.Format(msgs.locale, "updateInstalling", map[string]any{"version": version})
 }
 
-// UpdateInstallingPercent says "正在安装更新（v{version} · {percent, number}%）"
+// UpdateInstallingPercent says "正在安装更新（v{version} · {percent, number, ::group-off}%）"
 // in the language the app shows.
 func UpdateInstallingPercent(version string, percent int) string {
 	return In(i18n.Locale()).UpdateInstallingPercent(version, percent)
 }
 
-// UpdateInstallingPercent says "正在安装更新（v{version} · {percent, number}%）"
+// UpdateInstallingPercent says "正在安装更新（v{version} · {percent, number, ::group-off}%）"
 // in the language of msgs.
 func (msgs Messages) UpdateInstallingPercent(version string, percent int) string {
 	return Catalog.Format(msgs.locale, "updateInstallingPercent", map[string]any{"version": version, "percent": percent})
@@ -3259,21 +3259,21 @@ func (msgs Messages) ConvCompressedName(name string) string {
 	return Catalog.Format(msgs.locale, "convCompressedName", map[string]any{"name": name})
 }
 
-// ConvMergedName says "{name} 等 {n, number} 张"
+// ConvMergedName says "{name} 等 {n, number, ::group-off} 张"
 // in the language the app shows.
 func ConvMergedName(name string, n int) string { return In(i18n.Locale()).ConvMergedName(name, n) }
 
-// ConvMergedName says "{name} 等 {n, number} 张"
+// ConvMergedName says "{name} 等 {n, number, ::group-off} 张"
 // in the language of msgs.
 func (msgs Messages) ConvMergedName(name string, n int) string {
 	return Catalog.Format(msgs.locale, "convMergedName", map[string]any{"name": name, "n": n})
 }
 
-// ConvZipName says "{name} 等 {n, number} 项"
+// ConvZipName says "{name} 等 {n, number, ::group-off} 项"
 // in the language the app shows.
 func ConvZipName(name string, n int) string { return In(i18n.Locale()).ConvZipName(name, n) }
 
-// ConvZipName says "{name} 等 {n, number} 项"
+// ConvZipName says "{name} 等 {n, number, ::group-off} 项"
 // in the language of msgs.
 func (msgs Messages) ConvZipName(name string, n int) string {
 	return Catalog.Format(msgs.locale, "convZipName", map[string]any{"name": name, "n": n})
@@ -3857,11 +3857,11 @@ func (msgs Messages) Done() string {
 	return Catalog.Format(msgs.locale, "done", nil)
 }
 
-// CellSize says "{w, number} × {h, number}"
+// CellSize says "{w, number, ::group-off} × {h, number, ::group-off}"
 // in the language the app shows.
 func CellSize(w int, h int) string { return In(i18n.Locale()).CellSize(w, h) }
 
-// CellSize says "{w, number} × {h, number}"
+// CellSize says "{w, number, ::group-off} × {h, number, ::group-off}"
 // in the language of msgs.
 func (msgs Messages) CellSize(w int, h int) string {
 	return Catalog.Format(msgs.locale, "cellSize", map[string]any{"w": w, "h": h})
@@ -4147,11 +4147,11 @@ func (msgs Messages) ToolsAddCard() string {
 	return Catalog.Format(msgs.locale, "toolsAddCard", nil)
 }
 
-// ToolsSpan says "改为 {n, number} 列"
+// ToolsSpan says "改为 {n, number, ::group-off} 列"
 // in the language the app shows.
 func ToolsSpan(n int) string { return In(i18n.Locale()).ToolsSpan(n) }
 
-// ToolsSpan says "改为 {n, number} 列"
+// ToolsSpan says "改为 {n, number, ::group-off} 列"
 // in the language of msgs.
 func (msgs Messages) ToolsSpan(n int) string {
 	return Catalog.Format(msgs.locale, "toolsSpan", map[string]any{"n": n})
@@ -4167,11 +4167,11 @@ func (msgs Messages) ActionsSection() string {
 	return Catalog.Format(msgs.locale, "actionsSection", nil)
 }
 
-// Columns says "{n, number} 列"
+// Columns says "{n, number, ::group-off} 列"
 // in the language the app shows.
 func Columns(n int) string { return In(i18n.Locale()).Columns(n) }
 
-// Columns says "{n, number} 列"
+// Columns says "{n, number, ::group-off} 列"
 // in the language of msgs.
 func (msgs Messages) Columns(n int) string {
 	return Catalog.Format(msgs.locale, "columns", map[string]any{"n": n})
@@ -4477,41 +4477,41 @@ func (msgs Messages) DropPngPage() string {
 	return Catalog.Format(msgs.locale, "dropPngPage", nil)
 }
 
-// DropCountItems says "{n, number} 项"
+// DropCountItems says "{n, number, ::group-off} 项"
 // in the language the app shows.
 func DropCountItems(n int) string { return In(i18n.Locale()).DropCountItems(n) }
 
-// DropCountItems says "{n, number} 项"
+// DropCountItems says "{n, number, ::group-off} 项"
 // in the language of msgs.
 func (msgs Messages) DropCountItems(n int) string {
 	return Catalog.Format(msgs.locale, "dropCountItems", map[string]any{"n": n})
 }
 
-// DropCountImages says "{n, number} 张图片"
+// DropCountImages says "{n, number, ::group-off} 张图片"
 // in the language the app shows.
 func DropCountImages(n int) string { return In(i18n.Locale()).DropCountImages(n) }
 
-// DropCountImages says "{n, number} 张图片"
+// DropCountImages says "{n, number, ::group-off} 张图片"
 // in the language of msgs.
 func (msgs Messages) DropCountImages(n int) string {
 	return Catalog.Format(msgs.locale, "dropCountImages", map[string]any{"n": n})
 }
 
-// DropCountPDFs says "{n, number} 个 PDF"
+// DropCountPDFs says "{n, number, ::group-off} 个 PDF"
 // in the language the app shows.
 func DropCountPDFs(n int) string { return In(i18n.Locale()).DropCountPDFs(n) }
 
-// DropCountPDFs says "{n, number} 个 PDF"
+// DropCountPDFs says "{n, number, ::group-off} 个 PDF"
 // in the language of msgs.
 func (msgs Messages) DropCountPDFs(n int) string {
 	return Catalog.Format(msgs.locale, "dropCountPDFs", map[string]any{"n": n})
 }
 
-// DropCountArchives says "{n, number} 个压缩包"
+// DropCountArchives says "{n, number, ::group-off} 个压缩包"
 // in the language the app shows.
 func DropCountArchives(n int) string { return In(i18n.Locale()).DropCountArchives(n) }
 
-// DropCountArchives says "{n, number} 个压缩包"
+// DropCountArchives says "{n, number, ::group-off} 个压缩包"
 // in the language of msgs.
 func (msgs Messages) DropCountArchives(n int) string {
 	return Catalog.Format(msgs.locale, "dropCountArchives", map[string]any{"n": n})
@@ -4887,11 +4887,11 @@ func (msgs Messages) PageMultiHint() string {
 	return Catalog.Format(msgs.locale, "pageMultiHint", nil)
 }
 
-// PageSelectedCount says "已选 {n, number} 项"
+// PageSelectedCount says "已选 {n, number, ::group-off} 项"
 // in the language the app shows.
 func PageSelectedCount(n int) string { return In(i18n.Locale()).PageSelectedCount(n) }
 
-// PageSelectedCount says "已选 {n, number} 项"
+// PageSelectedCount says "已选 {n, number, ::group-off} 项"
 // in the language of msgs.
 func (msgs Messages) PageSelectedCount(n int) string {
 	return Catalog.Format(msgs.locale, "pageSelectedCount", map[string]any{"n": n})
@@ -5017,11 +5017,11 @@ func (msgs Messages) ClipJustNow() string {
 	return Catalog.Format(msgs.locale, "clipJustNow", nil)
 }
 
-// ClipMinutesAgo says "{n, plural, other {# 分钟前}}"
+// ClipMinutesAgo says "{n, plural, other {{n, number, ::group-off} 分钟前}}"
 // in the language the app shows.
 func ClipMinutesAgo(n int) string { return In(i18n.Locale()).ClipMinutesAgo(n) }
 
-// ClipMinutesAgo says "{n, plural, other {# 分钟前}}"
+// ClipMinutesAgo says "{n, plural, other {{n, number, ::group-off} 分钟前}}"
 // in the language of msgs.
 func (msgs Messages) ClipMinutesAgo(n int) string {
 	return Catalog.Format(msgs.locale, "clipMinutesAgo", map[string]any{"n": n})
@@ -5047,11 +5047,11 @@ func (msgs Messages) ClipYesterday() string {
 	return Catalog.Format(msgs.locale, "clipYesterday", nil)
 }
 
-// ClipDaysAgo says "{n, plural, other {# 天前}}"
+// ClipDaysAgo says "{n, plural, other {{n, number, ::group-off} 天前}}"
 // in the language the app shows.
 func ClipDaysAgo(n int) string { return In(i18n.Locale()).ClipDaysAgo(n) }
 
-// ClipDaysAgo says "{n, plural, other {# 天前}}"
+// ClipDaysAgo says "{n, plural, other {{n, number, ::group-off} 天前}}"
 // in the language of msgs.
 func (msgs Messages) ClipDaysAgo(n int) string {
 	return Catalog.Format(msgs.locale, "clipDaysAgo", map[string]any{"n": n})
@@ -5067,11 +5067,11 @@ func (msgs Messages) ClipDate(t time.Time) string {
 	return Catalog.Format(msgs.locale, "clipDate", map[string]any{"t": t})
 }
 
-// PanelCounts says "托盘 {tray, number} 项 · 剪贴板 {clip, number} 条"
+// PanelCounts says "托盘 {tray, number, ::group-off} 项 · 剪贴板 {clip, number, ::group-off} 条"
 // in the language the app shows.
 func PanelCounts(tray int, clip int) string { return In(i18n.Locale()).PanelCounts(tray, clip) }
 
-// PanelCounts says "托盘 {tray, number} 项 · 剪贴板 {clip, number} 条"
+// PanelCounts says "托盘 {tray, number, ::group-off} 项 · 剪贴板 {clip, number, ::group-off} 条"
 // in the language of msgs.
 func (msgs Messages) PanelCounts(tray int, clip int) string {
 	return Catalog.Format(msgs.locale, "panelCounts", map[string]any{"tray": tray, "clip": clip})
@@ -5347,11 +5347,11 @@ func (msgs Messages) LiveDownloaded() string {
 	return Catalog.Format(msgs.locale, "liveDownloaded", nil)
 }
 
-// LiveFiles says "{n, plural, other {# 个文件}}"
+// LiveFiles says "{n, plural, other {{n, number, ::group-off} 个文件}}"
 // in the language the app shows.
 func LiveFiles(n int) string { return In(i18n.Locale()).LiveFiles(n) }
 
-// LiveFiles says "{n, plural, other {# 个文件}}"
+// LiveFiles says "{n, plural, other {{n, number, ::group-off} 个文件}}"
 // in the language of msgs.
 func (msgs Messages) LiveFiles(n int) string {
 	return Catalog.Format(msgs.locale, "liveFiles", map[string]any{"n": n})
@@ -5377,71 +5377,71 @@ func (msgs Messages) LiveStatusOff(name string) string {
 	return Catalog.Format(msgs.locale, "liveStatusOff", map[string]any{"name": name})
 }
 
-// LiveStatusCharging says "正在充电 {pct, number}%"
+// LiveStatusCharging says "正在充电 {pct, number, ::group-off}%"
 // in the language the app shows.
 func LiveStatusCharging(pct int) string { return In(i18n.Locale()).LiveStatusCharging(pct) }
 
-// LiveStatusCharging says "正在充电 {pct, number}%"
+// LiveStatusCharging says "正在充电 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) LiveStatusCharging(pct int) string {
 	return Catalog.Format(msgs.locale, "liveStatusCharging", map[string]any{"pct": pct})
 }
 
-// LiveStatusCharged says "已充满 {pct, number}%"
+// LiveStatusCharged says "已充满 {pct, number, ::group-off}%"
 // in the language the app shows.
 func LiveStatusCharged(pct int) string { return In(i18n.Locale()).LiveStatusCharged(pct) }
 
-// LiveStatusCharged says "已充满 {pct, number}%"
+// LiveStatusCharged says "已充满 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) LiveStatusCharged(pct int) string {
 	return Catalog.Format(msgs.locale, "liveStatusCharged", map[string]any{"pct": pct})
 }
 
-// LiveStatusLow says "电量低 {pct, number}%"
+// LiveStatusLow says "电量低 {pct, number, ::group-off}%"
 // in the language the app shows.
 func LiveStatusLow(pct int) string { return In(i18n.Locale()).LiveStatusLow(pct) }
 
-// LiveStatusLow says "电量低 {pct, number}%"
+// LiveStatusLow says "电量低 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) LiveStatusLow(pct int) string {
 	return Catalog.Format(msgs.locale, "liveStatusLow", map[string]any{"pct": pct})
 }
 
-// AudioLevelLeft says "左 {pct, number}%"
+// AudioLevelLeft says "左 {pct, number, ::group-off}%"
 // in the language the app shows.
 func AudioLevelLeft(pct int) string { return In(i18n.Locale()).AudioLevelLeft(pct) }
 
-// AudioLevelLeft says "左 {pct, number}%"
+// AudioLevelLeft says "左 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) AudioLevelLeft(pct int) string {
 	return Catalog.Format(msgs.locale, "audioLevelLeft", map[string]any{"pct": pct})
 }
 
-// AudioLevelRight says "右 {pct, number}%"
+// AudioLevelRight says "右 {pct, number, ::group-off}%"
 // in the language the app shows.
 func AudioLevelRight(pct int) string { return In(i18n.Locale()).AudioLevelRight(pct) }
 
-// AudioLevelRight says "右 {pct, number}%"
+// AudioLevelRight says "右 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) AudioLevelRight(pct int) string {
 	return Catalog.Format(msgs.locale, "audioLevelRight", map[string]any{"pct": pct})
 }
 
-// AudioLevelCase says "盒 {pct, number}%"
+// AudioLevelCase says "盒 {pct, number, ::group-off}%"
 // in the language the app shows.
 func AudioLevelCase(pct int) string { return In(i18n.Locale()).AudioLevelCase(pct) }
 
-// AudioLevelCase says "盒 {pct, number}%"
+// AudioLevelCase says "盒 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) AudioLevelCase(pct int) string {
 	return Catalog.Format(msgs.locale, "audioLevelCase", map[string]any{"pct": pct})
 }
 
-// AudioLevelMain says "电量 {pct, number}%"
+// AudioLevelMain says "电量 {pct, number, ::group-off}%"
 // in the language the app shows.
 func AudioLevelMain(pct int) string { return In(i18n.Locale()).AudioLevelMain(pct) }
 
-// AudioLevelMain says "电量 {pct, number}%"
+// AudioLevelMain says "电量 {pct, number, ::group-off}%"
 // in the language of msgs.
 func (msgs Messages) AudioLevelMain(pct int) string {
 	return Catalog.Format(msgs.locale, "audioLevelMain", map[string]any{"pct": pct})

@@ -443,8 +443,8 @@ func (a *shelf) dropTrayCell(c *ui.Context, paths []string) {
 			ui.Icon(c, trayNavSymbol).Size(18, 18).TextColor(ink)
 		})
 		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, loc(c).DropPutInTray()).SingleLine().FontSize(13).FontWeight(600).TextColor(ink)
-			ui.Text(c, loc(c).DropTrayHint()).SingleLine().FontSize(11).TextColor(ink3)
+			panelLabel(c, nil, loc(c).DropPutInTray(), 13, 600).TextColor(ink)
+			panelLabel(c, nil, loc(c).DropTrayHint(), 11, 0).TextColor(ink3)
 		})
 		ui.Box(c).Grow(1)
 		a.dropThumbStack(c, paths)
@@ -525,9 +525,9 @@ func (a *shelf) dropActionCell(c *ui.Context, act dropAction, busy bool) {
 	}
 	cell.Children(func() {
 		ui.Icon(c, act.icon).Size(20, 20).TextColor(ink)
-		ui.Text(c, act.label).SingleLine().FontSize(12).FontWeight(600).TextColor(ink)
+		panelLabel(c, nil, act.label, 12, 600).TextColor(ink)
 		if act.sub != "" {
-			ui.Text(c, act.sub).SingleLine().FontSize(10).TextColor(ink3)
+			panelLabel(c, nil, act.sub, 10, 0).TextColor(ink3)
 		}
 	})
 	if busy {
