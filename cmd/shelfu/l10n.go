@@ -62,6 +62,25 @@ func languageTag(tag string) string {
 	return ""
 }
 
+// englishFallback reports whether the app, following the system, would show
+// its source language (Chinese) to a reader whose system language is neither
+// Chinese nor English: mygo falls back to the source language, and ShelfU
+// reads English to everyone outside a Chinese system.
+func englishFallback(locale string, preferred []string) bool {
+	if locale != "zh-Hans" {
+		return false
+	}
+	for _, tag := range preferred {
+		if len(tag) >= 2 {
+			switch strings.ToLower(tag[:2]) {
+			case "zh", "en":
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // localeChanged follows the app's language as mygo changes it: the native
 // surfaces that are built once — window titles and the tray's tooltip — say
 // the new language; views redraw themselves because they are built per

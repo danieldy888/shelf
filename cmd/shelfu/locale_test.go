@@ -273,6 +273,28 @@ func TestEnglishUsagePageStatesHaveNoChineseAndFit(t *testing.T) {
 	}
 }
 
+// TestEnglishFallback: following the system, a Chinese system reads Chinese
+// (Traditional Chinese included) and every other reads English — mygo alone
+// would fall back to the source language, Chinese, for French or Japanese.
+func TestEnglishFallback(t *testing.T) {
+	for _, tc := range []struct {
+		locale string
+		pref   []string
+		want   bool
+	}{
+		{"zh-Hans", []string{"fr-FR"}, true},
+		{"zh-Hans", []string{"ja-JP", "en-US"}, false},
+		{"zh-Hans", []string{"zh-Hant-TW"}, false},
+		{"zh-Hans", []string{"zh-Hans-CN"}, false},
+		{"zh-Hans", nil, true},
+		{"en", []string{"fr-FR"}, false},
+	} {
+		if got := englishFallback(tc.locale, tc.pref); got != tc.want {
+			t.Errorf("englishFallback(%q, %v) = %v, want %v", tc.locale, tc.pref, got, tc.want)
+		}
+	}
+}
+
 // TestTimesFollowTheSystemClock: times follow the user's 12- or 24-hour
 // clock in every language, so an English interface on a 24-hour Mac says
 // 14:05 rather than 2:05 PM.

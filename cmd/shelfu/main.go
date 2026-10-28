@@ -188,6 +188,13 @@ func startupLoc(prefs settings.Settings) locales.Messages {
 }
 
 func (a *shelf) ready(show bool) {
+	// Following the system, mygo falls back to the source language (Chinese)
+	// for a language the app is not written in. ShelfU reads English to
+	// everyone whose system is not Chinese, so choose English when that
+	// fallback is what the system produced.
+	if englishFallback(mygo.App.Locale(), mygo.App.PreferredLanguages()) {
+		mygo.App.SetLocale("en")
+	}
 	a.locale = mygo.App.Locale()
 	a.newNotchWindow()
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool, button int) {
