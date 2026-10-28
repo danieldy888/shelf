@@ -481,7 +481,10 @@ func languageAt(idx int) string {
 
 // setLanguage saves the chosen language and shows it at once: settings.json
 // is the source of truth, and mygo.App.SetLocale redraws every window in it
-// without a restart.
+// without a restart. Follow System runs the same rule a launch does, so
+// choosing it shows the language the system asks for — a Chinese system
+// Chinese, every other English — rather than the source language mygo would
+// fall back to.
 func (a *shelf) setLanguage(tag string) {
 	tag = languageTag(tag)
 	if tag == a.settings.Language {
@@ -492,7 +495,7 @@ func (a *shelf) setLanguage(tag string) {
 	if !a.applySettings(next) {
 		return
 	}
-	setAppLocale(tag)
+	a.showLanguage()
 }
 
 // applyOpenAtLogin switches the login item through SMAppService (macOS 13+)

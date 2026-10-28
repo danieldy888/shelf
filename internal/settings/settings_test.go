@@ -219,3 +219,45 @@ func TestShellStyleLoad(t *testing.T) {
 		}
 	}
 }
+
+// LanguageOf reads the language without touching the directory: the startup
+// path that cannot open its data directory still names the user's language in
+// its refusal, and must not create settings.json, rewrite a broken one, or
+// report a language from a file it could not parse.
+func TestLanguageOf(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if lang, ok := LanguageOf(dir); ok || lang != "" {
+		t.Fatalf("a missing settings.json answered %q, %v", lang, ok)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("LanguageOf created settings.json: %v", err)
+	}
+
+	s := Default()
+	s.Language = "zh-Hans"
+	if err := Save(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if lang, ok := LanguageOf(dir); !ok || lang != "zh-Hans" {
+		t.Fatalf("LanguageOf = %q, %v, want zh-Hans, true", lang, ok)
+	}
+	// Follow System is a language the file names: "" with ok true.
+	if err := Save(dir, Default()); err != nil {
+		t.Fatal(err)
+	}
+	if lang, ok := LanguageOf(dir); !ok || lang != "" {
+		t.Fatalf("LanguageOf = %q, %v, want the empty language, true", lang, ok)
+	}
+
+	bad := []byte(`{"language": `)
+	if err := os.WriteFile(path, bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if lang, ok := LanguageOf(dir); ok || lang != "" {
+		t.Fatalf("a broken settings.json answered %q, %v", lang, ok)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(bad) {
+		t.Fatalf("LanguageOf rewrote the broken file: %q, %v", got, err)
+	}
+}

@@ -9,6 +9,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -431,25 +434,127 @@ func TestEnglishUsagePageStatesHaveNoChineseAndFit(t *testing.T) {
 	}
 }
 
-// TestEnglishFallback: following the system, a Chinese system reads Chinese
-// (Traditional Chinese included) and every other reads English — mygo alone
-// would fall back to the source language, Chinese, for French or Japanese.
-func TestEnglishFallback(t *testing.T) {
-	for _, tc := range []struct {
-		locale string
-		pref   []string
-		want   bool
-	}{
-		{"zh-Hans", []string{"fr-FR"}, true},
-		{"zh-Hans", []string{"ja-JP", "en-US"}, false},
-		{"zh-Hans", []string{"zh-Hant-TW"}, false},
-		{"zh-Hans", []string{"zh-Hans-CN"}, false},
-		{"zh-Hans", nil, true},
-		{"en", []string{"fr-FR"}, false},
-	} {
-		if got := englishFallback(tc.locale, tc.pref); got != tc.want {
-			t.Errorf("englishFallback(%q, %v) = %v, want %v", tc.locale, tc.pref, got, tc.want)
+// TestResolveLanguage is the one rule every moment obeys: a language
+// settings.json names is shown as it is; Follow System reads the system's
+// FIRST preferred language only, Chinese for anything zh (Traditional
+// included) and English for every other — never a second language, and never
+// mygo's fallback to the source language.
+func TestResolveLanguage(t *testing.T) {
+	prefs := [][]string{
+		{"fr-FR"},
+		{"ja-JP"},
+		{"fr-FR", "zh-Hans-CN"},
+		{"zh-Hant-TW", "en-US"},
+		{"zh-Hans-CN"},
+		{"en-US", "zh-Hans-CN"},
+		{}, // a system that lists no language
+	}
+	// Follow System: only the first language counts.
+	follow := map[string]string{
+		"fr-FR":      "en",
+		"ja-JP":      "en",
+		"zh-Hant-TW": "zh-Hans",
+		"zh-TW":      "zh-Hans",
+		"zh-HK":      "zh-Hans",
+		"zh":         "zh-Hans",
+		"zh-Hans-CN": "zh-Hans",
+		"en-US":      "en",
+		"en-GB":      "en",
+		"":           "en",
+	}
+	for _, list := range prefs {
+		first := ""
+		if len(list) > 0 {
+			first = list[0]
 		}
+		// "" (Follow System) — a settings language of "" may name neither.
+		if got, want := resolveLanguage("", list), follow[first]; got != want {
+			t.Errorf("resolveLanguage(\"\", %v) = %q, want %q", list, got, want)
+		}
+		// An explicit language is shown exactly, on every system.
+		for _, tag := range []string{"zh-Hans", "en"} {
+			if got := resolveLanguage(tag, list); got != tag {
+				t.Errorf("resolveLanguage(%q, %v) = %q, want %q", tag, list, got, tag)
+			}
+		}
+	}
+	// A settings.json the user edited by hand names no language of ours: that
+	// follows the system, as an empty one does.
+	for _, junk := range []string{"fr", "de-DE", "ZH-hans", " zh-Hans"} {
+		if got := resolveLanguage(junk, []string{"zh-Hant-TW"}); got != "zh-Hans" {
+			t.Errorf("resolveLanguage(%q) = %q, want the system's zh-Hans", junk, got)
+		}
+	}
+}
+
+// TestFollowSystemAppliesTheRule: choosing Follow System in Settings shows the
+// language the rule resolves for the system's first preferred language — not
+// mygo's fallback to the source language — and a system language change while
+// the shelf follows the system is re-resolved with the same rule.
+func TestFollowSystemAppliesTheRule(t *testing.T) {
+	stubSettingsSeams(t, false, nil, nil)
+	origSet, origPrefs := setAppLocale, preferredLanguages
+	t.Cleanup(func() { setAppLocale, preferredLanguages = origSet, origPrefs })
+	var applied []string
+	setAppLocale = func(tag string) { applied = append(applied, tag) }
+	preferredLanguages = func() []string { return []string{"fr-FR"} }
+
+	a, view := newSettingsShelf(t)
+	view.Frame()
+	view.Frame()
+	view.Click("English")
+	if len(applied) != 1 || applied[0] != "en" {
+		t.Fatalf("choosing English applied %v, want [en]", applied)
+	}
+	if loaded, err := settings.Load(a.dataDir); err != nil || loaded.Language != "en" {
+		t.Fatalf("settings.json kept %q (err %v), want en", loaded.Language, err)
+	}
+	// Back to Follow System on a French system: English, by the rule, not "".
+	view.Frame()
+	view.Click(locales.In("").LanguageFollowSystem())
+	if len(applied) != 2 || applied[1] != "en" {
+		t.Fatalf("following the system applied %v, want [en en]", applied)
+	}
+	if loaded, err := settings.Load(a.dataDir); err != nil || loaded.Language != "" {
+		t.Fatalf("settings.json kept %q (err %v), want \"\"", loaded.Language, err)
+	}
+
+	// A Traditional Chinese system follows into Simplified Chinese, though
+	// mygo's own match would read it as English.
+	preferredLanguages = func() []string { return []string{"zh-Hant-TW", "en-US"} }
+	applied = nil
+	view.Frame()
+	view.Click(locales.In("").LanguageEnglish())
+	if len(applied) != 1 || applied[0] != "en" {
+		t.Fatalf("choosing English applied %v, want [en]", applied)
+	}
+	view.Frame()
+	view.Click(locales.In("").LanguageFollowSystem())
+	if len(applied) != 2 || applied[1] != "zh-Hans" {
+		t.Fatalf("following a zh-Hant system applied %v, want [en zh-Hans]", applied)
+	}
+
+	// The system's languages changed while the shelf follows them: the next
+	// activation or panel opening re-resolves with the same rule. An explicit
+	// language ignores the change.
+	a.win = &mygo.Window{}
+	a.locale = "zh-Hans"
+	preferredLanguages = func() []string { return []string{"en-US"} }
+	a.followSystemLanguage()
+	if len(applied) != 3 || applied[2] != "en" {
+		t.Fatalf("a system language change applied %v, want a third tag en", applied)
+	}
+	// Nothing new to apply: no second call, no redraw.
+	a.locale = "en"
+	a.followSystemLanguage()
+	if len(applied) != 3 {
+		t.Fatalf("an unchanged system language applied %v again", applied)
+	}
+	a.settings.Language = "zh-Hans"
+	a.locale = "en"
+	a.followSystemLanguage()
+	if len(applied) != 3 {
+		t.Fatalf("an explicit language was overridden by the system: %v", applied)
 	}
 }
 
@@ -576,40 +681,55 @@ func TestLanguageSwitchAppliesWithoutRestart(t *testing.T) {
 	assertNoHan(t, "tray menu after switch", menuLabels(a.trayMenu()))
 }
 
-// TestSettingsLanguageRowSavesAndApplies: choosing English in Settings
-// General saves it and asks mygo to show it, without a restart.
-func TestSettingsLanguageRowSavesAndApplies(t *testing.T) {
-	stubSettingsSeams(t, false, nil, nil)
-	orig := setAppLocale
-	var applied []string
-	setAppLocale = func(tag string) { applied = append(applied, tag) }
-	t.Cleanup(func() { setAppLocale = orig })
+// TestStartupDialogsUseTheRule: the refusal of a launch that cannot open its
+// data directory says the language settings.json names, or the system's by the
+// same rule — and that path only reads settings.json, never creates or
+// rewrites it (the directory it cannot open must stay as it was).
+func TestStartupDialogsUseTheRule(t *testing.T) {
+	orig := preferredLanguages
+	t.Cleanup(func() { preferredLanguages = orig })
+	preferredLanguages = func() []string { return []string{"fr-FR"} }
 
-	a, view := newSettingsShelf(t)
-	view.Frame()
-	view.Frame()
-	view.Click("English")
-	if len(applied) != 1 || applied[0] != "en" {
-		t.Fatalf("choosing English applied %v, want [en]", applied)
+	dir := t.TempDir()
+	path := filepath.Join(dir, settings.FileName)
+	fr := locales.In("en")
+	if got, want := startupLoc(dir).StartupAlreadyRunning(appName), fr.StartupAlreadyRunning(appName); got != want {
+		t.Fatalf("a directory with no settings.json said %q, want the system's %q", got, want)
 	}
-	loaded, err := settings.Load(a.dataDir)
-	if err != nil {
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the startup dialog path created settings.json: %v", err)
+	}
+
+	// settings.json names Chinese: shown as it is, on a French system too.
+	prefs := settings.Default()
+	prefs.Language = "zh-Hans"
+	if err := settings.Save(dir, prefs); err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Language != "en" {
-		t.Fatalf("settings.json kept %q, want en", loaded.Language)
+	zh := locales.In("zh-Hans")
+	if got, want := startupLoc(dir).StartupAlreadyRunning(appName), zh.StartupAlreadyRunning(appName); got != want {
+		t.Fatalf("settings.json's zh-Hans was not shown: %q, want %q", got, want)
+	}
+	// Read only: the file is still exactly what Save wrote.
+	if data, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(data), `"zh-Hans"`) {
+		t.Fatalf("the startup path rewrote settings.json: %s", data)
 	}
 
-	// Back to following the system.
-	view.Frame()
-	// The window still says the source language here: the seam replaces the
-	// real repaint mygo would do.
-	view.Click(locales.In("").LanguageFollowSystem())
-	if len(applied) != 2 || applied[1] != "" {
-		t.Fatalf("choosing Follow System applied %v, want [en \"\"]", applied)
+	// The migration that fails before the new directory has a settings.json
+	// still reads the old one's: the user's language, not the system's.
+	empty := t.TempDir()
+	if got, want := startupLoc(empty, dir).StartupAlreadyRunning(appName), zh.StartupAlreadyRunning(appName); got != want {
+		t.Fatalf("the old directory's settings.json was ignored: %q, want %q", got, want)
 	}
-	if loaded, err = settings.Load(a.dataDir); err != nil || loaded.Language != "" {
-		t.Fatalf("settings.json kept %q (err %v), want \"\"", loaded.Language, err)
+
+	// A file that does not parse names no language: the system's rule again.
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := startupLoc(dir).StartupAlreadyRunning(appName), fr.StartupAlreadyRunning(appName); got != want {
+		t.Fatalf("a broken settings.json said %q, want the system's %q", got, want)
 	}
 }
 
@@ -634,4 +754,135 @@ func menuLabels(m *mygo.Menu) []string {
 	}
 	walk(m.Items())
 	return out
+}
+
+// TestDropZoneFitsEveryVariant draws the real drop zone for every file kind a
+// drag can carry — one image, several, one PDF, several, an archive, mixed
+// files and plain text — in English and in the source language, and audits
+// every action cell and the tray row with the panel's measuring seam: no name,
+// subtitle or hint may need more width than its 94.5pt column gave it, so an
+// ellipsis ("Pages as Ima…", "PNG · One per Pa…") can no longer pass as
+// fitting. The Chinese strings are the ones the layout always had: the audit
+// guards them too, and proves the English repair changed nothing there.
+func TestDropZoneFitsEveryVariant(t *testing.T) {
+	dir := t.TempDir()
+	png1 := writeFile(t, dir, "one.png", testPNGBytes(t))
+	png2 := writeFile(t, dir, "two.png", testPNGBytes(t))
+	pdf1 := writeFile(t, dir, "one.pdf", []byte("%PDF-1.4"))
+	pdf2 := writeFile(t, dir, "two.pdf", []byte("%PDF-1.4"))
+	zip1 := writeFile(t, dir, "pack.zip", []byte("PK"))
+	txt := writeFile(t, dir, "notes.txt", []byte("hello"))
+
+	type variant struct {
+		name  string
+		paths []string
+		en    []string // cell names and subtitles drawn in full
+		zh    []string
+	}
+	variants := []variant{
+		{"image", []string{png1},
+			[]string{"Fit 1 MB", "or smaller", "Make PDF", "1 Page", "To JPEG", "One per File", "AirDrop"},
+			[]string{"压缩到 1 MB", "以内", "转成 PDF", "1 页", "转 JPEG", "每张一份", "隔空投送"}},
+		{"images", []string{png1, png2},
+			[]string{"Merge into PDF", "In Drop Order", "To JPEG", "One per File"},
+			[]string{"合成一个 PDF", "按拖入顺序", "转 JPEG", "每张一份"}},
+		{"pdf", []string{pdf1},
+			[]string{"To Word", "Extract Text", "To Images", "PNG · Per Page", "Zip", "AirDrop"},
+			[]string{"转 Word", "提取文字", "每页存成图片", "PNG · 每页一张", "打成 zip", "隔空投送"}},
+		{"pdfs", []string{pdf1, pdf2},
+			[]string{"To Images", "PNG · Per Page", "2 PDFs"},
+			[]string{"每页存成图片", "PNG · 每页一张", "2 个 PDF"}},
+		{"archive", []string{zip1},
+			[]string{"Extract", "AirDrop"},
+			[]string{"解压", "隔空投送"}},
+		{"mixed", []string{png1, txt},
+			[]string{"Zip", "2 items", "AirDrop"},
+			[]string{"打成 zip", "2 项", "隔空投送"}},
+		{"text", []string{txt},
+			[]string{"Zip"},
+			[]string{"打成 zip"}},
+	}
+	for _, lang := range []struct {
+		tag  string
+		tray []string
+	}{
+		{"en", []string{"Put in Tray", "Stays Here — Drag Out Anytime"}},
+		{"zh-Hans", []string{"放入托盘", "保存引用，随时拖出"}},
+	} {
+		for _, v := range variants {
+			t.Run(lang.tag+"/"+v.name, func(t *testing.T) {
+				drain := fitSink(t)
+				a, view := dropViewShelf(t, v.paths)
+				a.locale = lang.tag
+				view.SetLocale(lang.tag)
+				view.Frame()
+				drain() // the first frame has no boxes to measure yet
+				view.Frame()
+				for _, note := range drain() {
+					t.Errorf("%s: %s", v.name, note)
+				}
+				texts := view.Texts()
+				want := v.en
+				if lang.tag != "en" {
+					want = v.zh
+				}
+				for _, w := range append(want, lang.tray...) {
+					if !slices.Contains(texts, w) {
+						t.Errorf("%s: %q is not drawn in full; texts %v", v.name, w, texts)
+					}
+				}
+				if lang.tag == "en" {
+					assertNoHan(t, "drop/"+v.name, texts)
+				}
+			})
+		}
+	}
+}
+
+// TestNumbersDoNotGroup formats every message that counts something with
+// 1000 in both languages: no count, file name, page, byte or percentage may
+// grow a thousands separator. The source language wrote counts with "%d",
+// which never grouped, and the English catalog keeps the same rule so a
+// generated name like "A 等 1000 张" cannot come back as "A 等 1,000 张".
+// reflect walks the generated accessors, so a message added later is covered
+// without editing this test.
+func TestNumbersDoNotGroup(t *testing.T) {
+	for _, lang := range []string{"zh-Hans", "en"} {
+		l := locales.In(lang)
+		v := reflect.ValueOf(l)
+		covered := 0
+		for i := 0; i < v.NumMethod(); i++ {
+			m := v.Method(i)
+			mt := m.Type()
+			var args []reflect.Value
+			hasInt, ok := false, true
+			for j := 0; j < mt.NumIn(); j++ {
+				switch mt.In(j).Kind() {
+				case reflect.Int:
+					hasInt = true
+					args = append(args, reflect.ValueOf(1000).Convert(mt.In(j)))
+				case reflect.String:
+					args = append(args, reflect.ValueOf("A").Convert(mt.In(j)))
+				default:
+					ok = false
+				}
+			}
+			if !ok || !hasInt || mt.NumOut() != 1 || mt.Out(0).Kind() != reflect.String {
+				continue
+			}
+			covered++
+			out := m.Call(args)[0].String()
+			if strings.Contains(out, "1,000") {
+				t.Errorf("%s: %s grouped a count: %q", lang, mt.String(), out)
+			}
+			if lang == "zh-Hans" && strings.Contains(out, ",") {
+				t.Errorf("zh-Hans: %s wrote an ASCII comma for a count: %q", mt.String(), out)
+			}
+		}
+		// The audit must cover the catalog's counting messages, not nothing.
+		if covered < 25 {
+			t.Fatalf("%s: only %d counting messages were checked", lang, covered)
+		}
+		t.Logf("%s: %d counting messages checked", lang, covered)
+	}
 }

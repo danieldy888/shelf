@@ -51,13 +51,13 @@ func main() {
 			switch {
 			case errors.Is(merr, errLegacyRootLocked):
 				log.Printf("%s: %v", appName, merr)
-				lm := systemLoc()
+				lm := startupLoc(root, oldRoot)
 				exitWithDialog(lm.StartupLegacyRunningTitle(),
 					lm.StartupLegacyRunningDetail(appName, oldRoot, root))
 				return
 			case merr != nil:
 				log.Printf("%s: 数据迁移失败：%v", appName, merr)
-				lm := systemLoc()
+				lm := startupLoc(root, oldRoot)
 				exitWithDialog(lm.StartupMigrateFailedTitle(),
 					lm.StartupMigrateFailedDetail(oldRoot, root, merr.Error()))
 				return
@@ -71,7 +71,7 @@ func main() {
 	if err != nil {
 		// 历史未成功打开时不创建托盘、快捷键或监控，也不改写原件。
 		log.Printf("%s: %v", appName, err)
-		lm := systemLoc()
+		lm := startupLoc(*dataDir)
 		message := lm.StartupHistoryUnreadable(appName)
 		detail := lm.StartupHistoryUnreadableDetail(*dataDir, err.Error())
 		if errors.Is(err, store.ErrLocked) {
@@ -93,13 +93,16 @@ func main() {
 	s.SetTextLimit(prefs.ClipboardLimit)
 	if perr != nil {
 		a.settingsBroken = true
-		a.notice(startupLoc(prefs).StartupSettingsBroken(perr.Error()))
+		a.notice(locales.In(resolveLanguage(prefs.Language, preferredLanguages())).StartupSettingsBroken(perr.Error()))
 	}
 	mygo.App.SetName(appName)
-	// The language of settings.json wins over the system's: "" follows the
-	// system again, so a Chinese system shows Chinese and any other English.
+	// The language of settings.json wins over the system's; "" follows the
+	// system again, with the one rule resolveLanguage states (a Chinese first
+	// language shows Chinese, every other English). The launch pins what the
+	// rule resolves, so what the app shows, its native AppKit text and its own
+	// strings agree; every launch resolves again from settings.json.
 	mygo.App.OnLocaleChanged(a.localeChanged)
-	mygo.App.SetLocale(languageTag(prefs.Language))
+	a.showLanguage()
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
@@ -127,6 +130,7 @@ func main() {
 		}
 		a.ready(*show)
 	})
+	mygo.App.OnDidBecomeActive(a.followSystemLanguage)
 	mygo.App.OnActivate(func(bool) {
 		// macOS reopen（如 open -a / Finder 再次启动已运行的实例）：设置
 		// 窗口开着就归还给它；否则等价于菜单栏图标点击——切换而非强制
@@ -174,27 +178,24 @@ func exitWithDialog(message, detail string) {
 	}
 }
 
-// systemLoc says the messages of the language the system shows, for the
-// startup path that runs before the shelf knows its language.
-func systemLoc() locales.Messages { return locales.In(mygo.App.Locale()) }
-
-// startupLoc says the messages of the language this launch will show: the
-// one settings.json names, or the system's when it follows the system.
-func startupLoc(prefs settings.Settings) locales.Messages {
-	if tag := languageTag(prefs.Language); tag != "" {
-		return locales.In(tag)
+// startupLoc says the messages of the language a launch shows, for the
+// startup path that fails before the shelf exists: the language settings.json
+// names, or the system's by the same rule resolveLanguage states. It reads
+// settings.json without writing it (settings.LanguageOf), so a launch that
+// cannot open the data directory leaves every file as it was; dirs are tried
+// in order, the first with a settings.json answering.
+func startupLoc(dirs ...string) locales.Messages {
+	setting := ""
+	for _, dir := range dirs {
+		if lang, ok := settings.LanguageOf(dir); ok {
+			setting = lang
+			break
+		}
 	}
-	return systemLoc()
+	return locales.In(resolveLanguage(setting, preferredLanguages()))
 }
 
 func (a *shelf) ready(show bool) {
-	// Following the system, mygo falls back to the source language (Chinese)
-	// for a language the app is not written in. ShelfU reads English to
-	// everyone whose system is not Chinese, so choose English when that
-	// fallback is what the system produced.
-	if englishFallback(mygo.App.Locale(), mygo.App.PreferredLanguages()) {
-		mygo.App.SetLocale("en")
-	}
 	a.locale = mygo.App.Locale()
 	a.newNotchWindow()
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool, button int) {

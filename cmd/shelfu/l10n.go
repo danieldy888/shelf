@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 
@@ -62,23 +63,62 @@ func languageTag(tag string) string {
 	return ""
 }
 
-// englishFallback reports whether the app, following the system, would show
-// its source language (Chinese) to a reader whose system language is neither
-// Chinese nor English: mygo falls back to the source language, and ShelfU
-// reads English to everyone outside a Chinese system.
-func englishFallback(locale string, preferred []string) bool {
-	if locale != "zh-Hans" {
-		return false
+// preferredLanguages says the system's languages, most preferred first, as
+// the user orders them in System Settings. A test replaces it to say what a
+// system would ask for.
+var preferredLanguages = mygo.App.PreferredLanguages
+
+// resolveLanguage is the one rule that picks the shelf's language: a language
+// settings.json names is shown exactly as it says, never overridden; "" (follow
+// the system) reads the system's first preferred language only, and shows
+// Chinese to a Chinese first language (zh-Hans, zh-Hant, zh-TW, zh-HK…) and
+// English to every other. mygo alone matches the whole list and falls back to
+// the source language, so it reads a second language ([fr-FR, zh-Hans-CN]) as
+// Chinese and a Traditional Chinese system as English; this rule does not.
+func resolveLanguage(setting string, preferred []string) string {
+	if tag := languageTag(setting); tag != "" {
+		return tag
 	}
-	for _, tag := range preferred {
-		if len(tag) >= 2 {
-			switch strings.ToLower(tag[:2]) {
-			case "zh", "en":
-				return false
-			}
+	if len(preferred) > 0 {
+		if lang := i18n.Normalize(preferred[0]); isChinese(lang) {
+			return "zh-Hans"
 		}
 	}
-	return true
+	return "en"
+}
+
+// isChinese reports whether a BCP 47 tag names Chinese in any script or
+// region: "zh", "zh-Hans", "zh-Hant-TW".
+func isChinese(tag string) bool {
+	return tag == "zh" || strings.HasPrefix(tag, "zh-")
+}
+
+// showLanguage shows the language settings.json names, or the one the system
+// chooses when it follows the system, and returns it. The launch and a switch
+// in Settings both run it, so the two cannot disagree: an explicit language is
+// shown as it is, and Follow System reads the same rule as a launch does — not
+// the source language mygo falls back to.
+func (a *shelf) showLanguage() string {
+	tag := resolveLanguage(a.settings.Language, preferredLanguages())
+	setAppLocale(tag)
+	return tag
+}
+
+// followSystemLanguage re-applies Follow System once the system's languages
+// may have changed. mygo keeps the language the app chose (SetLocale) and
+// reports a change of the user's languages only while the app follows them, so
+// the shelf re-resolves when it becomes active — the moment the user comes
+// back from System Settings, and the moment the window can show it.
+func (a *shelf) followSystemLanguage() {
+	// An explicit language wins; a shelf without a window (a headless view) or
+	// that has not heard its language yet (before ready) has nothing to
+	// re-resolve and nothing to draw it in.
+	if a.settings.Language != "" || a.win == nil || a.locale == "" {
+		return
+	}
+	if tag := resolveLanguage("", preferredLanguages()); tag != a.locale {
+		a.showLanguage()
+	}
 }
 
 // localeChanged follows the app's language as mygo changes it: the native

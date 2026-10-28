@@ -738,6 +738,9 @@ func (a *shelf) show(edge bool) {
 	if a.visible {
 		return
 	}
+	// 跟随系统时，系统语言可能已经变了（用户在系统设置里改过）：每次打开
+	// 面板都按同一条规则重新解析；显式选择的语言不受影响。
+	a.followSystemLanguage()
 	// Transient notices never pop out after the panel closes.
 	a.clearLive()
 	if a.win != nil {

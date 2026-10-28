@@ -176,6 +176,26 @@ func Load(dir string) (Settings, error) {
 	return s, nil
 }
 
+// LanguageOf reads the language dir/settings.json names, without creating,
+// rewriting or otherwise touching the file: the startup path that cannot open
+// the data directory still has to say its refusal in the user's language, and
+// it must leave the directory as it found it. ok is false when the file is
+// missing, unreadable or not JSON, so the caller can try another directory; a
+// file that parses reports its language, "" for follow the system.
+func LanguageOf(dir string) (language string, ok bool) {
+	data, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		return "", false
+	}
+	var s struct {
+		Language string `json:"language"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return "", false
+	}
+	return s.Language, true
+}
+
 // write saves s atomically: a temporary file in dir renamed over the target,
 // so a crash never leaves a half-written settings.json.
 func write(dir string, s Settings) error {
