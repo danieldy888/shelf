@@ -1,0 +1,19 @@
+{
+  "@@locale": "zh-Hans",
+  "appTrayTooltip": "ShelfU · 刘海工具",
+  "windowSettings": "ShelfU 设置",
+  "windowPins": "ShelfU 固定项",
+  "windowSnap": "ShelfU 排列预览",
+  "windowBasket": "ShelfU 篮子",
+  "windowIsland": "ShelfU 灵动岛",
+  "languageRow": "语言",
+  "languageCaption": "跟随系统时，中文系统显示中文，其他系统显示英文",
+  "languageFollowSystem": "跟随系统",
+  "languageChinese": "简体中文",
+  "languageEnglish": "English",
+  "general": "通用",
+  "shellStyleRow": "刘海样式",
+  "shellStyleCaption": "没有刘海的屏幕总是显示为灵动岛",
+  "shellStyleNotch": "刘海",
+  "shellStyleIsland": "灵动岛"
+}

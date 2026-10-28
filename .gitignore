@@ -24,3 +24,6 @@ resources/darwin-arm64/ShelfUNowPlaying.bundle
 # Brand assets are distributed separately from the MIT-licensed source.
 /resources/icon.png
 /resources/tray.png
+
+# mygo generate writes the catalogs' TypeScript module at the root.
+/locales.ts

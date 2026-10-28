@@ -1,0 +1,19 @@
+{
+  "@@locale": "en",
+  "appTrayTooltip": "ShelfU · Notch Utility",
+  "windowSettings": "ShelfU Settings",
+  "windowPins": "ShelfU Pinned Items",
+  "windowSnap": "ShelfU Snap Preview",
+  "windowBasket": "ShelfU Basket",
+  "windowIsland": "ShelfU Island",
+  "languageRow": "Language",
+  "languageCaption": "Follow System shows Chinese on Chinese systems and English everywhere else",
+  "languageFollowSystem": "Follow System",
+  "languageChinese": "简体中文",
+  "languageEnglish": "English",
+  "general": "General",
+  "shellStyleRow": "Notch Style",
+  "shellStyleCaption": "Screens without a notch always show the island",
+  "shellStyleNotch": "Notch",
+  "shellStyleIsland": "Dynamic Island"
+}

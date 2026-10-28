@@ -90,7 +90,7 @@ func (a *shelf) syncIdleIslands() {
 func (a *shelf) openIdleIsland(pl idlePlacement) *idleIslandWindow {
 	f := pl.Frame
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " 灵动岛", Width: f.Width, Height: f.Height,
+		Title: a.appLoc().WindowIsland(), Width: f.Width, Height: f.Height,
 		X: f.X, Y: f.Y,
 		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
 		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,

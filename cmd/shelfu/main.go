@@ -96,6 +96,10 @@ func main() {
 		a.notice("设置文件无法读取，本次使用默认设置：" + perr.Error())
 	}
 	mygo.App.SetName(appName)
+	// The language of settings.json wins over the system's: "" follows the
+	// system again, so a Chinese system shows Chinese and any other English.
+	mygo.App.OnLocaleChanged(a.localeChanged)
+	mygo.App.SetLocale(languageTag(prefs.Language))
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
@@ -171,6 +175,7 @@ func exitWithDialog(message, detail string) {
 }
 
 func (a *shelf) ready(show bool) {
+	a.locale = mygo.App.Locale()
 	a.newNotchWindow()
 	a.stopMouseObservation = mac.ObserveMouseDown(a.win.NativeHandle(), func(inside bool, button int) {
 		a.mouseDown(inside, button, mygo.Screen.CursorScreenPoint())
@@ -183,7 +188,7 @@ func (a *shelf) ready(show bool) {
 		}
 	})
 	var err error
-	trayOpts := mygo.TrayOptions{IconIsTemplate: true, ToolTip: appName + " · 刘海工具"}
+	trayOpts := mygo.TrayOptions{IconIsTemplate: true, ToolTip: a.appLoc().AppTrayTooltip()}
 	if dir, derr := mygo.App.Path(mygo.PathResources); derr == nil {
 		trayOpts.Icon = trayIcon(dir)
 	}

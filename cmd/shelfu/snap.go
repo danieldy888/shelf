@@ -665,7 +665,7 @@ func (a *shelf) advanceGhost(now time.Time) {
 func (a *shelf) openGhostWindow(g *snapGhost) {
 	f := g.frame
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " 排列预览", Width: f.Width, Height: f.Height,
+		Title: a.appLoc().WindowSnap(), Width: f.Width, Height: f.Height,
 		X: f.X, Y: f.Y,
 		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
 		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,

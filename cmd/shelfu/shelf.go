@@ -45,6 +45,7 @@ type shelf struct {
 	jumpLevel                                                   bool      // the next frame snaps the level spring (fresh open)
 	closeAt                                                     time.Time // when hide started the content fade; zero = none
 	settings                                                    settings.Settings
+	locale                                                      string // language the native surfaces say (tray, menus, dialogs); "" = source
 	modules                                                     []module
 	np                                                          *nowPlayingModule     // the peek wings read its state
 	pwr                                                         *powerModule          // battery / adapter events (live.go)

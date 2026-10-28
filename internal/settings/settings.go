@@ -40,6 +40,10 @@ type Settings struct {
 	// SnapWindows lets a window dragged by its title bar to the notch pick
 	// one of six arrangements.
 	SnapWindows bool `json:"snapWindows"`
+	// Language is the language the interface says: "" follows the system,
+	// else a tag of a language the app ships ("zh-Hans", "en"). The app
+	// keeps it here, not in the system's language settings.
+	Language string `json:"language"`
 	// AIUsage is the AI 用量 page: off by default; each source (quota and
 	// local usage) can be switched separately.
 	AIUsage AIUsageSettings `json:"aiUsage"`

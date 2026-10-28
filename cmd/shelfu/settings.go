@@ -29,6 +29,7 @@ var (
 	openPath             = mygo.Shell.OpenPath
 	accessibilityRequest = mac.RequestAccessibility
 	appVersionProbe      = mygo.App.Version
+	setAppLocale         = mygo.App.SetLocale
 )
 
 // settingsTheme is the one dark theme the window repaints with: ShelfU's UI
@@ -116,7 +117,7 @@ func (a *shelf) openSettings() {
 	a.loginOn, a.loginErr = openAtLogin(), ""
 	frame := settingsFrame(mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint()).WorkArea)
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " 设置", Width: settingsWidth, Height: settingsHeight,
+		Title: a.appLoc().WindowSettings(), Width: settingsWidth, Height: settingsHeight,
 		X: frame.X, Y: frame.Y,
 		Hidden: true, BackgroundColor: "#1E1E1F",
 		// The mock's title bar centers the title, which AppKit's stock bar
@@ -248,7 +249,7 @@ func (a *shelf) settingsView(c *ui.Context) {
 		ui.Row(c.Key("titlebar")).Height(float32(max(bar.Height, 38))).FillWidth().
 			AlignItems(ui.Center).Justify(ui.Center).Padding(0, edge, 0, edge).
 			DragWindow().Children(func() {
-			ui.Text(c, appName+" 设置").SingleLine().FontSize(13).FontWeight(600).TextColor(setInk2)
+			ui.Text(c, loc(c).WindowSettings()).SingleLine().FontSize(13).FontWeight(600).TextColor(setInk2)
 		})
 		ui.Scroll(c.Key("settings")).Fill().TrackScroll(&a.settingsScroll).Children(func() {
 			ui.Column(c.Key("sections")).Padding(2, 20, 16, 20).Gap(16).FillWidth().Children(func() {
@@ -363,6 +364,7 @@ func choiceSegments(current int, choices []int, format func(int) string) (labels
 // lives in settings.json; the login item stays editable while the file is
 // broken.
 func (a *shelf) settingsGeneralSection(c *ui.Context) {
+	l := loc(c)
 	settingsSection(c, "通用", "", false, func() {
 		loginCap, capColor := "", setInk3
 		if a.loginErr != "" {
@@ -378,17 +380,27 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 		})
 		settingsSep(c, "shellstyle")
 		ui.Column(c.Key("shellstyle")).Disabled(a.settingsBroken).FillWidth().Children(func() {
-			settingsRowCap(c, "shellstyle", "刘海样式", "没有刘海的屏幕总是显示为灵动岛", func() {
+			settingsRowCap(c, "shellstyle", l.ShellStyleRow(), l.ShellStyleCaption(), func() {
 				style := 0
 				if a.settings.ShellStyle.Normalized() == settings.ShellStyleIsland {
 					style = 1
 				}
-				if sg := ui.Segmented(c, &style, "刘海", "灵动岛").Label("刘海样式"); sg.Changed() {
+				if sg := ui.Segmented(c, &style, l.ShellStyleNotch(), l.ShellStyleIsland()).Label(l.ShellStyleRow()); sg.Changed() {
 					next := settings.ShellStyleNotch
 					if style == 1 {
 						next = settings.ShellStyleIsland
 					}
 					a.setShellStyle(next)
+				}
+			})
+		})
+		settingsSep(c, "language")
+		ui.Column(c.Key("language")).Disabled(a.settingsBroken).FillWidth().Children(func() {
+			settingsRowCap(c, "language", l.LanguageRow(), l.LanguageCaption(), func() {
+				idx := languageIndex(a.settings.Language)
+				if sg := ui.Segmented(c, &idx, l.LanguageFollowSystem(), l.LanguageChinese(), l.LanguageEnglish()).
+					Label(l.LanguageRow()); sg.Changed() {
+					a.setLanguage(languageAt(idx))
 				}
 			})
 		})
@@ -408,6 +420,45 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 				a.settings.SnapWindows, a.setSnapWindows)
 		})
 	})
+}
+
+// languageIndex maps a saved language to the segmented control's segment:
+// 0 follows the system, 1 is zh-Hans, 2 is English.
+func languageIndex(tag string) int {
+	switch tag {
+	case "zh-Hans":
+		return 1
+	case "en":
+		return 2
+	}
+	return 0
+}
+
+// languageAt maps the segmented control's segment to a saved language.
+func languageAt(idx int) string {
+	switch idx {
+	case 1:
+		return "zh-Hans"
+	case 2:
+		return "en"
+	}
+	return ""
+}
+
+// setLanguage saves the chosen language and shows it at once: settings.json
+// is the source of truth, and mygo.App.SetLocale redraws every window in it
+// without a restart.
+func (a *shelf) setLanguage(tag string) {
+	tag = languageTag(tag)
+	if tag == a.settings.Language {
+		return
+	}
+	next := a.settings
+	next.Language = tag
+	if !a.applySettings(next) {
+		return
+	}
+	setAppLocale(tag)
 }
 
 // applyOpenAtLogin switches the login item through SMAppService (macOS 13+)

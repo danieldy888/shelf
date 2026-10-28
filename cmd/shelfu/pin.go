@@ -428,7 +428,7 @@ var pinOpenPreview = func(it *pinItem) { it.openWindow(true) }
 func (it *pinItem) openWindow(preview bool) {
 	f := it.frame
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " 固定项", Width: f.Width, Height: f.Height,
+		Title: it.owner.appLoc().WindowPins(), Width: f.Width, Height: f.Height,
 		X: f.X, Y: f.Y,
 		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
 		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,

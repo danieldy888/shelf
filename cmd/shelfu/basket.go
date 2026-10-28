@@ -83,7 +83,7 @@ func (a *shelf) showBasket(p mygo.Point) {
 	a.basket.frame = basketFrame(d.WorkArea, p)
 	a.basket = basketState{shown: true, frame: a.basket.frame}
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " 篮子", Width: basketWidth, Height: basketHeight,
+		Title: a.appLoc().WindowBasket(), Width: basketWidth, Height: basketHeight,
 		X: a.basket.frame.X, Y: a.basket.frame.Y,
 		Hidden: true, Frameless: true, Transparent: true, DisableShadow: true,
 		AlwaysOnTop: true, SkipTaskbar: true, Panel: true,
