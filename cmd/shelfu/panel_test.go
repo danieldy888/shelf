@@ -295,16 +295,32 @@ func TestClipboardClearHidesCaptureFromClipboardPageOnly(t *testing.T) {
 	}
 
 	// 重新复制同一张图：去重命中，两页都回来。
+	//
+	// 去重会把这条提到最前并刷新 CreatedAt（store.moveToFront），截图标题
+	// 精确到秒，所以重新收录后标题可能换一个；这里先把时间往回挪 90 秒，
+	// 让“刷新前后的标题不同”每次都发生，断言也必须跟着重新取这条，
+	// 否则测试只是在赌两秒落在同一秒里。
+	s.Items[0].CreatedAt = time.Now().Add(-90 * time.Second)
+	clip = s.Items[0]
+	view.Frame()
 	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
 		t.Fatal(err)
 	}
+	if len(s.Items) != 1 || s.Items[0].ID != clip.ID {
+		t.Fatalf("re-copy must dedupe onto the same item, not add one: %+v", s.Items)
+	}
+	// 这一帧画的是刷新后的标题：从 store 重新取，而不是用刷新前的副本。
+	shown := s.Items[0]
+	if shown.CreatedAt.Equal(clip.CreatedAt) {
+		t.Fatalf("the re-copy did not refresh CreatedAt: %v", shown.CreatedAt)
+	}
 	view.Frame()
-	if s.Items[0].OffClip || !view.HasText(itemTitle(clip)) {
-		t.Fatalf("re-copy did not bring the capture back to the tray: %+v", s.Items[0])
+	if !view.HasText(itemTitle(shown)) {
+		t.Fatalf("re-copy did not bring the capture back to the tray: %+v; texts %v", shown, view.Texts())
 	}
 	a.setTab(pageClipboard)
 	view.Frame()
-	if !view.HasText(itemTitle(clip)) {
+	if !view.HasText(itemTitle(s.Items[0])) {
 		t.Fatalf("re-copy did not bring the capture back to the clipboard page; texts %v", view.Texts())
 	}
 
