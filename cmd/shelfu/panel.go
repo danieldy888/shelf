@@ -16,7 +16,8 @@ import (
 )
 
 var (
-	shelfSymbol = symbol(`<path d="M4 5v14h16V5M4 14h5l2 3h2l2-3h5M8 5h8M12 3v8m-3-3 3 3 3-3"/>`)
+	// 收进托盘：U 形托盘 + 向下箭头（空状态、探头「松开放入 / 放回」、拖放篮）。
+	shelfSymbol = symbol(`<path d="M4.5 11v4.5A4.5 4.5 0 0 0 9 20h6a4.5 4.5 0 0 0 4.5-4.5V11"/><path d="M12 3.5v10m-3.5-3.5 3.5 3.5 3.5-3.5"/>`)
 	textSymbol  = symbol(`<path d="M5 5h14M12 5v14M8 19h8"/>`)
 	fileSymbol  = symbol(`<path d="M14 3H6v18h12V7zM14 3v5h4M9 12h6M9 16h6"/>`)
 	closeSymbol = symbol(`<path d="m6 6 12 12M18 6 6 18"/>`)
@@ -27,7 +28,7 @@ var (
 	trayNavSymbol   = symbol(`<path d="M4 13h4.5l1.5 2.5h4l1.5-2.5H20"/><path d="M5.5 6h13L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5z"/>`)
 	clipNavSymbol   = symbol(`<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5h5v2.5h-5zM9 11h6M9 14.5h6"/>`)
 	trashSymbol     = symbol(`<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>`)
-	gearSymbol      = symbol(`<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M6 18l1.4-1.4M16.6 7.4 18 6"/>`)
+	gearSymbol      = symbol(`<path d="M10.49 5.27L10.72 2.69A9.4 9.4 0 0 1 13.28 2.69L13.51 5.27A6.9 6.9 0 0 1 17.08 7.33L19.43 6.24A9.4 9.4 0 0 1 20.7 8.45L18.58 9.94A6.9 6.9 0 0 1 18.58 14.06L20.7 15.55A9.4 9.4 0 0 1 19.43 17.76L17.08 16.67A6.9 6.9 0 0 1 13.51 18.73L13.28 21.31A9.4 9.4 0 0 1 10.72 21.31L10.49 18.73A6.9 6.9 0 0 1 6.92 16.67L4.57 17.76A9.4 9.4 0 0 1 3.3 15.55L5.42 14.06A6.9 6.9 0 0 1 5.42 9.94L3.3 8.45A9.4 9.4 0 0 1 4.57 6.24L6.92 7.33A6.9 6.9 0 0 1 10.49 5.27Z"/><circle cx="12" cy="12" r="2.8"/>`)
 	chevronUpSymbol = symbol(`<path d="M6 15l6-6 6 6"/>`)
 	chevronDownSym  = symbolWidth(`<path d="M6 9l6 6 6-6"/>`, 2.2)
 	searchSymbol    = symbol(`<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>`)
