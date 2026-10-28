@@ -100,8 +100,12 @@ type shelf struct {
 	topInset                                                    int
 	notchX, notchY, notchW, notchH                              int
 	hasNotch                                                    bool
-	island                                                      bool // this display draws the floating island shell
-	islandTop                                                   int  // island shell's top inset inside the window
+	island                                                      bool           // this display draws the floating island shell
+	islandTop                                                   int            // island shell's top inset inside the window
+	dispWork                                                    mygo.Rectangle // the display's visible frame, measured by placeAt
+	islandDX, islandDY                                          int            // dragged island: offsets from the default axis and row
+	islandPress                                                 islandPress
+	islandDrag                                                  bool // the press on the closed island became a move
 	dispID                                                      int64
 	idleIslands                                                 []*idleIslandWindow
 	peeking                                                     bool

@@ -27,22 +27,31 @@ func (a *shelf) place(p mygo.Point) {
 	a.syncIdleIslands()
 }
 
+// displayNearest is the display lookup placeAt measures from. The app always
+// asks WindowServer; tests replace it with a synthetic layout so placement,
+// the saved island spot and the clamps can be driven without a screen.
+var displayNearest = func(p mygo.Point) mygo.Display { return mygo.Screen.DisplayNearestPoint(p) }
+
+// notchRect measures a display's camera housing; tests replace it with the
+// synthetic layout displayNearest returns.
+var notchRect = mac.NotchRect
+
 func (a *shelf) placeAt(p mygo.Point) {
-	d := mygo.Screen.DisplayNearestPoint(p)
-	a.dispBounds = d.Bounds
+	d := displayNearest(p)
+	a.dispBounds, a.dispWork = d.Bounds, d.WorkArea
 	a.dispID = d.ID
-	nx, ny, nw, nh, hasNotch := mac.NotchRect(d.ID)
+	nx, ny, nw, nh, hasNotch := notchRect(d.ID)
 	a.notchX, a.notchY, a.notchW, a.notchH, a.hasNotch = nx, ny, nw, nh, hasNotch
 	a.topInset = nh
 	a.applyShellStyle()
 	// The panel, the peek pill and the strip share one axis: the anchor's
 	// centre (the notch, or the display centre on a screen without one).
 	// A different centre made the expansion jump sideways.
-	a.x = d.Bounds.X + (d.Bounds.Width-sheetW)/2
-	if a.notchW > 0 {
-		a.x = a.notchX + a.notchW/2 - sheetW/2
-	}
-	a.y = d.Bounds.Y
+	a.x = a.anchorCenterX() - sheetW/2
+	// The user's own place for this display, when the island was dragged:
+	// showing, folding and a display change all replay it instead of the
+	// default row.
+	a.placeIslandAxis()
 }
 
 // overAnchor 只认实测几何：光标真正进入锚点热区（刘海，或者灵动岛的
@@ -344,10 +353,11 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 		return
 	}
 	// A press on another screen's idle capsule moves the resident window
-	// there first — every screen's island opens its own panel.
+	// there first — every screen's island opens its own panel. It arms the
+	// drag the same way, so an idle capsule anywhere can be moved.
 	if !inside && button == 0 && !a.visible && a.idleIslandAt(p) {
 		a.place(p)
-		a.show(false)
+		a.beginIslandPress(p)
 		return
 	}
 	// The capsule is drawn over the menu bar's empty centre. WindowServer
@@ -360,12 +370,14 @@ func (a *shelf) mouseDown(inside bool, button int, p mygo.Point) {
 	// the panel nor claims the event for it.
 	// The idle island is a click target of its own: its window takes the
 	// press only while the pointer is on the capsule, and a press that
-	// slipped through to the window underneath still opens the shelf — the
-	// capsule is always visible, unlike the notch's hidden band. A finished
-	// download's capsule is a button of its own; its view must receive the
-	// press, so it is never swallowed here.
+	// slipped through to the window underneath still reaches the island —
+	// the capsule is always visible, unlike the notch's hidden band. The
+	// press only arms the move; the release either drops the panel open (a
+	// tap) or ends the drag where it stopped. A finished download's capsule
+	// is a button of its own; its view must receive the press, so it is
+	// never swallowed here.
 	if a.island && !a.visible && !a.liveClickable(time.Now()) && a.overShell(p) {
-		a.show(false)
+		a.beginIslandPress(p)
 		return
 	}
 	if (a.peeking || a.fb.drawn || a.fb.retracting || a.peekProgress > 0.01) && !a.visible && a.overPeekPill(p) {
@@ -450,7 +462,7 @@ func (a *shelf) syncMousePassThrough() {
 // overlayWanted reports whether the current state needs the overlay to take
 // the mouse at all: hovering, opening, open, folding, or a capture capsule.
 func (a *shelf) overlayWanted() bool {
-	return a.visible || a.fx.openK > 0.02 || a.dragging || a.pointerDrag ||
+	return a.visible || a.fx.openK > 0.02 || a.dragging || a.pointerDrag || a.islandDrag ||
 		a.peeking || a.peekProgress > 0.01 || a.fb.drawn || a.fb.retracting ||
 		a.liveUp()
 }
@@ -465,7 +477,7 @@ func (a *shelf) overlayAcceptsMouse() bool {
 	if a.winH == 0 {
 		return wanted
 	}
-	if a.dragging || a.pointerDrag {
+	if a.dragging || a.pointerDrag || a.islandDrag {
 		return wanted
 	}
 	p := cursorPoint()
@@ -1031,10 +1043,30 @@ func (a *shelf) animate(now time.Time) {
 	}
 }
 
-// stripCenter is shared by the drop surface and its protected approach region.
-func (a *shelf) stripCenter() int {
-	if a.notchW <= 0 {
-		return a.x + sheetW/2
+// anchorCenterX is the shell's default horizontal axis on the current
+// display: the hardware notch's centre, or the display's centre without one.
+// a.x is the fallback for a shelf with no measured geometry (a headless
+// test shelf that only knows its own window).
+func (a *shelf) anchorCenterX() int {
+	switch {
+	case a.notchW > 0:
+		return a.notchX + a.notchW/2
+	case a.dispBounds.Width > 0:
+		return a.dispBounds.X + a.dispBounds.Width/2
 	}
-	return a.notchX + a.notchW/2
+	return a.x + sheetW/2
+}
+
+// stripCenter is shared by the drop surface and its protected approach
+// region: the default axis, moved by wherever the user dragged the island.
+func (a *shelf) stripCenter() int {
+	return a.anchorCenterX() + a.islandDX
+}
+
+// panelDropRect is the open panel's box as the drop and release checks read
+// it: the sheet's width on the strip's axis, hanging from the window's top
+// edge. A dragged island moves the panel, so these checks must not read the
+// window's default left edge.
+func (a *shelf) panelDropRect() mygo.Rectangle {
+	return mygo.Rectangle{X: a.stripCenter() - sheetW/2, Y: a.y, Width: sheetW, Height: a.panelH()}
 }

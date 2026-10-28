@@ -330,7 +330,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		}
 		if a.win != nil {
 			p := cursorPoint()
-			if p.X < a.x || p.X >= a.x+sheetW || p.Y < a.y || p.Y >= a.y+a.panelH() {
+			if !insideRect(p, a.panelDropRect()) {
 				d.frozen = false
 				*d = dropZoneState{}
 				return nil // released outside the panel: nothing to deliver
@@ -346,7 +346,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 		inside := over || a.win == nil
 		if !inside {
 			p := cursorPoint()
-			inside = p.X >= a.x && p.X < a.x+sheetW && p.Y >= a.y && p.Y < a.y+a.panelH()
+			inside = insideRect(p, a.panelDropRect())
 		}
 		if !inside {
 			return nil
@@ -385,7 +385,7 @@ func (a *shelf) dropZoneSnap(over bool) []string {
 	}
 	if a.win != nil {
 		p := cursorPoint()
-		if p.X < a.x || p.X >= a.x+sheetW || p.Y < a.y || p.Y >= a.y+a.panelH() {
+		if !insideRect(p, a.panelDropRect()) {
 			return nil // released outside the panel: nothing to deliver
 		}
 	}

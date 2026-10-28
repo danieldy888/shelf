@@ -392,6 +392,16 @@ func (a *shelf) settingsGeneralSection(c *ui.Context) {
 				}
 			})
 		})
+		if a.island {
+			settingsSep(c, "islandpos")
+			ui.Column(c.Key("islandpos")).Disabled(a.settingsBroken).FillWidth().Children(func() {
+				settingsRowCap(c, "islandpos", "灵动岛位置", "按住小岛拖到任意位置，松手后留在那里", func() {
+					if ui.Button(c, "恢复默认位置").FontSize(12).Label("恢复默认位置").Clicked() {
+						a.resetIslandPosition()
+					}
+				})
+			})
+		}
 		settingsSep(c, "snap")
 		ui.Column(c.Key("snap")).Disabled(a.settingsBroken).FillWidth().Children(func() {
 			settingsToggleCap(c, "snap", "拖窗口到刘海分屏", "把窗口拖到刘海，松手就排好", setInk3,

@@ -130,13 +130,26 @@ func dragSummonsBasket(types []string) bool {
 	return false
 }
 
+// notchGuardOn reports whether the drop-protection corridor belongs to the
+// current shell: the notch, or the island while it still sits on its default
+// row. A moved island is not the screen's top edge, and the corridor also
+// pushes a dragged pointer down onto its landing row, so it must not exist
+// there.
+func (a *shelf) notchGuardOn() bool {
+	return !(a.island && a.islandDY != 0)
+}
+
 // Protect the notch's approach corridor, including its centre. The lower edge
 // is below the camera housing but still inside the shelf's drag trigger.
 // The event filter (Accessibility only) is armed once and stays up for file
 // drags and window moves alike; the cursor pin needs no permission and runs
 // only while a file drag is in progress.
 func (a *shelf) syncDragGuard() {
-	if a.win == nil {
+	// The guard exists to keep the Spaces edge gesture from firing at the
+	// screen's top edge, under the notch. An island the user moved away from
+	// that row is not there, so the corridor — which also pushes the cursor
+	// down onto its landing row — must not exist either.
+	if a.win == nil || !a.notchGuardOn() {
 		a.stopDragGuard()
 		return
 	}
@@ -229,6 +242,12 @@ func (a *shelf) monitorDrag(now time.Time) {
 	if !a.visible && !insideRect(p, a.dispBounds) {
 		a.place(p)
 	}
+	// A press held on the closed island owns the gesture: it is a move (or a
+	// tap, on release) and nothing else may react to that pointer — no drop
+	// band, no peek, no auto-hide, no window-snap session.
+	if a.islandDragTick(p, dragLeftDown()) {
+		return
+	}
 	// 拖窗口分屏：这一次按下如果是拖动别的应用的窗口，而不是系统拖拽
 	// （拖文件会写 NSDragPboard），就跟着指针走并接管刘海面板。
 	a.snapTick(now, p, active)
@@ -278,7 +297,9 @@ func (a *shelf) monitorDrag(now time.Time) {
 	// edgeLeaveDelay 后缩回刘海；点击探头/托盘唤出的托盘由用户显式收起。
 	// 动画途中不判离开。
 	if a.visible && a.edgeOpened && !a.received {
-		inside := p.X >= a.x-24 && p.X < a.x+sheetW+24 && p.Y >= a.y && p.Y < a.y+a.panelH()+24
+		panel := a.panelDropRect()
+		inside := p.X >= panel.X-24 && p.X < panel.X+panel.Width+24 &&
+			p.Y >= panel.Y && p.Y < panel.Y+panel.Height+24
 		// Keep the panel alive for the whole card gesture, including
 		// drag-out and settling; restart the leave delay afterward.
 		tp := a.toolsPage()

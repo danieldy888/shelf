@@ -274,7 +274,7 @@ func TestIdleIslandPlacements(t *testing.T) {
 		{ID: 2, Bounds: mygo.Rectangle{X: 1470, Y: 0, Width: 2560, Height: 1440}},
 		{ID: 3, Bounds: mygo.Rectangle{X: 0, Y: 956, Width: 1920, Height: 1080}},
 	}
-	got := idleIslandPlacements(displays, 1, settings.ShellStyleNotch)
+	got := idleIslandPlacements(displays, 1, settings.ShellStyleNotch, nil)
 	want := []idlePlacement{
 		{DisplayID: 2, Frame: mygo.Rectangle{X: 1470 + (2560-islandIdleW)/2, Y: islandTopGap, Width: islandIdleW, Height: islandIdleH}},
 		{DisplayID: 3, Frame: mygo.Rectangle{X: (1920 - islandIdleW) / 2, Y: 956 + islandTopGap, Width: islandIdleW, Height: islandIdleH}},
@@ -289,9 +289,27 @@ func TestIdleIslandPlacements(t *testing.T) {
 	}
 	// The display the resident window lives on draws its own capsule; the
 	// others keep theirs. A notched screen never gets an extra one.
-	onOther := idleIslandPlacements(displays, 2, settings.ShellStyleIsland)
+	onOther := idleIslandPlacements(displays, 2, settings.ShellStyleIsland, nil)
 	if len(onOther) != 1 || onOther[0].DisplayID != 3 {
 		t.Fatalf("with the shelf on display 2, placements = %+v", onOther)
+	}
+	// A capsule the user dragged on another screen waits there, clamped like
+	// the resident island: the stored spot (display-relative) is replayed,
+	// and one that would hang the panel off the screen pulls back in.
+	saved := map[string]settings.IslandPos{
+		islandSpotKey(2): {X: 300, Y: 420},
+		islandSpotKey(3): {X: -500, Y: 0},
+	}
+	moved := idleIslandPlacements(displays, 1, settings.ShellStyleNotch, saved)
+	pw, _ := islandPanelRoom()
+	if len(moved) != 2 {
+		t.Fatalf("dragged placements = %+v, want two capsules", moved)
+	}
+	if f := moved[0].Frame; f.X != 1470+300-islandIdleW/2 || f.Y != 420 {
+		t.Fatalf("dragged capsule = %+v, want display 2 at (300, 420)", f)
+	}
+	if f := moved[1].Frame; f.X != pw/2-islandIdleW/2 || f.Y != 956+islandTopGap {
+		t.Fatalf("clamped capsule = %+v, want the panel's left edge and the default row", f)
 	}
 }
 
@@ -350,20 +368,26 @@ func TestIslandHoverPeekFromMonitor(t *testing.T) {
 }
 
 // A press on the visible idle capsule opens the shelf even when the press
-// was delivered to another process (the capsule sits over the desktop).
+// was delivered to another process (the capsule sits over the desktop). The
+// press only arms the move now: a tap opens on the release.
 func TestIslandIdlePressOpens(t *testing.T) {
 	a := islandShelf(false, settings.ShellStyleNotch)
 	a.fx.w, a.fx.h = islandIdleW, islandIdleH
-	a.mouseDown(false, 0, mygo.Point{X: 735, Y: islandTopGap + 5})
+	p := mygo.Point{X: 735, Y: islandTopGap + 5}
+	a.mouseDown(false, 0, p)
+	if a.visible {
+		t.Fatal("a press alone opened the shelf before the release")
+	}
+	dragIslandTick(t, a, p, false)
 	if !a.visible {
-		t.Fatal("a press on the idle island did not open the shelf")
+		t.Fatal("a release on the idle island did not open the shelf")
 	}
 	// Transparent margins are not the capsule.
 	b := islandShelf(false, settings.ShellStyleNotch)
 	b.fx.w, b.fx.h = islandIdleW, islandIdleH
 	b.mouseDown(false, 0, mygo.Point{X: 735 - islandIdleW/2 - 5, Y: islandTopGap + 5})
-	if b.visible {
-		t.Fatal("a press beside the capsule opened the shelf")
+	if b.islandPress.active {
+		t.Fatal("a press beside the capsule armed a move")
 	}
 }
 
@@ -473,6 +497,10 @@ func TestIslandPressOnFinishedDownloadCapsule(t *testing.T) {
 		cur: liveEvent{kind: liveHeadset, label: "AirPods Pro"}}
 	phones.fx.w, phones.fx.h, phones.peekProgress = 330, islandCapsuleH, 1
 	phones.mouseDown(true, 0, point)
+	if phones.visible {
+		t.Fatal("a press on the island opened the shelf before the release")
+	}
+	dragIslandTick(t, phones, point, false)
 	if !phones.visible {
 		t.Fatal("a headphone notice on the island no longer opens the shelf")
 	}

@@ -205,10 +205,17 @@ func pinReleaseEdge(p mygo.Point, area mygo.Rectangle) pinEdge {
 }
 
 // pinReturnZone reports whether the dragged pin's centre lands on the
-// notch: the hardware notch when the shelf tracks this display, else a
-// release-band the same shape at the top of the display the centre is
+// shelf's own closed shell: the floating island's capsule wherever the user
+// left it, else the hardware notch when the shelf tracks this display, else
+// a release-band the same shape at the top of the display the centre is
 // on. The same zone drives the 松开放回 bulge and the put-back release.
 func (a *shelf) pinReturnZone(centre mygo.Point) bool {
+	if a.island {
+		// The floating island is its own put-back target: the card goes
+		// back where the island is, which need not be the notch's column
+		// or the top of the screen.
+		return pinNear(centre, a.islandRect(), notchHoverPadX)
+	}
 	if centre.Y >= a.notchY+notchHoverPadY+pinReturnH {
 		return false
 	}

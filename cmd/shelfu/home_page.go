@@ -645,7 +645,7 @@ func (p *homePage) homeDrop(d *homePress) {
 		// asking the window server on every grid drop would block a
 		// headless build.
 		cursor := cursorPoint()
-		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: sheetW, Height: a.panelH()}
+		panel := a.panelDropRect()
 		if !insideRect(cursor, panel) {
 			span := homePinSpan(d.id, d.orig.W)
 			w := pinCardW

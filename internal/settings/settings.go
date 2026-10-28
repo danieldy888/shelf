@@ -47,6 +47,19 @@ type Settings struct {
 	// download notices on the notch. Every switch is on for a fresh
 	// install; a settings.json without the object keeps all three.
 	LiveActivities LiveActivitySettings `json:"liveActivities"`
+	// IslandPos is where the floating island was left on each display, by
+	// display id. A display with no entry keeps the default position; the
+	// notch style ignores the whole map.
+	IslandPos map[string]IslandPos `json:"islandPos,omitempty"`
+}
+
+// IslandPos is the floating island's place on one display: the shell's
+// centre X and its top Y, measured from the display's origin. Storing the
+// spot rather than a delta keeps it meaningful when a display's origin
+// moves in 显示器 settings.
+type IslandPos struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 // LiveActivitySettings switches the three realtime activities. A missing

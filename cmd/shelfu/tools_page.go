@@ -534,7 +534,7 @@ func (p *toolsPage) toolCardDrop(d *toolPress, cursor mygo.Point) {
 		// A release beyond the panel's drawn body pins the card at the
 		// cursor (grab point preserved so the window lands under it);
 		// a release on another pane of the panel still flies back.
-		panel := mygo.Rectangle{X: a.x, Y: a.y, Width: sheetW, Height: a.panelH()}
+		panel := a.panelDropRect()
 		if !insideRect(cursor, panel) {
 			spec := p.dragSpec(d.id)
 			span, w := spec.Span, pinCardW

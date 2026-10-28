@@ -88,6 +88,9 @@ func (a *shelf) setShellStyle(style settings.ShellStyle) {
 		a.win.Invalidate()
 	} else {
 		a.applyShellStyle()
+		// Headless: the style still decides whether this display carries a
+		// saved place at all.
+		a.placeIslandAxis()
 	}
 	a.syncIdleIslands()
 }
@@ -196,6 +199,7 @@ func (a *shelf) frameRoom(expW, expH float32) (w, h int) {
 type islandDisplay struct {
 	ID       int64
 	Bounds   mygo.Rectangle
+	Work     mygo.Rectangle // the visible frame the panel must fit in
 	HasNotch bool
 }
 
@@ -207,26 +211,32 @@ type idlePlacement struct {
 
 // idleIslandPlacements lists the idle capsules every screen without a
 // camera housing shows while the main shelf window lives on another
-// display: horizontally centred, islandTopGap below the top edge, 120 × 30.
-// style is accepted so callers state the preference they are rendering —
-// a screen without a housing is always the island, even when the setting
-// still says 刘海. Pure; unit-tested.
-func idleIslandPlacements(displays []islandDisplay, current int64, style settings.ShellStyle) []idlePlacement {
+// display: each at the place the user left it there, or centred on the
+// top edge when that screen was never dragged. style is accepted so callers
+// state the preference they are rendering — a screen without a housing is
+// always the island, even when the setting still says 刘海. saved is
+// settings.IslandPos keyed by display id. Pure; unit-tested.
+func idleIslandPlacements(displays []islandDisplay, current int64, style settings.ShellStyle, saved map[string]settings.IslandPos) []idlePlacement {
 	_ = style
 	var out []idlePlacement
 	for _, d := range displays {
 		if d.HasNotch || d.ID == current {
 			continue
 		}
-		out = append(out, idlePlacement{
-			DisplayID: d.ID,
-			Frame: mygo.Rectangle{
-				X:      d.Bounds.X + (d.Bounds.Width-islandIdleW)/2,
-				Y:      d.Bounds.Y + islandTopGap,
-				Width:  islandIdleW,
-				Height: islandIdleH,
-			},
-		})
+		frame := mygo.Rectangle{
+			X:      d.Bounds.X + (d.Bounds.Width-islandIdleW)/2,
+			Y:      d.Bounds.Y + islandTopGap,
+			Width:  islandIdleW,
+			Height: islandIdleH,
+		}
+		if pos, ok := saved[islandSpotKey(d.ID)]; ok {
+			// The same clamp the resident island gets, so a capsule can
+			// never be restored off the screen it belongs to.
+			spot := clampIslandSpot(islandSpot{Centre: pos.X, Top: pos.Y}, d.Bounds, d.Work, islandTopGap)
+			frame.X = d.Bounds.X + spot.Centre - islandIdleW/2
+			frame.Y = d.Bounds.Y + spot.Top
+		}
+		out = append(out, idlePlacement{DisplayID: d.ID, Frame: frame})
 	}
 	return out
 }
