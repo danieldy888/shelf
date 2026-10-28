@@ -561,9 +561,14 @@ func writeLiveFile(t *testing.T, path string, data []byte) {
 // pixels), and the capsules use the completion capsule's 22pt body.
 func TestLiveShapesFitTheNotchBand(t *testing.T) {
 	a := liveShelf()
-	if liveWingPad+liveBarW+10+22 > liveWingW {
-		t.Fatalf("the 66pt bar and a three-digit number need %gpt, wing is %d",
-			float32(liveWingPad+liveBarW+10+22), liveWingW)
+	// 26pt is a three-digit 13pt semibold number; keep at least 12pt clear
+	// of the camera housing so the bar never slides under the notch.
+	if need := liveWingPad + liveBarW + 10 + 26 + 12; need > liveWingW {
+		t.Fatalf("the charge bar and a three-digit number need %dpt with margin, wing is %d",
+			need, liveWingW)
+	}
+	if need := liveWingPad + liveBarW + 10 + 26; need > islandLiveWingW {
+		t.Fatalf("the island's charge group needs %dpt, wing is %d", need, islandLiveWingW)
 	}
 	if liveWingPad+11+9+50 > liveWingW {
 		t.Fatalf("the charging words need %gpt, wing is %d",

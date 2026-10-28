@@ -3,7 +3,7 @@
 package main
 
 // Drawing for the realtime activities: the charging wings (icon + words on
-// the left, the 66×6 level bar and its number on the right, Droppy's
+// the left, the 36×6 level bar and its number on the right, Droppy's
 // shape), the download wings (ring + percent or megabytes), and the
 // capsule under the notch for headphones and a finished download. Every
 // line is laid out at the shell's final size and uncovered by the growing
@@ -69,7 +69,7 @@ func (a *shelf) powerWings(c *ui.Context, shellW, shellH, k float32, ev liveEven
 	})
 }
 
-// levelBar is the 66 × 6 charge track: the tone at 20% for the track, and
+// levelBar is the 36 × 6 charge track: the tone at 20% for the track, and
 // the solid tone for the fill inside a real blurred box shadow (6pt, half
 // opacity) — the design's soft halo, not a stack of outlines.
 func levelBar(c *ui.Context, pct int, col ui.Color) {

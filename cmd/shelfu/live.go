@@ -46,12 +46,13 @@ var (
 
 const (
 	// liveWingW is how far each side grows for charging and downloads: the
-	// notch only gets wider, never taller than its band plus 4. The design
-	// sheet's 88pt wing leaves 74pt inside the visible band after its 14pt
-	// inset, while the 66pt bar + 10pt gap + a three-digit 13pt number need
-	// 98pt; the middle of the shell sits behind the camera and has no
-	// pixels, so the wing takes the width its right-hand content needs
-	// (14 + 66 + 10 + 22 = 112) and both sides stay symmetric.
+	// notch only gets wider, never taller than its band plus 4. The middle
+	// of the shell sits behind the camera and has no pixels, so the whole
+	// right-hand group (bar + 10pt gap + a three-digit 13pt number, about
+	// 26pt) must sit inside the visible wing after its 14pt inset. With the
+	// 36pt bar that is 14 + 36 + 10 + 26 = 86 of 112, leaving room before
+	// the camera housing; the old 66pt bar filled the wing to the last point
+	// and slid under the notch on a real MacBook (10-28 photo).
 	liveWingW   = 112
 	liveWingPad = 14
 	// islandLiveWingW is the same side on the island: its whole shell has
@@ -59,8 +60,9 @@ const (
 	// beside a camera housing, and the design preview's 88pt is enough
 	// (120 + 2×88 wide, 30 + 4 high).
 	islandLiveWingW = 88
-	// liveBarW/liveBarH are the charge bar's size (Droppy's).
-	liveBarW = 66
+	// liveBarW/liveBarH are the charge bar's size: short enough that the
+	// bar never reaches under the camera housing.
+	liveBarW = 36
 	liveBarH = 6
 
 	liveHoldCharge   = 3 * time.Second
