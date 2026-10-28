@@ -1,5 +1,6 @@
 {
   "name": "ShelfU",
+  "slug": "shelfu",
   "identifier": "local.y3.shelfu",
   "version": "1.10.3",
   "updates": {
