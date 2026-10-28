@@ -105,11 +105,11 @@ func (msgs Messages) LanguageRow() string {
 	return Catalog.Format(msgs.locale, "languageRow", nil)
 }
 
-// LanguageCaption says "中文系统读中文，其他系统读英文"
+// LanguageCaption says "跟随系统时，中文系统显示中文，其他显示英文"
 // in the language the app shows.
 func LanguageCaption() string { return In(i18n.Locale()).LanguageCaption() }
 
-// LanguageCaption says "中文系统读中文，其他系统读英文"
+// LanguageCaption says "跟随系统时，中文系统显示中文，其他显示英文"
 // in the language of msgs.
 func (msgs Messages) LanguageCaption() string {
 	return Catalog.Format(msgs.locale, "languageCaption", nil)

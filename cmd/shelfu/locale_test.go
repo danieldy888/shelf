@@ -153,6 +153,164 @@ func TestEnglishSettingsWindowHasNoChinese(t *testing.T) {
 	}
 }
 
+// TestEnglishSettingsWindowLayout is the Settings window's truncation and
+// overlap audit: in English no group's text leaves the window, no two texts
+// overlap, no single-line label is cut (the settingsFit seam), and a caption
+// that wraps grows its row instead of pressing the hairline or the next row.
+func TestEnglishSettingsWindowLayout(t *testing.T) {
+	var cut []string
+	orig := settingsFit
+	settingsFit = func(s string) { cut = append(cut, s) }
+	t.Cleanup(func() { settingsFit = orig })
+
+	a, view := newSettingsShelf(t)
+	a.locale = "en"
+	view.SetLocale("en")
+	l := locales.In("en")
+
+	// Both ends of the scroll, so every group is drawn at least once.
+	seen := map[string]bool{}
+	var audit func(where string)
+	audit = func(where string) {
+		view.Frame()
+		view.Frame()
+		texts := view.Texts()
+		if where == "top" {
+			for i, text := range texts {
+				if text == "简体中文" {
+					texts[i] = ""
+				}
+			}
+			assertNoHan(t, "settings/"+where, texts)
+		}
+		for _, text := range view.Texts() {
+			seen[text] = true
+		}
+		assertSettingsLayout(t, view, where)
+	}
+
+	a.settingsScroll.Y = 0
+	audit("top")
+	// Each group is on screen at one end or the other.
+	for _, group := range []string{
+		l.General(), l.PermTitle(), l.SettingsLiveSection(), l.SettingsAISection(),
+		l.SettingsClipboardSection(), l.SettingsTraySection(), l.SettingsShortcutsSection(),
+	} {
+		if !seen[group] {
+			t.Errorf("settings: the group %q was never drawn", group)
+		}
+	}
+	// The rows that wrap keep air above and below: the caption's box ends
+	// before the next row starts.
+	for _, pair := range [][2]string{
+		{l.ShellStyleCaption(), l.LanguageRow()},
+		{l.LanguageCaption(), l.SettingsSnapRow()},
+	} {
+		cap, ok := view.Find(pair[0])
+		if !ok {
+			t.Fatalf("caption %q missing", pair[0])
+		}
+		next, ok := view.Find(pair[1])
+		if !ok {
+			t.Fatalf("row %q missing", pair[1])
+		}
+		if cap.H <= 20 {
+			t.Errorf("%q did not wrap into two lines (height %.1f)", pair[0], cap.H)
+		}
+		if gap := next.Y - (cap.Y + cap.H); gap < 2 {
+			t.Errorf("%q ends %.1fpt above %q: the caption presses the next row", pair[0], gap, pair[1])
+		}
+	}
+
+	a.settingsScroll.Y = 1e6
+	audit("bottom")
+
+	// A one-line row keeps its 40pt height: the padding only shows up where a
+	// caption wraps, so the Chinese layout is the one it always was.
+	a.settingsScroll.Y = 0
+	view.Frame()
+	view.Frame()
+	if r, ok := view.Find(l.SettingsLoginRow()); ok && r.H != 40 {
+		t.Errorf("a one-line row is %.1fpt tall, want 40", r.H)
+	}
+	for _, note := range cut {
+		t.Errorf("settings: %s", note)
+	}
+}
+
+// assertSettingsLayout checks the Settings window's boxes: no text leaves the
+// window sideways, and no two texts drawn in it overlap.
+func assertSettingsLayout(t *testing.T, view *ui.Tester, where string) {
+	t.Helper()
+	type box struct {
+		text string
+		r    ui.Rect
+	}
+	var boxes []box
+	seen := map[ui.Rect]bool{}
+	for _, text := range view.Texts() {
+		r, ok := view.Find(text)
+		if !ok || r.W <= 0 || r.H <= 0 || seen[r] {
+			continue
+		}
+		seen[r] = true
+		if r.X < -0.5 || r.X+r.W > settingsWidth+0.5 {
+			t.Errorf("%s: %q leaves the window sideways: %+v", where, text, r)
+		}
+		if r.Y < -0.5 || r.Y+r.H > settingsHeight+0.5 {
+			continue // scrolled out of the viewport
+		}
+		boxes = append(boxes, box{text, r})
+	}
+	// A toggle row carries its label as its accessible name, so Find answers
+	// the row, which holds its own label and caption: a box that contains
+	// another box is a container, not a line of text.
+	var lines []box
+	for i, b := range boxes {
+		container := false
+		for j, o := range boxes {
+			if i != j && o.r.X >= b.r.X-0.5 && o.r.Y >= b.r.Y-0.5 &&
+				o.r.X+o.r.W <= b.r.X+b.r.W+0.5 && o.r.Y+o.r.H <= b.r.Y+b.r.H+0.5 {
+				container = true
+				break
+			}
+		}
+		if !container {
+			lines = append(lines, b)
+		}
+	}
+	boxes = lines
+	for i := range boxes {
+		for j := i + 1; j < len(boxes); j++ {
+			a, b := boxes[i], boxes[j]
+			if a.r.X < b.r.X+b.r.W-0.5 && b.r.X < a.r.X+a.r.W-0.5 &&
+				a.r.Y < b.r.Y+b.r.H-0.5 && b.r.Y < a.r.Y+a.r.H-0.5 {
+				t.Errorf("%s: %q at %+v overlaps %q at %+v", where, a.text, a.r, b.text, b.r)
+			}
+		}
+	}
+}
+
+// TestSettingsLabelReportsCutText proves the seam the settings audit relies
+// on: a single-line label wider than its box is reported.
+func TestSettingsLabelReportsCutText(t *testing.T) {
+	var cut []string
+	orig := settingsFit
+	settingsFit = func(s string) { cut = append(cut, s) }
+	t.Cleanup(func() { settingsFit = orig })
+
+	view := ui.NewTester(func(c *ui.Context) {
+		ui.Row(c).Width(80).Children(func() {
+			settingsLabel(c, "A label far wider than eighty points", 13, 0)
+		})
+	}, 200, 40)
+	view.Frame()
+	view.Frame()
+	if len(cut) == 0 {
+		t.Fatal("a label wider than its box was not reported")
+	}
+}
+
 // TestEnglishMenusHaveNoChinese: the tray menu and an item's context menu
 // say English, labels and submenu labels alike.
 func TestEnglishMenusHaveNoChinese(t *testing.T) {

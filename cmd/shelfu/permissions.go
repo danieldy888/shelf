@@ -509,7 +509,7 @@ func (a *shelf) settingsPermissionSwitch(c *ui.Context, permissions, missing []s
 	title := l.PermTitle()
 	caption := a.permissionCaption(l, permissions, missing)
 	if a.perm.stage == permissionRelaunch {
-		ui.Row(c.Key("perm-row")).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(0, 12).FillWidth().Children(func() {
+		ui.Row(c.Key("perm-row")).AlignItems(ui.Center).Gap(10).MinHeight(48).Padding(settingsRowPadY, 12).FillWidth().Children(func() {
 			permissionRowLabel(c, title, caption)
 			settingsAccentButton(c, "relaunch", l.PermRelaunchButton(), func() { a.relaunchShelf() })
 		})
@@ -517,7 +517,7 @@ func (a *shelf) settingsPermissionSwitch(c *ui.Context, permissions, missing []s
 	}
 	on := len(missing) == 0 || a.perm.stage == permissionWaiting
 	row := ui.ToggleBase(c.Key("toggle-permissions"), &on).FillWidth().AlignItems(ui.Center).
-		Gap(10).MinHeight(48).Padding(0, 12).Label(title)
+		Gap(10).MinHeight(48).Padding(settingsRowPadY, 12).Label(title)
 	var sw ui.Element
 	row.Children(func() {
 		permissionRowLabel(c, title, caption)
@@ -539,7 +539,7 @@ func (a *shelf) settingsPermissionSwitch(c *ui.Context, permissions, missing []s
 // permissionRowLabel is the switch row's left column.
 func permissionRowLabel(c *ui.Context, title, caption string) {
 	ui.Column(c.Key("perm-k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
-		ui.Text(c, title).SingleLine().FontSize(13).TextColor(setInk)
+		settingsLabel(c, title, 13, 0).TextColor(setInk)
 		ui.Text(c, caption).FontSize(11).TextColor(setInk3)
 	})
 }

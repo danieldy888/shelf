@@ -9,6 +9,7 @@ package main
 // in one place repaints the other while it is open.
 
 import (
+	"fmt"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -291,6 +292,38 @@ func settingsSection(c *ui.Context, title, foot string, disabled bool, fn func()
 	})
 }
 
+// settingsFit, when a test installs it, is called with each single-line
+// label whose words need more width than the box the layout gave it — the
+// settings window's counterpart of the panel's fitIssue. Production leaves
+// it nil and pays one nil check.
+var settingsFit func(string)
+
+// settingsLabel is a single-line label of the Settings window. While a test
+// measures (settingsFit is set), it reports a label that cannot fit its box,
+// the way panelLabel does for the panel; a caption is not measured here
+// because it wraps on purpose and the row grows with it.
+func settingsLabel(c *ui.Context, text string, size float32, weight int) ui.Element {
+	t := ui.Text(c, text).SingleLine().FontSize(size)
+	if weight != 0 {
+		t.FontWeight(weight)
+	}
+	if settingsFit != nil {
+		if b := t.Bounds(); b.W > 0 {
+			w, _ := c.MeasureText(0, ui.Span{Text: text, Size: size, Weight: weight})
+			if w > b.W+0.5 {
+				settingsFit(fmt.Sprintf("%q needs %.1fpt, box is %.1fpt (size %g): the label is cut", text, w, b.W, size))
+			}
+		}
+	}
+	return t
+}
+
+// settingsRowPadY is a row's vertical padding. A row is 40pt for one line of
+// text; a caption that wraps grows the row by its extra lines and keeps this
+// much air above and below, so a second line never presses the hairline or
+// the next row.
+const settingsRowPadY = 4
+
 // settingsSep is the 0.5pt hairline between two rows of one card.
 func settingsSep(c *ui.Context, key string) {
 	ui.Box(c.Key("sep-" + key)).Height(0.5).FillWidth().Background(setRowSep)
@@ -309,11 +342,11 @@ func settingsToggle(c *ui.Context, key, label string, on bool, apply func(bool))
 // settingsToggleCap is settingsToggle with a caption under the label;
 // captionColor lets a row show an error (the login item's) in danger red.
 func settingsToggleCap(c *ui.Context, key, label, caption string, captionColor ui.Color, on bool, apply func(bool)) {
-	row := ui.ToggleBase(c.Key("toggle-"+key), &on).FillWidth().AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).Label(label)
+	row := ui.ToggleBase(c.Key("toggle-"+key), &on).FillWidth().AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(settingsRowPadY, 12).Label(label)
 	var sw ui.Element
 	row.Children(func() {
 		ui.Column(c.Key("k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, label).SingleLine().FontSize(13).TextColor(setInk)
+			settingsLabel(c, label, 13, 0).TextColor(setInk)
 			if caption != "" {
 				ui.Text(c, caption).FontSize(11).TextColor(captionColor)
 			}
@@ -333,9 +366,9 @@ func settingsRow(c *ui.Context, key, label string, fn func()) {
 
 // settingsRowCap is settingsRow with an 11pt muted caption under the label.
 func settingsRowCap(c *ui.Context, key, label, caption string, fn func()) {
-	ui.Row(c.Key("row-"+key)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).FillWidth().Children(func() {
+	ui.Row(c.Key("row-"+key)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(settingsRowPadY, 12).FillWidth().Children(func() {
 		ui.Column(c.Key("k")).Gap(2).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, label).SingleLine().FontSize(13).TextColor(setInk)
+			settingsLabel(c, label, 13, 0).TextColor(setInk)
 			if caption != "" {
 				ui.Text(c, caption).FontSize(11).TextColor(setInk3)
 			}
@@ -532,14 +565,14 @@ func (a *shelf) settingsClipboardSection(c *ui.Context) {
 		for _, id := range a.settings.ExcludedApps {
 			bundleID := id
 			settingsSep(c, "excl-"+bundleID)
-			ui.Row(c.Key("app-"+bundleID)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).FillWidth().Children(func() {
+			ui.Row(c.Key("app-"+bundleID)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(settingsRowPadY, 12).FillWidth().Children(func() {
 				if icon := settingsAppIcon(bundleID); icon != nil {
 					ui.Image(c.Key("ic"), icon).Size(20, 20).Radius(4.5)
 				} else {
 					ui.Icon(c.Key("ic"), appGlyph).Size(20, 20).TextColor(setInk3)
 				}
 				ui.Column(c.Key("id")).Gap(1).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, a.appName(bundleID)).SingleLine().FontSize(13).TextColor(setInk)
+					settingsLabel(c, a.appName(bundleID), 13, 0).TextColor(setInk)
 					ui.Text(c, bundleID).SingleLine().FontSize(11).TextColor(setInk3)
 				})
 				if ui.Button(c, l.SettingsClipboardRemove()).FontSize(12).
@@ -589,8 +622,8 @@ func (a *shelf) settingsAIUsageSection(c *ui.Context) {
 	// toolRow is one tool line: the name on the left, then the quota and
 	// local cells — check boxes, or dash for omp's nonexistent quota.
 	toolRow := func(key, name, qKey, lKey string, quota, local bool, qApply, lApply func(*settings.Settings, bool)) {
-		ui.Row(c.Key("row-"+key)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(0, 12).FillWidth().Children(func() {
-			ui.Text(c, name).SingleLine().FontSize(13).TextColor(setInk).Grow(1).MinWidth(0)
+		ui.Row(c.Key("row-"+key)).AlignItems(ui.Center).Gap(10).MinHeight(40).Padding(settingsRowPadY, 12).FillWidth().Children(func() {
+			settingsLabel(c, name, 13, 0).TextColor(setInk).Grow(1).MinWidth(0)
 			col("quota-"+key, func() {
 				if qApply == nil {
 					ui.Text(c, "—").SingleLine().FontSize(12).TextColor(setInk3)
