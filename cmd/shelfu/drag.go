@@ -134,10 +134,15 @@ func dragSummonsBasket(types []string) bool {
 // current shell: the notch, or the island while it still sits on its default
 // row. A moved island is not the screen's top edge, and the corridor also
 // pushes a dragged pointer down onto its landing row, so it must not exist
-// there.
+// there. (The user's own press on the island is a separate case: the filter
+// is parked for it in syncDragGuard, so the corridor never acts on it.)
 func (a *shelf) notchGuardOn() bool {
 	return !(a.island && a.islandDY != 0)
 }
+
+// parkNotchFilter is the native filter's park switch. Tests replace it to
+// observe what the monitor asks the guard to do without a real event tap.
+var parkNotchFilter = mac.ParkDragGuard
 
 // Protect the notch's approach corridor, including its centre. The lower edge
 // is below the camera housing but still inside the shelf's drag trigger.
@@ -145,6 +150,12 @@ func (a *shelf) notchGuardOn() bool {
 // drags and window moves alike; the cursor pin needs no permission and runs
 // only while a file drag is in progress.
 func (a *shelf) syncDragGuard() {
+	// The user's own press on the island is not an incoming drag: the
+	// corridor clamps left-button drags onto its landing row, which would add
+	// vertical travel the user never made. The filter is parked for the whole
+	// gesture instead — no teardown, no re-arm — and normal file-drag
+	// protection comes back with the release.
+	parkNotchFilter(a.islandPress.active)
 	// The guard exists to keep the Spaces edge gesture from firing at the
 	// screen's top edge, under the notch. An island the user moved away from
 	// that row is not there, so the corridor — which also pushes the cursor

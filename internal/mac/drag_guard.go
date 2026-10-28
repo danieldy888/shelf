@@ -67,8 +67,13 @@ var (
 	dragGuardOnce                 sync.Once
 	dragGuardErr                  error
 	dragGuardArmed                atomic.Pointer[dragGuardState]
-	dragGuardCallbackOnce         sync.Once
-	dragGuardCallback             uintptr
+	// dragGuardParked makes the armed filter pass drag events through
+	// untouched. The app's own island gesture parks it: the corridor's clamp
+	// would push that swipe — and the capsule under the pointer — down onto
+	// its landing row, which the user never asked for.
+	dragGuardParked       atomic.Bool
+	dragGuardCallbackOnce sync.Once
+	dragGuardCallback     uintptr
 )
 
 type dragGuardState struct {
@@ -198,7 +203,7 @@ func dragGuardCallbackAddr() uintptr {
 	dragGuardCallbackOnce.Do(func() {
 		dragGuardCallback = purego.NewCallback(func(_ uintptr, typ uint32, event uintptr, _ uintptr) uintptr {
 			s := dragGuardArmed.Load()
-			if s == nil {
+			if s == nil || dragGuardParked.Load() {
 				return event
 			}
 			switch typ {
@@ -317,6 +322,17 @@ func SetDragGuardRegion(region DragGuardRegion) {
 		return
 	}
 	dragGuardArmed.Store(&dragGuardState{region: region, port: s.port})
+}
+
+// ParkDragGuard parks or unparks the armed filter, if any: a parked filter
+// clamps nothing and rewrites no event, and it keeps its corridor for the
+// unpark. The tap deliberately stays installed — the app parks it for its own
+// island gesture, which must never be pushed by the notch corridor, and a
+// teardown there would cost a new tap (and a new permission check) on every
+// click. Unlike the region, parking is independent of whether a tap exists,
+// so the caller may set it at any time. Main thread only, like StartDragGuard.
+func ParkDragGuard(parked bool) {
+	dragGuardParked.Store(parked)
 }
 
 var pin struct {

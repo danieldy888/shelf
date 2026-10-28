@@ -389,3 +389,197 @@ func TestResetIslandPositionRow(t *testing.T) {
 		t.Fatal("the notch shape offered 恢复默认位置")
 	}
 }
+
+// The release frame carries the pointer's final place: a press that only
+// travels as the button lifts is a move, not the tap that opens the panel,
+// and the place written is where the button came up — not the last sample an
+// intermediate tick saw.
+func TestIslandReleaseFrameUsesTheReleasePoint(t *testing.T) {
+	syntheticDisplays(t, false, false)
+	a := islandShelf(false, settings.ShellStyleNotch)
+	a.dataDir = t.TempDir()
+	a.place(mygo.Point{X: 700, Y: 100})
+	a.fx.w, a.fx.h = islandIdleW, islandIdleH
+	p := mygo.Point{X: 735, Y: islandTopGap + 10}
+	a.mouseDown(true, 0, p)
+	// No intermediate sample: all 10pt of travel show up on the release.
+	dragIslandTick(t, a, mygo.Point{X: p.X + 10, Y: p.Y}, false)
+	if a.visible {
+		t.Fatal("a press released 10pt away opened the panel")
+	}
+	if got := a.islandSpotNow(); got != (islandSpot{Centre: 745, Top: islandTopGap}) {
+		t.Fatalf("release-only move left the island at %+v, want 745/%d", got, islandTopGap)
+	}
+	saved, err := settings.Load(a.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := saved.IslandPos[islandSpotKey(1)], (settings.IslandPos{X: 745, Y: islandTopGap}); got != want {
+		t.Fatalf("saved spot = %+v, want %+v", got, want)
+	}
+	// A drag ends at the release point, not at the position of its last
+	// sampled frame.
+	a.mouseDown(true, 0, mygo.Point{X: 745, Y: islandTopGap + 10})
+	dragIslandTick(t, a, mygo.Point{X: 900, Y: 420}, true)
+	dragIslandTick(t, a, mygo.Point{X: 920, Y: 440}, false)
+	if got := a.islandSpotNow(); got != (islandSpot{Centre: 920, Top: 430}) {
+		t.Fatalf("drag ended at %+v, want 920/430", got)
+	}
+	saved, err = settings.Load(a.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := saved.IslandPos[islandSpotKey(1)], (settings.IslandPos{X: 920, Y: 430}); got != want {
+		t.Fatalf("saved spot = %+v, want %+v", got, want)
+	}
+}
+
+// A gesture that crosses onto a display whose shell is the notch style ends
+// there: the notch has no place to move, so nothing is moved and nothing is
+// saved, and its island offset stays zero.
+func TestIslandDragOntoTheNotchShellCancels(t *testing.T) {
+	syntheticDisplays(t, true, true)
+	a := islandShelf(false, settings.ShellStyleNotch)
+	a.dataDir = t.TempDir()
+	a.place(mygo.Point{X: 2000, Y: 100})
+	if a.dispID != 2 || !a.island {
+		t.Fatalf("placed on display %d island=%v, want the external island", a.dispID, a.island)
+	}
+	a.fx.w, a.fx.h = islandIdleW, islandIdleH
+	r := a.islandRect()
+	a.mouseDown(true, 0, mygo.Point{X: r.X + r.Width/2, Y: r.Y + 10})
+	if !a.islandPress.active {
+		t.Fatal("the press did not arm the island gesture")
+	}
+	// Onto the built-in display: the notch style draws the notch there.
+	dragIslandTick(t, a, mygo.Point{X: 1000, Y: 300}, true)
+	if a.island {
+		t.Fatal("the notched display drew the island on the notch style")
+	}
+	if a.islandDX != 0 || a.islandDY != 0 || a.y != a.dispBounds.Y {
+		t.Fatalf("the notch shell acquired an island offset: dx=%d dy=%d y=%d", a.islandDX, a.islandDY, a.y)
+	}
+	if a.islandPress.active || a.islandDrag {
+		t.Fatal("the gesture survived the crossing onto the notch shell")
+	}
+	if got := a.stripCenter(); got != a.notchX+a.notchW/2 {
+		t.Fatalf("the notch shell's axis = %d, want the housing's centre %d", got, a.notchX+a.notchW/2)
+	}
+	// The release that carries the pointer ends nothing and writes nothing.
+	dragIslandTick(t, a, mygo.Point{X: 1020, Y: 320}, false)
+	if a.islandDX != 0 || a.islandDY != 0 {
+		t.Fatalf("the release gave the notch shell an island offset: dx=%d dy=%d", a.islandDX, a.islandDY)
+	}
+	saved, err := settings.Load(a.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.IslandPos) != 0 {
+		t.Fatalf("the cancelled gesture saved a place: %+v", saved.IslandPos)
+	}
+}
+
+// An island-to-island crossing keeps the capsule under the pointer, exactly
+// as the spec allows: the place is saved for the display the button came up
+// on, and the display it started from is left untouched.
+func TestIslandDragAcrossDisplaysSavesTheReleaseDisplay(t *testing.T) {
+	syntheticDisplays(t, true, true)
+	a := islandShelf(true, settings.ShellStyleIsland)
+	a.dataDir = t.TempDir()
+	a.place(mygo.Point{X: 2000, Y: 300})
+	if a.dispID != 2 || !a.island {
+		t.Fatalf("placed on display %d island=%v, want the external island", a.dispID, a.island)
+	}
+	a.fx.w, a.fx.h = islandIdleW, islandIdleH
+	r := a.islandRect()
+	a.mouseDown(true, 0, mygo.Point{X: r.X + r.Width/2, Y: r.Y + 10})
+	dragIslandTick(t, a, mygo.Point{X: 700, Y: 300}, true)
+	if a.dispID != 1 || !a.island {
+		t.Fatalf("the gesture did not follow onto display %d island=%v", a.dispID, a.island)
+	}
+	if got := a.islandSpotNow(); got != (islandSpot{Centre: 700, Top: 290}) {
+		t.Fatalf("cross-display spot = %+v, want 700/290", got)
+	}
+	dragIslandTick(t, a, mygo.Point{X: 720, Y: 310}, false)
+	if a.islandPress.active || a.islandDrag {
+		t.Fatal("the release left the gesture open")
+	}
+	if got := a.islandSpotNow(); got != (islandSpot{Centre: 720, Top: 300}) {
+		t.Fatalf("release spot = %+v, want 720/300", got)
+	}
+	saved, err := settings.Load(a.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := saved.IslandPos[islandSpotKey(1)], (settings.IslandPos{X: 720, Y: 300}); got != want {
+		t.Fatalf("saved spot on the release display = %+v, want %+v", got, want)
+	}
+	if _, ok := saved.IslandPos[islandSpotKey(2)]; ok {
+		t.Fatalf("the drag wrote the display it started on: %+v", saved.IslandPos)
+	}
+}
+
+// The user's own island gesture is not an incoming file drag: the notch's
+// event filter must not clamp it, or a horizontal swipe on the default row
+// would be pushed down onto the guard's landing row and take the capsule
+// with it. The filter is parked for the press through its switch (the same
+// decision the native tap reads), and normal file-drag protection is back
+// with the release.
+func TestIslandGesturePausesTheDragGuard(t *testing.T) {
+	syntheticDisplays(t, true, false)
+	var parks []bool
+	oldPark := parkNotchFilter
+	parkNotchFilter = func(parked bool) { parks = append(parks, parked) }
+	t.Cleanup(func() { parkNotchFilter = oldPark })
+	parkedNow := func() bool { return len(parks) > 0 && parks[len(parks)-1] }
+	a := islandShelf(true, settings.ShellStyleIsland)
+	a.dataDir = t.TempDir()
+	a.place(mygo.Point{X: 700, Y: 100})
+	a.fx.w, a.fx.h = islandIdleW, islandIdleH
+	// A resting island on its default row still is the notch: the corridor
+	// exists and the filter is not parked.
+	a.syncDragGuard()
+	if !a.notchGuardOn() {
+		t.Fatal("the resting island left the notch corridor unarmed")
+	}
+	if g := a.dragGuardRegion(); g.Height <= 0 || g.Y != a.dispBounds.Y {
+		t.Fatalf("resting corridor = %+v, want the display's top edge down into the capsule", g)
+	}
+	for _, parked := range parks {
+		if parked {
+			t.Fatalf("an idle shell parked the filter: %v", parks)
+		}
+	}
+	r := a.islandRect()
+	a.mouseDown(true, 0, mygo.Point{X: r.X + r.Width/2, Y: r.Y + 10})
+	if !a.islandPress.active {
+		t.Fatal("the press did not arm the island gesture")
+	}
+	if !parkedNow() {
+		t.Fatalf("the press did not park the notch filter: %v", parks)
+	}
+	// A purely horizontal swipe on the default row: the island follows the
+	// pointer with no vertical travel the user did not make.
+	dragIslandTick(t, a, mygo.Point{X: r.X + r.Width/2 + 120, Y: r.Y + 10}, true)
+	if got := a.islandSpotNow(); got.Top != a.islandTop {
+		t.Fatalf("the gesture was pushed down to top %d, want %d", got.Top, a.islandTop)
+	}
+	if !parkedNow() {
+		t.Fatalf("the filter was unparked mid-gesture: %v", parks)
+	}
+	dragIslandTick(t, a, mygo.Point{X: r.X + r.Width/2 + 120, Y: r.Y + 10}, false)
+	if a.islandPress.active {
+		t.Fatal("the release left the gesture open")
+	}
+	if parkedNow() {
+		t.Fatalf("the filter stayed parked after the release: %v", parks)
+	}
+	// Normal protection: the release left the island on its default row, so
+	// the corridor is armed again.
+	if !a.notchGuardOn() {
+		t.Fatal("the corridor did not come back with the release")
+	}
+	if g := a.dragGuardRegion(); g.Height <= 0 || g.Y != a.dispBounds.Y {
+		t.Fatalf("corridor after the release = %+v", g)
+	}
+}

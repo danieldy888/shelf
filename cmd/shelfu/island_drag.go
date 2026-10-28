@@ -128,8 +128,13 @@ func (a *shelf) placeIslandAxis() {
 }
 
 // moveIslandTo puts the shell's centre and top at a screen coordinate,
-// clamped onto the display, and moves the one window that draws it.
+// clamped onto the display, and moves the one window that draws it. Only the
+// island shape has a place of its own: a re-place that landed on the notch
+// shell must never hand it an island offset.
 func (a *shelf) moveIslandTo(centre, top int) {
+	if !a.island {
+		return
+	}
 	spot := clampIslandSpot(islandSpot{Centre: centre - a.dispBounds.X, Top: top - a.dispBounds.Y},
 		a.dispBounds, a.workArea(), a.islandTop)
 	def := a.defaultIslandSpot()
@@ -156,8 +161,8 @@ func (a *shelf) beginIslandPress(p mygo.Point) {
 		grabY:  min(max(p.Y-top, 0), islandIdleH-1),
 	}
 	a.islandDrag = false
-	// A moved island is no longer the notch: the drag guard may not pin a
-	// file drag to a row the island left.
+	// The notch's corridor must not clamp the user's own gesture: this parks
+	// the drag filter for the whole press and the release unparks it.
 	a.syncDragGuard()
 }
 
@@ -170,22 +175,41 @@ func (a *shelf) islandDragTick(p mygo.Point, down bool) bool {
 	if !press.active {
 		return false
 	}
-	if down {
-		if !press.moved {
-			if abs(p.X-press.at.X) <= islandDragStart && abs(p.Y-press.at.Y) <= islandDragStart {
-				return true
-			}
-			press.moved, a.islandDrag = true, true
-			a.setPeek(false) // the shell stays its 120 × 30 capsule while it moves
-			a.syncDragGuard()
-		}
-		a.moveIslandTo(p.X-press.grabX+islandIdleW/2, p.Y-press.grabY)
+	if !a.island {
+		// The gesture crossed onto a display that draws the notch shell:
+		// there is nothing here to carry, and that shell has no place to
+		// apply. End the gesture on this frame — no move, no save, so the
+		// notch keeps its offset of zero — and let it die with the press
+		// that carried it.
+		*press = islandPress{}
+		a.islandDrag = false
+		a.syncDragGuard()
+		a.syncMousePassThrough()
 		return true
 	}
-	moved := press.moved
+	// The release frame carries the pointer's final place, so the tap/move
+	// threshold is judged there too: a press that only travels as it lifts
+	// is a move, not a tap, and a drag ends where the button came up rather
+	// than on the last tick's sample.
+	moved := press.moved ||
+		abs(p.X-press.at.X) > islandDragStart || abs(p.Y-press.at.Y) > islandDragStart
+	if down && !moved {
+		return true
+	}
+	if !press.moved {
+		press.moved, a.islandDrag = true, true
+		a.setPeek(false) // the shell stays its 120 × 30 capsule while it moves
+		a.syncDragGuard()
+	}
+	centre, top := p.X-press.grabX+islandIdleW/2, p.Y-press.grabY
+	if down {
+		a.moveIslandTo(centre, top)
+		return true
+	}
 	*press = islandPress{}
 	a.islandDrag = false
 	if moved {
+		a.moveIslandTo(centre, top)
 		a.saveIslandSpot()
 	} else {
 		a.show(false)
