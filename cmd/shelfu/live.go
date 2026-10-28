@@ -246,8 +246,11 @@ func (a *shelf) clearLive() {
 func (a *shelf) liveNow(now time.Time, allow bool) (liveEvent, bool) {
 	q := &a.live
 	switch {
-	case q.shown && now.Before(q.until) && a.capsuleUp(now):
-		// Covered: the clock rests until the capsule is gone.
+	case q.shown && a.capsuleUp(now) && (!q.coveredAt.IsZero() || now.Before(q.until)):
+		// Covered: the clock rests until the capsule is gone. Once the
+		// notice is already covered it stays paused even past its frozen
+		// deadline: the capsule outlasting the hold must not hand the
+		// notice back while its words are still hidden.
 		if q.coveredAt.IsZero() {
 			q.coveredAt = now
 		}

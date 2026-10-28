@@ -1003,8 +1003,9 @@ func TestLiveNoticePausesUnderTheStatusCapsule(t *testing.T) {
 		t.Fatalf("the download's hold ends at %v, want %v", holdEnd, want)
 	}
 	// 已复制 arrives one second into the hold and stays for four seconds.
+	// Its clock starts at that frame, so its span is exactly t=1..5.
 	capsuleAt, capsuleEnd := now.Add(time.Second), now.Add(5*time.Second)
-	a.toastStatus("已复制", capsuleEnd, statusOK)
+	a.fb.show("已复制", statusOK, capsuleEnd, capsuleAt)
 	a.fb.arm(capsuleAt)
 	if !a.capsuleUp(capsuleAt) {
 		t.Fatal("the status capsule is not up")
@@ -1034,5 +1035,70 @@ func TestLiveNoticePausesUnderTheStatusCapsule(t *testing.T) {
 	}
 	if ev, ok := a.liveNow(a.live.until, true); ok {
 		t.Fatalf("the resumed notice outlived its hold: %+v", ev)
+	}
+}
+
+// A status capsule can outlast the notice's own deadline: 已复制 covering
+// t=1..5s over a 4s download result must keep the notice paused past its
+// frozen t=4 deadline and give back the whole covered span, so the words
+// resume at t=5 and stay up until t=8.
+func TestLiveCoveredNoticeWaitsOutItsOriginalDeadline(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	a.pushDownloaded([]string{"/tmp/probe.zip"}, now)
+	ev, ok := a.liveNow(now, true)
+	if !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("the download result did not show: %+v ok=%v", ev, ok)
+	}
+	// 已复制 covers t=1..5s, crossing the notice's t=4 deadline.
+	a.fb.show("已复制", statusOK, now.Add(5*time.Second), now.Add(time.Second))
+	a.fb.arm(now.Add(time.Second))
+	if !a.capsuleUp(now.Add(4500*time.Millisecond)) || a.capsuleUp(now.Add(5*time.Second)) {
+		t.Fatal("the fixture capsule must cover t=1..5s")
+	}
+	if ev, ok := a.liveNow(now.Add(time.Second), true); ok {
+		t.Fatalf("the notice showed through the capsule: %+v", ev)
+	}
+	if ev, ok := a.liveNow(now.Add(4500*time.Millisecond), true); ok {
+		t.Fatalf("the covered notice ran on past its frozen deadline: %+v", ev)
+	}
+	ev, ok = a.liveNow(now.Add(5*time.Second), true)
+	if !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("the covered notice did not resume when the capsule ended: %+v ok=%v", ev, ok)
+	}
+	if got, want := a.live.until.Sub(now), 2*liveHoldDownload; got != want {
+		t.Fatalf("the resumed hold ends at %v, want %v (the 4s hold plus the 4s cover)", got, want)
+	}
+}
+
+// The frame loop must agree with the sparse-clock case: 30ms frames across
+// the same capsule never show the notice under it and still end its hold at
+// t=8, not at the 7.97 a leaked start would give.
+func TestLiveCoversEveryFramePastTheOriginalDeadline(t *testing.T) {
+	a := liveShelf()
+	now := time.Now()
+	a.pushDownloaded([]string{"/tmp/probe.zip"}, now)
+	if _, ok := a.liveNow(now, true); !ok {
+		t.Fatal("the download result did not show")
+	}
+	a.fb.show("已复制", statusOK, now.Add(5*time.Second), now.Add(time.Second))
+	a.fb.arm(now.Add(time.Second))
+	if !a.capsuleUp(now.Add(4500*time.Millisecond)) || a.capsuleUp(now.Add(5*time.Second)) {
+		t.Fatal("the fixture capsule must cover t=1..5s")
+	}
+	leaks := 0
+	for d := time.Second; d < 5*time.Second; d += 30 * time.Millisecond {
+		if _, ok := a.liveNow(now.Add(d), true); ok {
+			leaks++
+		}
+	}
+	if leaks != 0 {
+		t.Fatalf("the notice showed %d times under the capsule", leaks)
+	}
+	if ev, ok := a.liveNow(now.Add(5*time.Second), true); !ok || ev.kind != liveDownloadDone {
+		t.Fatalf("the covered notice did not resume when the capsule ended: %+v ok=%v", ev, ok)
+	}
+	if got, want := a.live.until.Sub(now), 2*liveHoldDownload; got != want {
+		t.Fatalf("30ms frames leave the hold ending at %v, want %v", got, want)
 	}
 }
