@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
@@ -269,6 +270,40 @@ func TestEnglishUsagePageStatesHaveNoChineseAndFit(t *testing.T) {
 				t.Fatalf("the local panel says no English metrics; texts %v", fx.view.Texts())
 			}
 		})
+	}
+}
+
+// TestTimesFollowTheSystemClock: times follow the user's 12- or 24-hour
+// clock in every language, so an English interface on a 24-hour Mac says
+// 14:05 rather than 2:05 PM.
+func TestTimesFollowTheSystemClock(t *testing.T) {
+	fixed := time.Date(2026, 10, 19, 14, 5, 0, 0, time.Local)
+	render := func(locale string, r i18n.Region) []string {
+		view := ui.NewTester(func(c *ui.Context) {
+			ui.Text(c, tloc(c).ClipTodayAt(fixed))
+			ui.Text(c, stampIn(c.Locale(), c.Region(), fixed))
+		}, 300, 100)
+		view.SetLocale(locale)
+		view.SetRegion(r)
+		view.Frame()
+		return view.Texts()
+	}
+	if texts := render("en", i18n.Region{HourCycle: 24}); !slices.Contains(texts, "Today 14:05") {
+		t.Fatalf("24-hour English: %v", texts)
+	}
+	if texts := render("en", i18n.Region{HourCycle: 12}); !slices.Contains(texts, "Today 2:05 PM") {
+		t.Fatalf("12-hour English: %v", texts)
+	}
+	if texts := render("zh-Hans", i18n.Region{HourCycle: 24}); !slices.Contains(texts, "今天 14:05") {
+		t.Fatalf("24-hour Chinese: %v", texts)
+	}
+	// The clipboard row's screenshot title keeps the source language's
+	// compact date, and takes the region's date and clock in English.
+	if got := stampIn("zh-Hans", i18n.Region{}, fixed); got != "10-19 14:05" {
+		t.Fatalf("Chinese stamp = %q", got)
+	}
+	if got := stampIn("en", i18n.Region{}, fixed); !strings.Contains(got, "2:05") {
+		t.Fatalf("English stamp = %q", got)
 	}
 }
 

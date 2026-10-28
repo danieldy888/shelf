@@ -9,6 +9,10 @@ package main
 // shows, which OnLocaleChanged keeps up to date.
 
 import (
+	"strings"
+	"time"
+
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 
 	"shelf/locales"
@@ -18,6 +22,29 @@ import (
 // built again every frame follows a language change with no restart; a
 // headless Tester's SetLocale drives what a test reads.
 func loc(c *ui.Context) locales.Messages { return locales.In(c.Locale()) }
+
+// tloc returns the messages of the language of c's window, formatted the way
+// the user's regional settings say: dates and times follow the 12- or
+// 24-hour clock and the first day of the week, whatever the language. A
+// headless Tester has no region, so a test sees its language's CLDR default.
+func tloc(c *ui.Context) locales.Messages {
+	tag, r := c.Locale(), c.Region()
+	if tag == "" || r == (i18n.Region{}) {
+		return locales.In(tag)
+	}
+	return locales.In(r.FormatLocale(tag))
+}
+
+// stampIn is a moment in a clipboard row's title: the compact 「01-02 15:04」
+// the source language has always shown, or the region's short date and time.
+func stampIn(locale string, r i18n.Region, t time.Time) string {
+	if strings.HasPrefix(locale, "zh") {
+		return t.Format("01-02 15:04")
+	}
+	return i18n.FormatDate(r.FormatLocale(locale), t, i18n.DateOptions{
+		Date: i18n.ShortStyle, Time: i18n.ShortStyle, HourCycle: r.HourCycle,
+	})
+}
 
 // appLoc returns the messages of the language the shelf shows, for the
 // native surfaces built outside a view: the tray, its menus and dialogs.

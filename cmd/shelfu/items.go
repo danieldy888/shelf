@@ -163,7 +163,7 @@ func formatBadge(c *ui.Context, item store.Item) {
 // right, the pin mark on pinned rows and 「↩ 复制」 on the selected one
 // while searching.
 func (a *shelf) clipRow(c *ui.Context, item store.Item) {
-	l := loc(c)
+	l := tloc(c)
 	title := itemTitleIn(l, item)
 	row := ui.Row(c.Key(item.ID)).Height(clipRowH).Padding(0, 8, 0, 8).Gap(8).Radius(8).
 		AlignItems(ui.Center).Label(title)
@@ -193,7 +193,7 @@ func (a *shelf) clipRow(c *ui.Context, item store.Item) {
 		a.clipRowIcon(c, item)
 		text := title
 		if item.Kind == store.KindImage {
-			text = l.ClipScreenshot(item.CreatedAt.Local().Format("01-02 15:04"))
+			text = l.ClipScreenshot(stampIn(c.Locale(), c.Region(), item.CreatedAt.Local()))
 		}
 		ui.Text(c, text).SingleLine().FontSize(12).TextColor(ink).Grow(1).MinWidth(0)
 		if selected && a.focusMode {

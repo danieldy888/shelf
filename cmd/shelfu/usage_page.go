@@ -259,7 +259,7 @@ func (f *usageFeature) title() string { return f.host.appLoc().UsagePageTitle() 
 // stamp is the data age — or progress while any source is busy — shown
 // just left of the refresh button; empty before the first answer.
 func (f *usageFeature) stamp(c *ui.Context) string {
-	l := loc(c)
+	l := tloc(c)
 	if f.quota[0].busy || f.quota[1].busy || f.localBusy {
 		return l.UsageUpdating()
 	}
@@ -281,7 +281,7 @@ func (f *usageFeature) actions(c *ui.Context) []ui.Element {
 	if s := f.stamp(c); s != "" {
 		out = append(out, panelLabel(c, "usage-stamp", s, 10, 600).TextColor(ink3))
 	}
-	b := f.host.iconButton(c, "usage-refresh", refreshSymbol, loc(c).UsageRefresh())
+	b := f.host.iconButton(c, "usage-refresh", refreshSymbol, tloc(c).UsageRefresh())
 	if b.Clicked() && f.host.tab == pageUsage {
 		f.requestRefresh()
 	}
@@ -293,7 +293,7 @@ func (f *usageFeature) actions(c *ui.Context) []ui.Element {
 // part of it scrolls — the user reads every state at once.
 func (f *usageFeature) body(c *ui.Context, _ bool, _ bool) ui.Element {
 	if !f.anySource() {
-		l := loc(c)
+		l := tloc(c)
 		return f.host.emptyState(c, gaugeSymbol, l.UsageEmptyTitle(), l.UsageEmptyDetail())
 	}
 	root := ui.Row(c.Key("usage")).FillWidth().FillHeight().Gap(usageCardGap).PassThrough()
@@ -405,7 +405,7 @@ func (f *usageFeature) quotaInfo(c *ui.Context, tool aiusage.Tool, st *usageQuot
 		return
 	}
 	if st.latest.FetchedAt.IsZero() {
-		panelLabel(c, nil, loc(c).UsageQuerying(), 11, 0).TextColor(ink3).Margin(4, 0, 0, 0)
+		panelLabel(c, nil, tloc(c).UsageQuerying(), 11, 0).TextColor(ink3).Margin(4, 0, 0, 0)
 		return
 	}
 	f.quotaMessage(c, tool, st.latest, now)
@@ -417,7 +417,7 @@ func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, q aiusage.
 	// Each line must fit the 124pt info column at 10.5pt: a longer line
 	// wraps inside the card and the third line falls out of it (the page
 	// audit measures every line, so this cannot regress silently).
-	l := loc(c)
+	l := tloc(c)
 	var lines string
 	switch q.Status {
 	case aiusage.QuotaNotLoggedIn:
@@ -448,7 +448,7 @@ func (f *usageFeature) quotaMessage(c *ui.Context, tool aiusage.Tool, q aiusage.
 // windowLine is one card row: coloured dot, window name, the shown share
 // (used, or left when the setting asks) and its reset time.
 func (f *usageFeature) windowLine(c *ui.Context, w aiusage.Window, stale bool, now time.Time) {
-	l := loc(c)
+	l := tloc(c)
 	name := windowLabel(l, w)
 	col := windowColor(w)
 	pctCol := ink
@@ -474,7 +474,7 @@ func (f *usageFeature) windowLine(c *ui.Context, w aiusage.Window, stale bool, n
 // red 快用完了 under 10% left, the orange depletion estimate naming the
 // window that runs out first, otherwise the quiet 正常 line.
 func (f *usageFeature) paceLine(c *ui.Context, q aiusage.Quota, stale bool, now time.Time) {
-	l := loc(c)
+	l := tloc(c)
 	text, col := l.UsagePaceSteady(), ink3
 	if stale {
 		text = l.UsageStaleData(usageAgo(l, q.FetchedAt, now))
@@ -634,10 +634,10 @@ func (f *usageFeature) popoverBody(c *ui.Context, tool aiusage.Tool) {
 	five, week := ringWindows(q.Windows)
 	ui.Row(c.Key("leg")).Gap(14).Margin(6, 0, 0, 0).Children(func() {
 		if week != nil {
-			popLegend(c, usageWeekly, loc(c).UsageLegendWeekly())
+			popLegend(c, usageWeekly, tloc(c).UsageLegendWeekly())
 		}
 		if five != nil {
-			popLegend(c, usageFive, loc(c).UsageLegendFive())
+			popLegend(c, usageFive, tloc(c).UsageLegendFive())
 		}
 	})
 	ordered := orderedWindows(q.Windows)
@@ -673,7 +673,7 @@ func popLegend(c *ui.Context, col ui.Color, s string) {
 // over the track (fill3 bar, coloured share, white/red even-pace tick),
 // then the pace delta and the depletion estimate.
 func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time) {
-	l := loc(c)
+	l := tloc(c)
 	name := windowLabel(l, w)
 	shown := f.windowShown(w)
 	col := windowColor(w)
@@ -723,7 +723,7 @@ func (f *usageFeature) popWindow(c *ui.Context, w aiusage.Window, now time.Time)
 // popCompact is one line plus a thin meter: the shape a plan with more
 // than two windows uses so every window stays visible in the sheet.
 func (f *usageFeature) popCompact(c *ui.Context, w aiusage.Window, now time.Time) {
-	l := loc(c)
+	l := tloc(c)
 	name := windowLabel(l, w)
 	shown := f.windowShown(w)
 	col := windowColor(w)
@@ -771,7 +771,7 @@ func (f *usageFeature) localPanel(c *ui.Context) {
 		Padding(8, 10, 7, 10).Gap(4)
 	card.Children(func() {
 		ui.Row(c.Key("uh")).Height(15).AlignItems(ui.Center).Children(func() {
-			panelLabel(c, nil, loc(c).UsageLocalTitle(), 10.5, 600).TextColor(ink2)
+			panelLabel(c, nil, tloc(c).UsageLocalTitle(), 10.5, 600).TextColor(ink2)
 			ui.Box(c).Grow(1)
 			f.usageSeg(c)
 		})
@@ -832,7 +832,7 @@ func (f *usageFeature) shownSummary() aiusage.Summary {
 // usageSeg is the 今天/7 天/30 天/全部 picker: a fill1 track of small
 // buttons; the active segment gets the fill2 capsule and ink text.
 func (f *usageFeature) usageSeg(c *ui.Context) {
-	l := loc(c)
+	l := tloc(c)
 	labels := []string{l.UsageRangeToday(), l.UsageRange7d(), l.UsageRange30d(), l.UsageRangeAll()}
 	ranges := []aiusage.Range{aiusage.RangeToday, aiusage.Range7d, aiusage.Range30d, aiusage.RangeAll}
 	ui.Row(c.Key("seg")).Background(fill1).Radius(6).Padding(1, 1, 1, 1).Gap(1).Children(func() {
@@ -864,7 +864,7 @@ func (f *usageFeature) usageSeg(c *ui.Context) {
 // scanCard fills the local section while there is no summary to show: the
 // first scan's progress, the pre-scan 「正在统计…」, or a read error.
 func (f *usageFeature) scanCard(c *ui.Context) {
-	l := loc(c)
+	l := tloc(c)
 	ui.Column(c.Key("scan")).Grow(1).MinHeight(0).AlignItems(ui.Center).Justify(ui.Center).Gap(6).Children(func() {
 		switch {
 		case f.localErr != nil && !f.localBusy:
@@ -893,7 +893,7 @@ func (f *usageFeature) scanCard(c *ui.Context) {
 
 // scanSources names the enabled local sources in the scan card's caption.
 func (f *usageFeature) scanSources(c *ui.Context) string {
-	l := loc(c)
+	l := tloc(c)
 	var names []string
 	for _, t := range localTools() {
 		if f.localSourceOn(t) {
@@ -912,7 +912,7 @@ func (f *usageFeature) scanSources(c *ui.Context) string {
 // cache, and the cost line says how much of it is priced.
 func (f *usageFeature) kpiGrid(c *ui.Context, s aiusage.Summary) {
 	tot := s.Total
-	l := loc(c)
+	l := tloc(c)
 	ui.Grid(c.Key("kpi")).ColumnTracks(ui.Fr(1), ui.Fr(1)).GapY(1).GapX(8).FillWidth().
 		Children(func() {
 			f.kpi(c, "Token", usageTokens(totalTokens(tot)), false, usageTokenSub(l, tot))
@@ -1013,7 +1013,7 @@ func (f *usageFeature) usageChart(c *ui.Context, s aiusage.Summary) {
 		}
 	})
 	ui.Row(c.Key("xl")).Justify(ui.SpaceBetween).Padding(0, 2, 0, 2).Children(func() {
-		labels := f.xLabels(loc(c), buckets)
+		labels := f.xLabels(tloc(c), buckets)
 		for _, i := range []int{0, 2, 4} {
 			if i < len(labels) {
 				panelLabel(c, nil, labels[i], 9, 0).TextColor(ink3)
