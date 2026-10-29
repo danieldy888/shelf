@@ -1,7 +1,29 @@
 .DS_Store
 /shelf
+/shelfu
 *.app
 dist/
 dist.noindex/
 .scratch/
-resources/darwin-arm64/ShelfNowPlaying.bundle
+resources/darwin-arm64/ShelfUNowPlaying.bundle
+
+# Local development material is not part of the public source distribution.
+/SPEC.md
+/ACCEPTANCE.md
+/ARCHITECTURE.md
+/HANDOFF*.md
+/LOCAL_AGENT_HANDOFF.md
+/PLAN.md
+/DROPPY-INVESTIGATION.md
+/ROADMAP.html
+/RELEASING.md
+/DESIGN.md
+/research/
+/design/
+
+# Brand assets are distributed separately from the MIT-licensed source.
+/resources/icon.png
+/resources/tray.png
+
+# mygo generate writes the catalogs' TypeScript module at the root.
+/locales.ts

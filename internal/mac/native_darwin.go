@@ -1,6 +1,6 @@
 //go:build darwin
 
-// Package mac holds the AppKit/CoreGraphics calls Shelf needs and the mygo
+// Package mac holds the AppKit/CoreGraphics calls ShelfU needs and the mygo
 // public API does not expose: pasteboard change counters, the system drag
 // session probe, the pressed-button state, per-file icons and the Mission
 // Control drag guard.
@@ -109,6 +109,20 @@ var (
 
 	loadOnce sync.Once
 	loadErr  error
+
+	// keyGateOnce builds the canBecomeKeyWindow override IMP once. The
+	// method sits on the shared panel class, but answers only for windows
+	// carrying the assocNoKey mark (desktop pins); every other window
+	// forwards to the saved original IMP found in classOrigs, so the
+	// patch is pin-specific in effect and dies with the window.
+	keyGateOnce sync.Once
+	keyGateIMP  uintptr
+	origBoolFns = map[uintptr]func(obj id, sel objc.SEL) bool{}
+
+	// assocNoKey is the associated-object key marking pin windows whose
+	// class-level canBecomeKeyWindow patch answers NO. Same ownership
+	// model as assocUnconstrain in overlay_hit.go.
+	assocNoKey byte
 )
 
 const (
@@ -295,6 +309,23 @@ func goBytes(data id) []byte {
 	}
 	p := send(data, "bytes")
 	return append([]byte(nil), unsafe.Slice(*(**byte)(unsafe.Pointer(&p)), n)...)
+}
+
+// callOrigBool forwards a (self, sel) -> BOOL call — the
+// canBecomeKeyWindow signature — to the saved original IMP. A missing
+// original returns true, matching NSPanel's stock answer so an
+// unexpected window keeps the behavior it already had.
+func callOrigBool(self id, cmd objc.SEL, selName string) bool {
+	orig := origIMP(self, selName)
+	if orig == 0 {
+		return true
+	}
+	fn, ok := origBoolFns[orig]
+	if !ok {
+		purego.RegisterFunc(&fn, orig)
+		origBoolFns[orig] = fn
+	}
+	return fn(self, cmd)
 }
 
 var (
@@ -627,6 +658,76 @@ func ConfigureNotchWindow(window uintptr) {
 		}
 		send(w, "setIgnoresMouseEvents:", 0)
 		registerOverlayDropTypes(w)
+	})
+}
+
+// ConfigurePinWindow turns a window into a desktop pin: a borderless
+// non-activating panel at the floating level (NSFloatingWindowLevel) so it
+// rides above normal windows but stays below the menu bar and the notch
+// overlay. Unlike ConfigureNotchWindow it keeps the menu-bar constraint —
+// pins live in the work area, never on the top strip — and registers the
+// same drop types so files land on the card. It also refuses key status:
+// canBecomeKeyWindow answers NO for this window only (same per-instance
+// graft as constrainFrameRect:), so a click on the card can never pull
+// keyboard focus away from the app the user was typing in. Main thread
+// only.
+func ConfigurePinWindow(window uintptr) {
+	if window == 0 {
+		return
+	}
+	if err := Init(); err != nil {
+		return
+	}
+	withPool(func() {
+		w := id(window)
+		send(w, "setStyleMask:", nsWindowStyleMaskNonactivatingPanel)
+		send(w, "setLevel:", uintptr(3))    // NSFloatingWindowLevel
+		send(w, "setAnimationBehavior:", 0) // NSWindowAnimationBehaviorDefault
+		send(w, "setHasShadow:", 1)         // the card's drop shadow, hugging its opaque pixels
+		send(w, "setHidesOnDeactivate:", 0)
+		send(w, "setMovable:", 0)
+		send(w, "setOpaque:", 0)
+		send(w, "setBackgroundColor:", uintptr(send(class("NSColor"), "clearColor")))
+		send(w, "setCollectionBehavior:", notchCollectionBehavior)
+		if send(w, "respondsToSelector:", uintptr(sel("setFloatingPanel:"))) != 0 {
+			send(w, "setFloatingPanel:", 1)
+		}
+		// The card never takes the keyboard. canBecomeKeyWindow is what
+		// AppKit actually consults: mygo's shared panel class answers YES,
+		// and setBecomesKeyOnlyIfNeeded: does not stop a click from making
+		// the window key, so gate the selector on the assocNoKey mark and
+		// forward every sibling window to the saved original IMP.
+		keyGateOnce.Do(func() {
+			keyGateIMP = purego.NewCallback(func(self id, cmd objc.SEL) bool {
+				if !hasAssoc(self, &assocNoKey) {
+					return callOrigBool(self, cmd, "canBecomeKeyWindow")
+				}
+				return false
+			})
+		})
+		classPatch(id(send(w, "class")), "canBecomeKeyWindow", keyGateIMP, "B@:")
+		markAssoc(w, &assocNoKey)
+		// becomesKeyOnlyIfNeeded is a second refusal for AppKit paths
+		// that skip canBecomeKeyWindow; the gate above is authoritative.
+		send(w, "setBecomesKeyOnlyIfNeeded:", 1)
+		send(w, "setIgnoresMouseEvents:", 0)
+		registerOverlayDropTypes(w)
+	})
+}
+
+// ConfigureDragPreview uses the pin's non-activating appearance, but never
+// intercepts the source gesture or animates out over the returning grid copy.
+// The animation setting is per-window; it does not change system preferences.
+func ConfigureDragPreview(window uintptr, level int) {
+	ConfigurePinWindow(window)
+	if window == 0 {
+		return
+	}
+	withPool(func() {
+		w := id(window)
+		send(w, "setAnimationBehavior:", 2) // NSWindowAnimationBehaviorNone
+		send(w, "setIgnoresMouseEvents:", 1)
+		send(w, "setLevel:", uintptr(level))
 	})
 }
 

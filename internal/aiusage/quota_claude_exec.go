@@ -1,0 +1,138 @@
+package aiusage
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// claudeBinary finds Claude Code: an explicit path, then PATH, then the
+// usual install locations. A Finder-launched app has a minimal PATH, so
+// the locations a user's shell installs into are checked by name.
+func claudeBinary(env Env) (string, error) {
+	if env.ClaudePath != "" {
+		return env.ClaudePath, nil
+	}
+	if p, err := exec.LookPath("claude"); err == nil {
+		return p, nil
+	}
+	for _, dir := range []string{
+		joinHome(env.Home, ".local", "bin"),
+		joinHome(env.Home, ".claude", "local"),
+		joinHome(env.Home, ".npm-global", "bin"),
+		joinHome(env.Home, ".bun", "bin"),
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+	} {
+		p := filepath.Join(dir, "claude")
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", errClaudeNotInstalled
+}
+
+// cleanClaudeEnv strips the environment variables that would point Claude
+// Code at another endpoint or token, and lets it print without telemetry
+// or self-updating. CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is left only
+// when the user set it: with it, /usage skips its request and prints a
+// stale reading.
+func cleanClaudeEnv(env []string) []string {
+	blocked := map[string]bool{
+		"ANTHROPIC_BASE_URL":           true,
+		"ANTHROPIC_AUTH_TOKEN":         true,
+		"ANTHROPIC_API_KEY":            true,
+		"CLAUDE_CODE_OAUTH_TOKEN":      true,
+		"CLAUDE_CODE_ENTRYPOINT":       true,
+		"CLAUDECODE":                   true,
+		"CLAUDE_CODE_SSE_PORT":         true,
+		"ANTHROPIC_BETAS":              true,
+		"CLAUDE_CODE_EXTRA_BODY":       true,
+		"CLAUDE_CODE_PROMPT_CACHE_TTL": true,
+		"DISABLE_TELEMETRY":            true,
+		"DISABLE_ERROR_REPORTING":      true,
+		"DISABLE_AUTOUPDATER":          true,
+	}
+	out := make([]string, 0, len(env)+3)
+	for _, e := range env {
+		k, _, _ := strings.Cut(e, "=")
+		if !blocked[k] {
+			out = append(out, e)
+		}
+	}
+	return append(out,
+		"DISABLE_TELEMETRY=1",
+		"DISABLE_ERROR_REPORTING=1",
+		"DISABLE_AUTOUPDATER=1",
+	)
+}
+
+// runClaudeCommand runs the real Claude Code in a throwaway directory with
+// an empty stdin and its own session, so cancelling the context ends every
+// process the run started. Claude Code (~100 MB) is not something to wait
+// on the main thread for.
+func runClaudeCommand(ctx context.Context, env Env, args []string, configDir string) (string, string, error) {
+	path, err := claudeBinary(env)
+	if err != nil {
+		return "", "", err
+	}
+	dir, err := os.MkdirTemp("", "shelfu-claude-")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(dir)
+
+	cmd := exec.Command(path, args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader("")
+	childEnv := cleanClaudeEnv(os.Environ())
+	if configDir != "" {
+		childEnv = setEnv(childEnv, "CLAUDE_CONFIG_DIR", configDir)
+	}
+	cmd.Env = childEnv
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	var out, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	if err := cmd.Start(); err != nil {
+		return "", "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return out.String(), stderr.String(), err
+	case <-ctx.Done():
+		killClaudeGroup(cmd.Process.Pid)
+		<-done
+		return out.String(), stderr.String(), ctx.Err()
+	}
+}
+
+// killClaudeGroup kills every process of the run's session. The group keeps
+// its id while any member lives, so it is signalled until none is left: a
+// signal can miss a process being forked as it is sent.
+func killClaudeGroup(pgid int) {
+	for range 200 {
+		if syscall.Kill(-pgid, syscall.SIGKILL) != nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// setEnv replaces (or appends) one variable in an environment list.
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}

@@ -18,43 +18,66 @@ import (
 
 // Env injects every machine dependency the quota fetchers touch: the user's
 // home directory (auth files live under it), the HTTP client, macOS Keychain
-// access, the vendors' base URLs and the clock. Tokens read through Env are
-// only sent to the vendor's own endpoint — never logged or persisted.
+// access, the Codex endpoint, Claude Code's command line and the clock. A
+// token read through Env is only sent to its own vendor — never logged or
+// persisted. Claude Code's /usage is the one Claude reader: ShelfU never
+// asks Anthropic itself, and reads Claude's token only to name the plan.
 type Env struct {
-	Home          string
-	HTTP          *http.Client
-	Keychain      func(ctx context.Context, service string) ([]byte, error)
-	CodexBaseURL  string
-	ClaudeBaseURL string
-	Now           func() time.Time
+	Home         string
+	HTTP         *http.Client
+	Keychain     func(ctx context.Context, service, account string) ([]byte, error)
+	CodexBaseURL string
+	Now          func() time.Time
+
+	// Claude Code. ClaudePath overrides the binary (tests and probes);
+	// empty searches the usual install locations. ClaudeConfigDir is
+	// CLAUDE_CONFIG_DIR ("" means ~/.claude); ClaudeUser is the Keychain
+	// account name ("" reads $USER). RunClaude replaces the process run;
+	// nil runs the real binary. ClaudeAccount caches credential and
+	// auth-status reads across fetches; nil keeps no cache.
+	ClaudePath      string
+	ClaudeConfigDir string
+	ClaudeUser      string
+	RunClaude       ClaudeRun
+	ClaudeAccount   *ClaudeAccount
 }
 
+// ClaudeRun runs Claude Code with args in configDir and returns its stdout,
+// stderr and process error.
+type ClaudeRun func(ctx context.Context, args []string, configDir string) (stdout, stderr string, err error)
+
 const (
-	codexDefaultBase  = "https://chatgpt.com/backend-api"
-	claudeDefaultBase = "https://api.anthropic.com"
-	quotaHTTPTimeout  = 15 * time.Second
+	codexDefaultBase = "https://chatgpt.com/backend-api"
+	quotaHTTPTimeout = 15 * time.Second
 )
 
 // DefaultEnv returns the production environment: real home directory, a 15s
-// HTTP timeout, the macOS `security` tool for Keychain reads and the vendors'
-// real endpoints.
+// HTTP timeout, the macOS `security` tool for Keychain reads, the vendor's
+// real endpoint and the user's own Claude Code.
 func DefaultEnv() Env {
 	home, _ := os.UserHomeDir()
 	return Env{
-		Home:          home,
-		HTTP:          &http.Client{Timeout: quotaHTTPTimeout},
-		Keychain:      keychainPassword,
-		CodexBaseURL:  codexDefaultBase,
-		ClaudeBaseURL: claudeDefaultBase,
-		Now:           time.Now,
+		Home:            home,
+		HTTP:            &http.Client{Timeout: quotaHTTPTimeout},
+		Keychain:        keychainPassword,
+		CodexBaseURL:    codexDefaultBase,
+		Now:             time.Now,
+		ClaudeConfigDir: os.Getenv("CLAUDE_CONFIG_DIR"),
+		ClaudeUser:      os.Getenv("USER"),
+		ClaudeAccount:   &ClaudeAccount{},
 	}
 }
 
 // keychainPassword reads a generic password via /usr/bin/security, which does
-// not pop an authorization dialog for the items Claude Code stores.
-func keychainPassword(ctx context.Context, service string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "/usr/bin/security",
-		"find-generic-password", "-s", service, "-w").Output()
+// not pop an authorization dialog for the items Claude Code stores. The
+// account name is part of the lookup, as Claude Code writes its item under
+// $USER.
+func keychainPassword(ctx context.Context, service, account string) ([]byte, error) {
+	args := []string{"find-generic-password", "-s", service, "-w"}
+	if account != "" {
+		args = append(args, "-a", account)
+	}
+	out, err := exec.CommandContext(ctx, "/usr/bin/security", args...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -87,13 +110,6 @@ func (e Env) codexBase() string {
 		return strings.TrimRight(e.CodexBaseURL, "/")
 	}
 	return codexDefaultBase
-}
-
-func (e Env) claudeBase() string {
-	if e.ClaudeBaseURL != "" {
-		return strings.TrimRight(e.ClaudeBaseURL, "/")
-	}
-	return claudeDefaultBase
 }
 
 // httpResult is one finished HTTP exchange.

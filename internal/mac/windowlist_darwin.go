@@ -4,7 +4,9 @@ package mac
 
 import (
 	"fmt"
+	"os"
 	"sync"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 )
@@ -22,12 +24,20 @@ var (
 	windowListCopy      func(option uint32, winID uint32) id
 	rectFromDict        func(dict id, rect *NSRect) bool
 	windowBoundsKey     id
+	windowOwnerPIDKey   id
+	windowLayerKey      id
+	windowNameKey       id
 	windowListOnce      sync.Once
 	windowListErr       error
 )
 
 // kCGWindowListOptionIncludingWindow asks the list for one window only.
-const kCGWindowListOptionIncludingWindow = 1 << 3
+const (
+	kCGWindowListOptionIncludingWindow  = 1 << 3
+	kCGWindowListOptionOnScreenOnly     = 1 << 0
+	kCGWindowListExcludeDesktopElements = 1 << 4
+	kCGWindowListNormalWindowLayer      = 0
+)
 
 // loadWindowList resolves the CoreFoundation/CoreGraphics entry points once.
 // Called lazily by WindowScreenRect; Init must already have run (it has —
@@ -51,14 +61,21 @@ func loadWindowList() error {
 		purego.RegisterLibFunc(&cfReleaseWL, cfLibrary, "CFRelease")
 		purego.RegisterLibFunc(&windowListCopy, libCG, "CGWindowListCopyWindowInfo")
 		purego.RegisterLibFunc(&rectFromDict, libCG, "CGRectMakeWithDictionaryRepresentation")
-		keyAddr, err := purego.Dlsym(libCG, "kCGWindowBounds")
-		if err != nil {
-			windowListErr = err
-			return
-		}
 		var copySymbol func(dst *id, src uintptr, size uintptr) uintptr
 		purego.RegisterLibFunc(&copySymbol, purego.RTLD_DEFAULT, "memcpy")
-		copySymbol(&windowBoundsKey, keyAddr, 8)
+		for name, dst := range map[string]*id{
+			"kCGWindowBounds":   &windowBoundsKey,
+			"kCGWindowOwnerPID": &windowOwnerPIDKey,
+			"kCGWindowLayer":    &windowLayerKey,
+			"kCGWindowName":     &windowNameKey,
+		} {
+			keyAddr, err := purego.Dlsym(libCG, name)
+			if err != nil {
+				windowListErr = err
+				return
+			}
+			copySymbol(dst, keyAddr, unsafe.Sizeof(*dst))
+		}
 	})
 	return windowListErr
 }
@@ -104,4 +121,49 @@ func WindowScreenRect(num int) (r NSRect, ok bool) {
 		}
 	})
 	return r, ok
+}
+
+// ScreenCaptureGrantedByWindowTitles reports whether WindowServer returns
+// the titles of other apps' ordinary windows. Without the screen-recording
+// grant CGWindowListCopyWindowInfo still lists those windows, but
+// kCGWindowName is nil (system chrome such as the menu bar keeps its name,
+// so only layer-0 windows owned by another process count). The call never
+// prompts and changes nothing. A true answer proves the grant is active
+// even while this process's cached preflight answer is still false; a
+// false answer only means the grant is not proven — a screen with no other
+// titled window looks the same. Main thread only.
+func ScreenCaptureGrantedByWindowTitles() bool {
+	if err := Init(); err != nil {
+		return false
+	}
+	if err := loadWindowList(); err != nil {
+		return false
+	}
+	granted := false
+	self := os.Getpid()
+	withPool(func() {
+		list := windowListCopy(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements, 0)
+		if list == 0 {
+			return
+		}
+		defer cfReleaseWL(uintptr(list))
+		for i, n := 0, cfArrayCount(list); i < n; i++ {
+			dict := cfArrayValueAtIndex(list, i)
+			if dict == 0 {
+				continue
+			}
+			pid := sendInt(cfDictGetValue(dict, windowOwnerPIDKey), "intValue")
+			if pid == self {
+				continue
+			}
+			if sendInt(cfDictGetValue(dict, windowLayerKey), "intValue") != kCGWindowListNormalWindowLayer {
+				continue
+			}
+			if name := cfDictGetValue(dict, windowNameKey); name != 0 && goString(name) != "" {
+				granted = true
+				return
+			}
+		}
+	})
+	return granted
 }

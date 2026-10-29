@@ -1,6 +1,6 @@
 // Package docx writes minimal Office Open XML word-processing
 // documents — a sequence of text paragraphs plus one optional inline
-// picture — which Shelf produces when exporting an image together with
+// picture — which ShelfU produces when exporting an image together with
 // the text recognized in it. It is a small writer, not a docx toolkit,
 // and uses only the standard library.
 package docx
@@ -254,18 +254,18 @@ func documentRelsXML(pic *Picture) string {
 const settingsXML = `<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
 	`<w:defaultTabStop w:val="720"/></w:settings>`
 
-// corePropsXML stamps the file as produced by Shelf.
+// corePropsXML stamps the file as produced by ShelfU.
 func corePropsXML(now time.Time) string {
 	ts := now.Format("2006-01-02T15:04:05Z")
 	return `<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
-		`<dc:creator>Shelf</dc:creator><cp:lastModifiedBy>Shelf</cp:lastModifiedBy>` +
+		`<dc:creator>ShelfU</dc:creator><cp:lastModifiedBy>ShelfU</cp:lastModifiedBy>` +
 		fmt.Sprintf(`<dcterms:created xsi:type="dcterms:W3CDTF">%s</dcterms:created>`, ts) +
 		fmt.Sprintf(`<dcterms:modified xsi:type="dcterms:W3CDTF">%s</dcterms:modified>`, ts) +
 		`</cp:coreProperties>`
 }
 
 const appPropsXML = `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">` +
-	`<Application>Shelf</Application>` +
+	`<Application>ShelfU</Application>` +
 	`</Properties>`
 
 // documentOpen and documentClose wrap every generated document part;

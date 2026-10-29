@@ -2,63 +2,487 @@ package aiusage
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-// keychainFixture returns a Keychain func serving the named fixture.
-func keychainFixture(t *testing.T, name string) func(context.Context, string) ([]byte, error) {
+// claudeSampleUsage is a reading dated around fakeNow (2027-01-10 12:00
+// UTC): a 5-hour session four hours out and a week three days out.
+const claudeSampleUsage = `You are currently using your subscription to power your Claude Code usage
+
+Current session: 7% used · resets Jan 10 at 4pm (UTC)
+Current week (all models): 41% used · resets Jan 13 at 10am (UTC)`
+
+// claudeResultJSON wraps /usage's text in what -p --output-format json
+// prints.
+func claudeResultJSON(result string, isError bool) string {
+	return fmt.Sprintf(`{"type":"result","is_error":%t,"result":%q}`, isError, result)
+}
+
+// keychainFixture serves the named credentials fixture and records the
+// service and account it was asked for.
+func keychainFixture(t *testing.T, name string, calls *int, service, account *string) func(context.Context, string, string) ([]byte, error) {
 	t.Helper()
-	return func(ctx context.Context, service string) ([]byte, error) {
-		if service != claudeKeychainService {
-			return nil, fmt.Errorf("unexpected service %q", service)
+	return func(ctx context.Context, svc, acc string) ([]byte, error) {
+		if calls != nil {
+			*calls++
+		}
+		if service != nil {
+			*service = svc
+		}
+		if account != nil {
+			*account = acc
 		}
 		return os.ReadFile(filepath.Join("testdata", "quota", name))
 	}
 }
 
-func keychainMissing() func(context.Context, string) ([]byte, error) {
-	return func(context.Context, string) ([]byte, error) {
-		return nil, errors.New("The specified item could not be found in the keychain.")
+func keychainMissing(context.Context, string, string) ([]byte, error) {
+	return nil, errors.New("The specified item could not be found in the keychain.")
+}
+
+// exitError is a real *exec.ExitError with the given exit code, which is
+// how `security` reports a missing item (44) or anything else.
+func exitError(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("/bin/sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+	if err == nil {
+		t.Fatalf("exit %d did not fail", code)
+	}
+	return err
+}
+
+// fakeClaudeCLI stands in for Claude Code: it answers `auth status` and
+// /usage from fields and records how it was called.
+type fakeClaudeCLI struct {
+	usageOut  string
+	usageErr  string
+	usageFail error
+	authOut   string
+
+	usageCalls int
+	authCalls  int
+	lastArgs   []string
+	lastDir    string
+}
+
+func (f *fakeClaudeCLI) run(ctx context.Context, args []string, dir string) (string, string, error) {
+	f.lastArgs, f.lastDir = args, dir
+	if len(args) > 0 && args[0] == "auth" {
+		f.authCalls++
+		if f.authOut == "" {
+			return "", "", errors.New("no auth answer")
+		}
+		return f.authOut, "", nil
+	}
+	f.usageCalls++
+	return f.usageOut, f.usageErr, f.usageFail
+}
+
+// claudeEnv is the machine a Claude fetch runs on: the logged-in fixtures,
+// a fake clock and a fresh account cache.
+func claudeEnv(t *testing.T, home string) Env {
+	t.Helper()
+	return Env{
+		Home:          home,
+		Keychain:      keychainFixture(t, "claude_credentials.json", nil, nil, nil),
+		Now:           func() time.Time { return fakeNow },
+		ClaudeUser:    "tester",
+		ClaudeAccount: &ClaudeAccount{},
 	}
 }
 
-// claudeServer records headers and replies with status/body.
-func claudeServer(t *testing.T, status int, body string, headers map[string]string) (*httptest.Server, *int) {
-	t.Helper()
-	var hits int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
-		for k, v := range headers {
-			w.Header().Set(k, v)
-		}
-		w.WriteHeader(status)
-		fmt.Fprint(w, body)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &hits
+func TestFetchClaudeOK(t *testing.T) {
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaOK {
+		t.Fatalf("status = %v, err %q", q.Status, q.Err)
+	}
+	if q.Tool != ToolClaude || q.Plan != "Pro" {
+		t.Fatalf("quota = %+v", q)
+	}
+	if len(q.Windows) != 2 {
+		t.Fatalf("windows = %+v", q.Windows)
+	}
+	if got, want := strings.Join(cli.lastArgs, " "), strings.Join(claudeUsageArgs(), " "); got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if cli.lastDir != "" {
+		t.Fatalf("config dir = %q, want the default", cli.lastDir)
+	}
+	if q.Windows[0].UsedPct != 7 || q.Windows[1].UsedPct != 41 {
+		t.Fatalf("windows = %+v", q.Windows)
+	}
+	if q.Windows[0].ResetsAt.IsZero() || q.Windows[1].ResetsAt.IsZero() {
+		t.Fatalf("reset times missing: %+v", q.Windows)
+	}
 }
 
-func claudeEnv(srv *httptest.Server, home string, kc func(context.Context, string) ([]byte, error)) Env {
-	return Env{
-		Home:          home,
-		HTTP:          srv.Client(),
-		Keychain:      kc,
-		ClaudeBaseURL: srv.URL,
-		Now:           func() time.Time { return fakeNow },
+func TestFetchClaudeUsesConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	var gotService string
+	env := claudeEnv(t, t.TempDir())
+	env.ClaudeConfigDir = dir
+	env.Keychain = keychainFixture(t, "claude_credentials.json", nil, &gotService, nil)
+	env.RunClaude = cli.run
+
+	if q := FetchClaude(context.Background(), env); q.Status != QuotaOK {
+		t.Fatalf("status = %v, err %q", q.Status, q.Err)
+	}
+	if gotService != claudeKeychainServiceFor(dir) {
+		t.Fatalf("keychain service = %q, want %q", gotService, claudeKeychainServiceFor(dir))
+	}
+	if gotService == claudeHomeService {
+		t.Fatal("a config dir must not use the plain service")
+	}
+	if cli.lastDir != dir {
+		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want %q", cli.lastDir, dir)
+	}
+}
+
+func TestFetchClaudePlanFromAuthStatus(t *testing.T) {
+	cli := &fakeClaudeCLI{
+		usageOut: claudeResultJSON(claudeSampleUsage, false),
+		authOut:  `{"loggedIn":true,"subscriptionType":"max"}`,
+	}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Plan != "Max" {
+		t.Fatalf("plan = %q, want the auth status's Max", q.Plan)
+	}
+	if cli.authCalls != 1 || cli.usageCalls != 1 {
+		t.Fatalf("calls auth=%d usage=%d", cli.authCalls, cli.usageCalls)
+	}
+}
+
+func TestFetchClaudeAuthStatusSaysLoggedOut(t *testing.T) {
+	cli := &fakeClaudeCLI{authOut: `{"loggedIn":false}`}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaNotLoggedIn {
+		t.Fatalf("status = %v, want QuotaNotLoggedIn", q.Status)
+	}
+	if cli.usageCalls != 0 {
+		t.Fatalf("usage ran %d times although no one is signed in", cli.usageCalls)
+	}
+}
+
+func TestFetchClaudeNoCLI(t *testing.T) {
+	cli := &fakeClaudeCLI{usageFail: errClaudeNotInstalled}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaNoCLI {
+		t.Fatalf("status = %v, want QuotaNoCLI", q.Status)
+	}
+}
+
+func TestFetchClaudeDeniedMessages(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want QuotaStatus
+	}{
+		{"Not logged in · Please run /login", QuotaNotLoggedIn},
+		{"OAuth session expired and could not be refreshed", QuotaExpired},
+		{"API Error: 401 Unauthorized", QuotaExpired},
+		{"You've hit your limit for now", QuotaLimitReached},
+		{"You've hit your session limit · resets 3pm", QuotaLimitReached},
+	} {
+		cli := &fakeClaudeCLI{usageOut: claudeResultJSON(tc.text, true)}
+		env := claudeEnv(t, t.TempDir())
+		env.RunClaude = cli.run
+		q := FetchClaude(context.Background(), env)
+		if q.Status != tc.want {
+			t.Fatalf("%q → status %v, want %v", tc.text, q.Status, tc.want)
+		}
+	}
+}
+
+// A limit answer carries the reset its message named, so the card can say
+// when the allowance returns.
+func TestFetchClaudeLimitReset(t *testing.T) {
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON("You've hit your weekly limit · resets Jan 12 at 10am (UTC)", true)}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaLimitReached {
+		t.Fatalf("status = %v, want QuotaLimitReached", q.Status)
+	}
+	want := time.Date(2027, 1, 12, 10, 0, 0, 0, time.UTC)
+	if !q.LimitResetsAt.Equal(want) {
+		t.Fatalf("LimitResetsAt = %v, want %v (err %q)", q.LimitResetsAt, want, q.Err)
+	}
+}
+
+func TestFetchClaudeEmptyUsage(t *testing.T) {
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON("", false)}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaFailed {
+		t.Fatalf("status = %v, want QuotaFailed", q.Status)
+	}
+	if q.Err == "" {
+		t.Fatal("an empty answer must carry an error, never 0%")
+	}
+}
+
+func TestFetchClaudeVerboseArray(t *testing.T) {
+	out := `[{"type":"system"},{"type":"assistant","result":""},` +
+		claudeResultJSON(claudeSampleUsage, false) + `]`
+	cli := &fakeClaudeCLI{usageOut: out}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	if q := FetchClaude(context.Background(), env); q.Status != QuotaOK {
+		t.Fatalf("status = %v, err %q", q.Status, q.Err)
+	}
+}
+
+func TestFetchClaudeCLIErrorKeepsStderr(t *testing.T) {
+	cli := &fakeClaudeCLI{usageFail: errors.New("exit status 1"), usageErr: "EACCES: permission denied"}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaFailed || !strings.Contains(q.Err, "EACCES") {
+		t.Fatalf("quota = %+v, want QuotaFailed with the CLI's message", q)
+	}
+}
+
+func TestFetchClaudeIgnoresLocalExpiry(t *testing.T) {
+	// Claude Code refreshes its own token; a locally old expiresAt must
+	// not read as 登录已过期.
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+	env.Keychain = keychainFixture(t, "claude_credentials_expired.json", nil, nil, nil)
+
+	if q := FetchClaude(context.Background(), env); q.Status != QuotaOK {
+		t.Fatalf("status = %v, err %q", q.Status, q.Err)
+	}
+}
+
+func TestFetchClaudeEmptyKeychainItemDoesNotFallBack(t *testing.T) {
+	// An item that parses but holds no token is a sign-out; the older
+	// file beside it must not sign the account back in.
+	home := t.TempDir()
+	writeClaudeFile(t, home, "claude_credentials_max.json")
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, home)
+	env.RunClaude = cli.run
+	env.Keychain = func(context.Context, string, string) ([]byte, error) {
+		return []byte(`{"claudeAiOauth":{"accessToken":"","refreshToken":""}}`), nil
+	}
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaNotLoggedIn {
+		t.Fatalf("status = %v, want QuotaNotLoggedIn", q.Status)
+	}
+	if cli.usageCalls != 0 {
+		t.Fatal("a signed-out account must not run /usage")
+	}
+}
+
+func TestFetchClaudeFileFallback(t *testing.T) {
+	home := t.TempDir()
+	writeClaudeFile(t, home, "claude_credentials_max.json")
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, home)
+	env.Keychain = keychainMissing
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaOK {
+		t.Fatalf("status = %v, err %q", q.Status, q.Err)
+	}
+	if q.Plan != "Max" {
+		t.Fatalf("plan = %q", q.Plan)
+	}
+}
+
+func TestFetchClaudeConfigDirFile(t *testing.T) {
+	dir := t.TempDir()
+	writeCredentialFile(t, dir, "claude_credentials_max.json")
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.ClaudeConfigDir = dir
+	env.Keychain = keychainMissing
+	env.RunClaude = cli.run
+
+	q := FetchClaude(context.Background(), env)
+	if q.Status != QuotaOK || q.Plan != "Max" {
+		t.Fatalf("quota = %+v", q)
+	}
+}
+
+func TestFetchClaudeHexKeychainItem(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "quota", "claude_credentials.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.RunClaude = cli.run
+	env.Keychain = func(context.Context, string, string) ([]byte, error) {
+		return []byte(hex.EncodeToString(data) + "\n"), nil
+	}
+
+	if q := FetchClaude(context.Background(), env); q.Status != QuotaOK {
+		t.Fatalf("status = %v, err %q", q.Status, q.Err)
+	}
+}
+
+func TestFetchClaudeCredentialCache(t *testing.T) {
+	now := fakeNow
+	var calls int
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.Now = func() time.Time { return now }
+	env.Keychain = keychainFixture(t, "claude_credentials.json", &calls, nil, nil)
+	env.RunClaude = cli.run
+
+	FetchClaude(context.Background(), env)
+	FetchClaude(context.Background(), env)
+	if calls != 1 {
+		t.Fatalf("keychain reads = %d within the 10s cache, want 1", calls)
+	}
+	now = now.Add(claudeCredentialTTL + time.Second)
+	FetchClaude(context.Background(), env)
+	if calls != 2 {
+		t.Fatalf("keychain reads = %d after the cache expired, want 2", calls)
+	}
+}
+
+func TestFetchClaudeKeychainDialogBackoff(t *testing.T) {
+	now := fakeNow
+	var calls int
+	denied := exitError(t, 1)
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.Now = func() time.Time { return now }
+	env.Keychain = func(context.Context, string, string) ([]byte, error) {
+		calls++
+		return nil, denied
+	}
+	env.RunClaude = cli.run
+
+	if q := FetchClaude(context.Background(), env); q.Status != QuotaNotLoggedIn {
+		t.Fatalf("first status = %v", q.Status)
+	}
+	now = now.Add(time.Minute)
+	FetchClaude(context.Background(), env)
+	if calls != 1 {
+		t.Fatalf("a denied Keychain read was asked again after %d calls", calls)
+	}
+	now = now.Add(claudeDeniedTTL)
+	FetchClaude(context.Background(), env)
+	if calls != 2 {
+		t.Fatalf("keychain reads = %d after the backoff, want 2", calls)
+	}
+}
+
+func TestFetchClaudeKeychainMissingDoesNotBackOff(t *testing.T) {
+	now := fakeNow
+	var calls int
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.Now = func() time.Time { return now }
+	env.Keychain = func(context.Context, string, string) ([]byte, error) {
+		calls++
+		return nil, exitError(t, 44) // the item is not there: asks nobody
+	}
+	env.RunClaude = cli.run
+
+	FetchClaude(context.Background(), env)
+	now = now.Add(claudeCredentialTTL + time.Second)
+	FetchClaude(context.Background(), env)
+	if calls != 2 {
+		t.Fatalf("keychain reads = %d, want 2: a missing item must not stop the next read", calls)
+	}
+}
+
+func TestFetchClaudeCancelledContext(t *testing.T) {
+	touched := false
+	env := claudeEnv(t, t.TempDir())
+	env.Keychain = func(context.Context, string, string) ([]byte, error) {
+		touched = true
+		return nil, errors.New("not read")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	q := FetchClaude(ctx, env)
+	if q.Status != QuotaFailed {
+		t.Fatalf("status = %v, want QuotaFailed", q.Status)
+	}
+	if touched {
+		t.Fatal("credentials were read despite a cancelled context")
+	}
+}
+
+func TestClaudeKeychainServiceFor(t *testing.T) {
+	if got := claudeKeychainServiceFor(""); got != claudeHomeService {
+		t.Fatalf("plain service = %q", got)
+	}
+	a := claudeKeychainServiceFor("/one")
+	b := claudeKeychainServiceFor("/two")
+	if a == b || !strings.HasPrefix(a, claudeHomeService+"-") {
+		t.Fatalf("derived services = %q, %q", a, b)
+	}
+	if len(strings.TrimPrefix(a, claudeHomeService+"-")) != 8 {
+		t.Fatalf("service suffix = %q", a)
+	}
+}
+
+func TestCleanClaudeEnv(t *testing.T) {
+	env := cleanClaudeEnv([]string{
+		"PATH=/usr/bin",
+		"ANTHROPIC_BASE_URL=https://evil.example",
+		"ANTHROPIC_AUTH_TOKEN=x",
+		"ANTHROPIC_API_KEY=y",
+		"CLAUDE_CODE_OAUTH_TOKEN=z",
+		"HOME=/Users/x",
+		"DISABLE_TELEMETRY=0",
+	})
+	joined := strings.Join(env, "\n")
+	for _, bad := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "DISABLE_TELEMETRY=0"} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("%s survived the clean environment:\n%s", bad, joined)
+		}
+	}
+	for _, want := range []string{"PATH=/usr/bin", "HOME=/Users/x", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "DISABLE_AUTOUPDATER=1"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("%s missing from the clean environment:\n%s", want, joined)
+		}
 	}
 }
 
 // writeClaudeFile drops a credentials file under home/.claude/.
 func writeClaudeFile(t *testing.T, home, fixtureName string) {
 	t.Helper()
-	dir := filepath.Join(home, ".claude")
+	writeCredentialFile(t, filepath.Join(home, ".claude"), fixtureName)
+}
+
+func writeCredentialFile(t *testing.T, dir, fixtureName string) {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -71,270 +495,32 @@ func writeClaudeFile(t *testing.T, home, fixtureName string) {
 	}
 }
 
-func TestFetchClaudeOK(t *testing.T) {
-	srv, hits := claudeServer(t, 200, fixture(t, "claude_usage.json"), nil)
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaOK {
-		t.Fatalf("status = %v, err %q", q.Status, q.Err)
-	}
-	if q.Tool != ToolClaude {
-		t.Fatalf("tool = %v", q.Tool)
-	}
-	if q.Plan != "Pro" {
-		t.Fatalf("plan = %q", q.Plan)
-	}
-	if q.FiveHour == nil || q.Weekly == nil {
-		t.Fatal("both windows should be set")
-	}
-	if q.FiveHour.UsedPct != 42 || q.FiveHour.Length != 5*time.Hour {
-		t.Fatalf("five-hour = %+v", q.FiveHour)
-	}
-	if q.Weekly.UsedPct != 18 || q.Weekly.Length != 7*24*time.Hour {
-		t.Fatalf("weekly = %+v", q.Weekly)
-	}
-	want, _ := time.Parse(time.RFC3339, "2027-01-10T15:00:00.123456Z")
-	if !q.FiveHour.ResetsAt.Equal(want) {
-		t.Fatalf("five-hour resets at %v, want %v", q.FiveHour.ResetsAt, want)
-	}
-	if *hits != 1 {
-		t.Fatalf("server hits = %d", *hits)
-	}
-}
-
-func TestFetchClaudeHeaders(t *testing.T) {
-	var gotAuth, gotBeta, gotUA string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotBeta = r.Header.Get("anthropic-beta")
-		gotUA = r.Header.Get("User-Agent")
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, fixture(t, "claude_usage.json"))
-	}))
-	defer srv.Close()
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	FetchClaude(context.Background(), env)
-	if gotAuth != "Bearer sk-ant-oat01-testtoken" {
-		t.Fatalf("Authorization = %q", gotAuth)
-	}
-	if gotBeta != "oauth-2025-04-20" {
-		t.Fatalf("anthropic-beta = %q", gotBeta)
-	}
-	if gotUA != "claude-code/2.1.0" {
-		t.Fatalf("User-Agent = %q", gotUA)
-	}
-}
-
-func TestFetchClaudeFileFallback(t *testing.T) {
-	// Keychain misses; the credentials file supplies the token.
-	home := t.TempDir()
-	writeClaudeFile(t, home, "claude_credentials_max.json")
-	srv, hits := claudeServer(t, 200, fixture(t, "claude_usage.json"), nil)
-	env := claudeEnv(srv, home, keychainMissing())
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaOK {
-		t.Fatalf("status = %v, err %q", q.Status, q.Err)
-	}
-	if q.Plan != "Max" {
-		t.Fatalf("plan = %q", q.Plan)
-	}
-	if *hits != 1 {
-		t.Fatalf("server hits = %d", *hits)
-	}
-}
-
-func TestFetchClaudeKeychainGarbageFallsBack(t *testing.T) {
-	home := t.TempDir()
-	writeClaudeFile(t, home, "claude_credentials.json")
-	kc := func(context.Context, string) ([]byte, error) {
-		return []byte("not json"), nil
-	}
-	srv, _ := claudeServer(t, 200, fixture(t, "claude_usage.json"), nil)
-	env := claudeEnv(srv, home, kc)
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaOK {
-		t.Fatalf("status = %v", q.Status)
-	}
-}
-
-func TestFetchClaudeNotLoggedIn(t *testing.T) {
-	srv, hits := claudeServer(t, 200, "{}", nil)
-	env := claudeEnv(srv, t.TempDir(), keychainMissing())
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaNotLoggedIn {
-		t.Fatalf("status = %v", q.Status)
-	}
-	if *hits != 0 {
-		t.Fatalf("expected no request, got %d", *hits)
-	}
-}
-
-func TestFetchClaudeExpired(t *testing.T) {
-	srv, hits := claudeServer(t, 200, "{}", nil)
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials_expired.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaExpired {
-		t.Fatalf("status = %v", q.Status)
-	}
-	if q.Plan != "Pro" {
-		t.Fatalf("plan = %q", q.Plan)
-	}
-	if *hits != 0 {
-		t.Fatalf("expired token must not hit the network, got %d", *hits)
-	}
-}
-
-func TestFetchClaude401And429(t *testing.T) {
-	for _, tc := range []struct {
-		code  int
-		want  QuotaStatus
-		after time.Duration
-	}{
-		{401, QuotaExpired, 0},
-		{403, QuotaExpired, 0},
-		{429, QuotaRateLimited, 90 * time.Second},
-	} {
-		srv, _ := claudeServer(t, tc.code, `{"error":"x"}`,
-			map[string]string{"Retry-After": "90"})
-		env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-		q := FetchClaude(context.Background(), env)
-		if q.Status != tc.want {
-			t.Fatalf("HTTP %d → status %v, want %v", tc.code, q.Status, tc.want)
+// A credential read cut short by cancellation must not be cached: the next
+// look has to ask the Keychain again instead of showing 未登录 for 10s.
+func TestFetchClaudeCancelledCredentialReadNotCached(t *testing.T) {
+	var calls int
+	var cancel context.CancelFunc
+	cli := &fakeClaudeCLI{usageOut: claudeResultJSON(claudeSampleUsage, false)}
+	env := claudeEnv(t, t.TempDir())
+	env.Keychain = func(context.Context, string, string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			cancel()
+			return nil, errNotLoggedIn
 		}
-		if q.RetryAfter != tc.after {
-			t.Fatalf("HTTP %d → RetryAfter %v, want %v", tc.code, q.RetryAfter, tc.after)
-		}
+		return os.ReadFile(filepath.Join("testdata", "quota", "claude_credentials.json"))
 	}
-}
+	env.RunClaude = cli.run
 
-func TestFetchClaude429NoHeader(t *testing.T) {
-	srv, _ := claudeServer(t, 429, `{"error":"x"}`, nil)
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaRateLimited {
-		t.Fatalf("status = %v", q.Status)
+	ctx, c := context.WithCancel(context.Background())
+	cancel = c
+	if q := FetchClaude(ctx, env); q.Status != QuotaFailed {
+		t.Fatalf("cancelled read status = %v", q.Status)
 	}
-	if q.RetryAfter != 5*time.Minute {
-		t.Fatalf("RetryAfter fallback = %v", q.RetryAfter)
+	if q := FetchClaude(context.Background(), env); q.Status != QuotaOK {
+		t.Fatalf("the read after the cancel = %v, err %q (cached a cancelled read)", q.Status, q.Err)
 	}
-}
-
-func TestFetchClaude500(t *testing.T) {
-	srv, _ := claudeServer(t, 500, `{"error":"boom"}`, nil)
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaFailed {
-		t.Fatalf("status = %v", q.Status)
-	}
-	if q.Err == "" {
-		t.Fatal("Err should carry a short description")
-	}
-}
-
-func TestFetchClaudeMissingFields(t *testing.T) {
-	srv, _ := claudeServer(t, 200, fixture(t, "claude_usage_missing_fields.json"), nil)
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaOK {
-		t.Fatalf("status = %v", q.Status)
-	}
-	if q.FiveHour == nil || q.FiveHour.UsedPct != 66 {
-		t.Fatalf("five-hour = %+v", q.FiveHour)
-	}
-	if !q.FiveHour.ResetsAt.IsZero() {
-		t.Fatalf("missing resets_at should leave zero time, got %v", q.FiveHour.ResetsAt)
-	}
-	if q.Weekly != nil {
-		t.Fatalf("weekly should be nil, got %+v", q.Weekly)
-	}
-}
-
-func TestFetchClaudeMissingUtilization(t *testing.T) {
-	// A window object with no utilization at all is unknown data, not a
-	// "100% left" healthy one.
-	srv, _ := claudeServer(t, 200, `{"five_hour":{"resets_at":"2027-01-10T17:00:00Z"}}`, nil)
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaOK {
-		t.Fatalf("status = %v", q.Status)
-	}
-	if q.FiveHour != nil {
-		t.Fatalf("missing utilization must not publish a window, got %+v", q.FiveHour)
-	}
-}
-
-func TestFetchClaudeRejectsRedirect(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("redirected request reached the target host with credentials in flight")
-	}))
-	defer target.Close()
-	srv, _ := claudeServer(t, http.StatusTemporaryRedirect, "",
-		map[string]string{"Location": target.URL + "/api/oauth/usage"})
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	q := FetchClaude(context.Background(), env)
-	if q.Status != QuotaFailed {
-		t.Fatalf("status = %v, want QuotaFailed (redirect refused)", q.Status)
-	}
-}
-
-func TestFetchClaudeCancelledContext(t *testing.T) {
-	// A cancelled context short-circuits before the Keychain is touched.
-	touched := false
-	srv, _ := claudeServer(t, 200, `{}`, nil)
-	env := claudeEnv(srv, t.TempDir(),
-		func(context.Context, string) ([]byte, error) { touched = true; return keychainMissing()(context.Background(), "") })
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	q := FetchClaude(ctx, env)
-	if q.Status != QuotaFailed {
-		t.Fatalf("status = %v, want QuotaFailed", q.Status)
-	}
-	if touched {
-		t.Fatal("credentials were read despite a cancelled context")
-	}
-}
-
-func TestFetchClaudeCancelledKeychainSkipsFallback(t *testing.T) {
-	// A Keychain read that cancels the context must end the fetch: the
-	// ~/.claude/.credentials.json fallback is a credential read too, and
-	// the caller already asked to stop. With no fallback file present the
-	// buggy path would end at "not logged in" instead of the cancel.
-	srv, _ := claudeServer(t, 200, `{}`, nil)
-	env := claudeEnv(srv, t.TempDir(), nil) // no credentials file in Home
-	ctx, cancel := context.WithCancel(context.Background())
-	env.Keychain = func(c context.Context, service string) ([]byte, error) {
-		cancel()
-		return nil, errNotLoggedIn // as if /usr/bin/security died on cancel
-	}
-	q := FetchClaude(ctx, env)
-	if q.Status != QuotaFailed {
-		t.Fatalf("status = %v, want QuotaFailed (cancel honoured before fallback)", q.Status)
-	}
-}
-
-func TestFetchClaudeContextTimeout(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(300 * time.Millisecond)
-		fmt.Fprint(w, "{}")
-	}))
-	defer srv.Close()
-	env := claudeEnv(srv, t.TempDir(), keychainFixture(t, "claude_credentials.json"))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	q := FetchClaude(ctx, env)
-	if q.Status != QuotaFailed {
-		t.Fatalf("status = %v", q.Status)
+	if calls != 2 {
+		t.Fatalf("keychain reads = %d, want 2", calls)
 	}
 }

@@ -45,7 +45,7 @@ func FrontmostPID() int {
 }
 
 // OwnPID returns this process's process identifier, for telling the
-// frontmost application apart from Shelf itself. Main thread only.
+// frontmost application apart from ShelfU itself. Main thread only.
 func OwnPID() int { return os.Getpid() }
 
 // AppActive reports whether this application is the active one
@@ -110,7 +110,7 @@ func DeactivateSelf() {
 
 // SetWindowAppearance pins a window to the dark or light appearance
 // (NSWindow.appearance = NSAppearanceNameDarkAqua / Aqua), so its title bar
-// and chrome draw accordingly regardless of the system setting. Shelf's UI
+// and chrome draw accordingly regardless of the system setting. ShelfU's UI
 // is always dark; the Settings window calls this with dark=true. Main
 // thread only.
 func SetWindowAppearance(window uintptr, dark bool) {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,20 +24,20 @@ import (
 // System Now Playing through MediaRemote.
 //
 // Since macOS 15.4 MediaRemote answers only clients whose code is
-// Apple-signed, so Shelf itself cannot read the system's now-playing
+// Apple-signed, so ShelfU itself cannot read the system's now-playing
 // state in-process. The workaround here is the well-known Apple-signed
 // host trick: the app loads a small C bundle (built from
 // internal/mac/nowplaying/helper.c, shipped in the app's resources) into
 // /usr/bin/perl, which is Apple-signed, and the bundle does all
 // MediaRemote work inside that process, streaming JSON lines on stdout.
-// Every line of the bundle and of this client is Shelf's own code.
+// Every line of the bundle and of this client is ShelfU's own code.
 //
 // Everything here is read-only except SendNowPlayingCommand, which the
 // UI calls on an explicit button press.
 
 const (
 	// npHelperBundle is the bundle inside the app's resource directory.
-	npHelperBundle = "ShelfNowPlaying.bundle"
+	npHelperBundle = "ShelfUNowPlaying.bundle"
 	// npHelperEntry is the C function the perl host calls.
 	npHelperEntry = "shelf_np_run"
 	// npPerlScript loads the bundle and calls shelf_np_run; the bundle
@@ -413,6 +414,29 @@ func (h *NowPlayingHost) Send(command NowPlayingCommand) {
 		return
 	}
 	_, _ = io.WriteString(h.cmd, name+"\n")
+}
+
+// maxSeekSeconds bounds a seek position. Twenty-four hours is far beyond
+// any track, so a larger value is a caller's arithmetic slip rather than
+// a position worth sending to the playing app.
+const maxSeekSeconds = 24 * 60 * 60
+
+// Seek asks the playing app to jump to seconds into the current track.
+// A position the UI cannot mean — NaN, ±Inf, negative, or beyond
+// maxSeekSeconds — is dropped instead of sent: the helper answers such a
+// line with an error the app never shows, and the one line it could
+// misread (a truncated decimal) must not reach the player at all. Like
+// Send, it is a no-op when the helper is not running and its errors are
+// ignored: not every app or source can seek.
+func (h *NowPlayingHost) Seek(seconds float64) {
+	if h.cmd == nil {
+		return
+	}
+	// NaN fails both comparisons, so this one test rejects it too.
+	if !(seconds >= 0 && seconds <= maxSeekSeconds) {
+		return
+	}
+	_, _ = io.WriteString(h.cmd, "seek "+strconv.FormatFloat(seconds, 'f', -1, 64)+"\n")
 }
 
 // startPerlHost runs the helper bundle inside the Apple-signed perl.

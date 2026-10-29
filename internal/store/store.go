@@ -1,4 +1,4 @@
-// Package store implements Shelf's persistent storage: a versioned
+// Package store implements ShelfU's persistent storage: a versioned
 // state.json plus managed images/ and converted/ directories under a
 // single root. It is purely synchronous and owns no goroutines; the
 // caller (UI/main thread) drives every operation. One live process at a
@@ -64,7 +64,11 @@ var ErrLocked = errors.New("store: data directory is in use by another instance"
 // the tray's remove/clear for clipboard captures); it stays in the
 // clipboard list, is cleared by pinning or by re-adding the same
 // content, and only the clipboard page can truly remove the item.
-// Converted marks a KindFile item whose file Shelf itself created
+// OffClip is the mirror for a capture removed from the clipboard page:
+// the item stays on the tray, and a capture off both pages is deleted by
+// the next removal. Both flags are cleared by pinning and by re-adding
+// the same content.
+// Converted marks a KindFile item whose file ShelfU itself created
 // inside <root>/converted: removal paths delete that file like a
 // managed image, while a plain KindFile item's path is never deleted.
 // Missing is runtime-only and never persisted.
@@ -78,6 +82,7 @@ type Item struct {
 	Source    string    `json:"source,omitempty"`
 	SourceApp string    `json:"sourceApp,omitempty"`
 	OffTray   bool      `json:"offTray,omitempty"`
+	OffClip   bool      `json:"offClip,omitempty"`
 	Converted bool      `json:"converted,omitempty"`
 	Missing   bool      `json:"-"`
 	// OCRText is what text recognition found in the image (empty when it
@@ -127,13 +132,25 @@ type stateFile struct {
 var idCounter atomic.Uint64
 
 // DefaultRoot returns the default support directory
-// (os.UserConfigDir()/Shelf).
+// (os.UserConfigDir()/ShelfU).
 func DefaultRoot() (string, error) {
+	return configRoot("ShelfU")
+}
+
+// LegacyRoot returns the support directory the app used before it was
+// renamed (os.UserConfigDir()/Shelf). Startup migrates it to DefaultRoot
+// once and then leaves it as a backup.
+func LegacyRoot() (string, error) {
+	return configRoot("Shelf")
+}
+
+// configRoot returns os.UserConfigDir()/name.
+func configRoot(name string) (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("store: locating config dir: %w", err)
 	}
-	return filepath.Join(dir, "Shelf"), nil
+	return filepath.Join(dir, name), nil
 }
 
 // Open creates root/images and root/converted (0700) if needed, takes an
@@ -402,9 +419,9 @@ func (s *Store) ensureMigrationBackup(data []byte) (string, error) {
 		return path, nil
 	}
 	if lastErr == nil {
-		lastErr = errors.New("所有备份名均已被占用")
+		lastErr = errors.New("every backup name is taken")
 	}
-	return "", fmt.Errorf("无法为迁移创建恢复备份：%w", lastErr)
+	return "", fmt.Errorf("cannot write a recovery backup for the migration: %w", lastErr)
 }
 
 // writeFileNew creates path exclusively and writes data, reporting every
@@ -520,10 +537,10 @@ func (s *Store) AddFiles(paths []string) error {
 }
 
 // ConvertedDir returns the managed directory (<root>/converted) where
-// Shelf writes files it creates by conversion. Open creates it.
+// ShelfU writes files it creates by conversion. Open creates it.
 func (s *Store) ConvertedDir() string { return filepath.Join(s.Root, convertedDirName) }
 
-// AddConverted registers files Shelf produced inside <root>/converted.
+// AddConverted registers files ShelfU produced inside <root>/converted.
 // Every path must resolve to an existing regular file inside that
 // directory (spellings through symlinks are resolved first, so a file
 // merely pointing outside is rejected); otherwise nothing is added and
@@ -609,6 +626,7 @@ func (s *Store) addText(text string, clip bool, sourceApp string) error {
 	if idx >= 0 {
 		s.moveToFront(idx)
 		s.Items[0].OffTray = false // 重新收录同一条内容会把它带回托盘
+		s.Items[0].OffClip = false // 也会把它带回剪贴板页
 		if clip {
 			s.Items[0].Source = SourceClipboard
 			s.Items[0].SourceApp = sourceApp
@@ -691,6 +709,7 @@ func (s *Store) addImage(png []byte, clip bool, sourceApp string) error {
 			s.moveToFront(i)
 			s.Items[0].Missing = false
 			s.Items[0].OffTray = false // 重新收录同一张图片会把它带回托盘
+			s.Items[0].OffClip = false // 也会把它带回剪贴板页
 			if clip {
 				s.Items[0].Source = SourceClipboard
 				s.Items[0].SourceApp = sourceApp
@@ -814,21 +833,23 @@ func (s *Store) Remove(id string) error {
 
 // SetPinned marks or unmarks the item with the given id as pinned and
 // persists atomically (memory rolls back on save failure). Pinning also
-// clears OffTray: a pinned item belongs at the top of both pages. An
-// unknown id is an error; setting the flag to its current value is a
-// no-op unless pinning an off-tray item, which still saves to unhide it.
+// clears OffTray and OffClip: a pinned item belongs at the top of both
+// pages. An unknown id is an error; setting the flag to its current value
+// is a no-op unless pinning an item hidden from a page, which still saves
+// to unhide it.
 func (s *Store) SetPinned(id string, pinned bool) error {
 	idx := slices.IndexFunc(s.Items, func(it Item) bool { return it.ID == id })
 	if idx < 0 {
 		return fmt.Errorf("store: no item with id %q", id)
 	}
-	if s.Items[idx].Pinned == pinned && (!pinned || !s.Items[idx].OffTray) {
+	if s.Items[idx].Pinned == pinned && (!pinned || (!s.Items[idx].OffTray && !s.Items[idx].OffClip)) {
 		return nil
 	}
 	old := s.Items[idx]
 	s.Items[idx].Pinned = pinned
 	if pinned {
 		s.Items[idx].OffTray = false
+		s.Items[idx].OffClip = false
 	}
 	if err := s.Save(); err != nil {
 		s.Items[idx] = old
@@ -874,6 +895,22 @@ func (s *Store) RemoveMany(ids []string) (int, error) {
 // to hide => no write, (0, nil). On save failure memory is rolled back.
 // Returns how many items were newly hidden.
 func (s *Store) HideFromTray(ids []string) (int, error) {
+	return s.hideFrom(ids, func(it *Item) *bool { return &it.OffTray })
+}
+
+// HideFromClipboard marks the items with the given IDs OffClip and saves
+// once — the clipboard page's mirror of HideFromTray: the capture stays
+// on the tray, and no managed file is touched. Unknown IDs and items
+// already off the clipboard are ignored; nothing to hide => no write,
+// (0, nil). On save failure memory is rolled back. Returns how many items
+// were newly hidden.
+func (s *Store) HideFromClipboard(ids []string) (int, error) {
+	return s.hideFrom(ids, func(it *Item) *bool { return &it.OffClip })
+}
+
+// hideFrom sets the flag off picks on the items with the given IDs and
+// saves once; it is the shared body of the two HideFrom* methods.
+func (s *Store) hideFrom(ids []string, off func(*Item) *bool) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -884,8 +921,11 @@ func (s *Store) HideFromTray(ids []string) (int, error) {
 	old := slices.Clone(s.Items)
 	n := 0
 	for i := range s.Items {
-		if _, ok := want[s.Items[i].ID]; ok && !s.Items[i].OffTray {
-			s.Items[i].OffTray = true
+		if _, ok := want[s.Items[i].ID]; !ok {
+			continue
+		}
+		if p := off(&s.Items[i]); !*p {
+			*p = true
 			n++
 		}
 	}
@@ -1083,14 +1123,14 @@ func (s *Store) Refresh() {
 // On failure the previous state.json is left untouched.
 func (s *Store) Save() error {
 	if s.migrationBlocked != nil {
-		return fmt.Errorf("store: 迁移前无法保留恢复备份，已停止写入以免覆盖可恢复原件：%w", s.migrationBlocked)
+		return fmt.Errorf("store: no recovery backup before the migration, so writing stopped rather than overwrite a recoverable original: %w", s.migrationBlocked)
 	}
 	if s.migrateBackup != "" {
 		// 首次迁移写入前再次确认恢复点仍然可用，避免备份被删除或改写后
 		// 原件被无保护地覆盖。
 		backup, err := os.ReadFile(s.migrateBackup)
 		if err != nil || !bytes.Equal(backup, s.migrateBytes) {
-			return fmt.Errorf("store: 迁移恢复备份 %s 已不可用，拒绝覆盖原文件", s.migrateBackup)
+			return fmt.Errorf("store: the migration recovery backup %s is gone, refusing to overwrite the original", s.migrateBackup)
 		}
 	}
 	items := s.persistItems()
@@ -1263,7 +1303,9 @@ func (s *Store) moveToFront(i int) {
 }
 
 // trimText keeps only the textLimit newest unpinned text items; pinned
-// texts are never evicted and do not count towards the limit.
+// texts are never evicted and do not count towards the limit. Items
+// hidden from a page (OffTray, OffClip) still count: hiding a row never
+// lets the history grow past the limit.
 func (s *Store) trimText() {
 	limit := s.textLimit
 	if limit < 1 {

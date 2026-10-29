@@ -17,8 +17,6 @@ const FileName = "settings.json"
 // Settings are the user-adjustable preferences. Every field must have its
 // default in Default: a key missing from the file keeps that default.
 type Settings struct {
-	// ClipboardHistory records copied text and images into the shelf.
-	ClipboardHistory bool `json:"clipboardHistory"`
 	// RetentionDays removes items older than this many days; 0 or less
 	// keeps everything.
 	RetentionDays int `json:"retentionDays"`
@@ -28,7 +26,7 @@ type Settings struct {
 	// ExcludedApps lists bundle identifiers whose copies are never
 	// recorded into the shelf.
 	ExcludedApps []string `json:"excludedApps"`
-	// IslandNowPlaying shows the now-playing peek player and panel card.
+	// IslandNowPlaying shows the now-playing peek wings and panel card.
 	IslandNowPlaying bool `json:"islandNowPlaying"`
 	// AutoCheckUpdates checks the GitHub release feed for a newer version
 	// in the background; it is the app's only network access.
@@ -36,9 +34,64 @@ type Settings struct {
 	// RemoveAfterDrag takes an item off the tray once it was dragged out
 	// and dropped; pinned items stay.
 	RemoveAfterDrag bool `json:"removeAfterDrag"`
+	// ShellStyle is the closed shelf's outer shape on a screen with a
+	// camera housing. Screens without one always draw the island.
+	ShellStyle ShellStyle `json:"shellStyle"`
+	// SnapWindows lets a window dragged by its title bar to the notch pick
+	// one of six arrangements.
+	SnapWindows bool `json:"snapWindows"`
+	// Language is the language the interface says: "" follows the system,
+	// else a tag of a language the app ships ("zh-Hans", "en"). The app
+	// keeps it here, not in the system's language settings.
+	Language string `json:"language"`
 	// AIUsage is the AI 用量 page: off by default; each source (quota and
 	// local usage) can be switched separately.
 	AIUsage AIUsageSettings `json:"aiUsage"`
+	// LiveActivities is the 实时活动 group: the charging, headphone and
+	// download notices on the notch. Every switch is on for a fresh
+	// install; a settings.json without the object keeps all three.
+	LiveActivities LiveActivitySettings `json:"liveActivities"`
+	// IslandPos is where the floating island was left on each display, by
+	// display id. A display with no entry keeps the default position; the
+	// notch style ignores the whole map.
+	IslandPos map[string]IslandPos `json:"islandPos,omitempty"`
+}
+
+// IslandPos is the floating island's place on one display: the shell's
+// centre X and its top Y, measured from the display's origin. Storing the
+// spot rather than a delta keeps it meaningful when a display's origin
+// moves in 显示器 settings.
+type IslandPos struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// LiveActivitySettings switches the three realtime activities. A missing
+// key keeps the default (on), so an older settings.json shows all of them
+// after the update.
+type LiveActivitySettings struct {
+	Charging   bool `json:"charging"`
+	Headphones bool `json:"headphones"`
+	Downloads  bool `json:"downloads"`
+}
+
+// ShellStyle picks the closed shelf's outer shape on a screen with a
+// camera housing. A screen without one always draws the island, whatever
+// this says ("notch" is the default).
+type ShellStyle string
+
+const (
+	ShellStyleNotch  ShellStyle = "notch"
+	ShellStyleIsland ShellStyle = "island"
+)
+
+// Normalized maps an unknown or empty value (an older settings.json, a
+// hand edit) to the default style.
+func (s ShellStyle) Normalized() ShellStyle {
+	if s == ShellStyleIsland {
+		return ShellStyleIsland
+	}
+	return ShellStyleNotch
 }
 
 // AIUsageSettings is the aiUsage object in settings.json. Enabled turns
@@ -52,6 +105,9 @@ type AIUsageSettings struct {
 	LocalOmp    bool `json:"localOmp"`
 	LocalClaude bool `json:"localClaude"`
 	LocalCodex  bool `json:"localCodex"`
+	// QuotaLeft shows how much of a quota window is left instead of how
+	// much is used; the used share is the default, as Magpie shows it.
+	QuotaLeft bool `json:"quotaLeft"`
 }
 
 // defaultClipboardLimit is the clipboard text history cap a fresh
@@ -61,11 +117,17 @@ const defaultClipboardLimit = 30
 // Default is what a fresh install uses.
 func Default() Settings {
 	return Settings{
-		ClipboardHistory: true,
 		ClipboardLimit:   defaultClipboardLimit,
 		IslandNowPlaying: true,
 		AutoCheckUpdates: true,
 		RemoveAfterDrag:  false,
+		SnapWindows:      true,
+		ShellStyle:       ShellStyleNotch,
+		LiveActivities: LiveActivitySettings{
+			Charging:   true,
+			Headphones: true,
+			Downloads:  true,
+		},
 		AIUsage: AIUsageSettings{
 			Enabled:     false,
 			QuotaCodex:  true,
@@ -110,7 +172,28 @@ func Load(dir string) (Settings, error) {
 	if s.ClipboardLimit < 1 {
 		s.ClipboardLimit = defaultClipboardLimit
 	}
+	s.ShellStyle = s.ShellStyle.Normalized()
 	return s, nil
+}
+
+// LanguageOf reads the language dir/settings.json names, without creating,
+// rewriting or otherwise touching the file: the startup path that cannot open
+// the data directory still has to say its refusal in the user's language, and
+// it must leave the directory as it found it. ok is false when the file is
+// missing, unreadable or not JSON, so the caller can try another directory; a
+// file that parses reports its language, "" for follow the system.
+func LanguageOf(dir string) (language string, ok bool) {
+	data, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		return "", false
+	}
+	var s struct {
+		Language string `json:"language"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return "", false
+	}
+	return s.Language, true
 }
 
 // write saves s atomically: a temporary file in dir renamed over the target,

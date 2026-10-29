@@ -201,7 +201,7 @@ func QuickLook(paths []string) error {
 	return lookErr
 }
 
-// QuickLookVisible reports whether Shelf's Quick Look panel is open.
+// QuickLookVisible reports whether ShelfU's Quick Look panel is open.
 // Main thread only. Off the main thread (headless tests) it reports false
 // without instantiating the panel, which AppKit allows only on the main
 // thread.

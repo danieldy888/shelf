@@ -1,6 +1,6 @@
-// Command npbuild compiles the Shelf now-playing helper bundle from the
+// Command npbuild compiles the ShelfU now-playing helper bundle from the
 // C source next to this file and places it where `mygo build` picks it
-// up: resources/darwin-arm64/ShelfNowPlaying.bundle. `mygo build` signs
+// up: resources/darwin-arm64/ShelfUNowPlaying.bundle. `mygo build` signs
 // the bundle as part of the app (mygo signs Mach-O code inside
 // Contents/Resources).
 //
@@ -8,7 +8,7 @@
 //
 //	go generate ./...
 //
-// The helper is a plain C bundle, not a program: the Shelf app loads it
+// The helper is a plain C bundle, not a program: the ShelfU app loads it
 // into /usr/bin/perl, because since macOS 15.4 MediaRemote only answers
 // Apple-signed callers.
 package main
@@ -61,7 +61,7 @@ func build() error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("helper source: %w", err)
 	}
-	out := filepath.Join(root, "resources", "darwin-arm64", "ShelfNowPlaying.bundle")
+	out := filepath.Join(root, "resources", "darwin-arm64", "ShelfUNowPlaying.bundle")
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}

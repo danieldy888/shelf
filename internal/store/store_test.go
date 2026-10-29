@@ -2690,6 +2690,202 @@ func TestHideFromTraySaveFailureRollsBack(t *testing.T) {
 	}
 }
 
+// HideFromClipboard 是 HideFromTray 的镜像：项目只从剪贴板页消失，仍留在
+// 托盘、state.json 与内存里，受管图片与一切文件都不动；重开后标记仍在。
+func TestHideFromClipboardPersistsAcrossReopen(t *testing.T) {
+	s, root := newStore(t)
+	pngA := makePNG(t, 3, 3, color.RGBA{R: 61, A: 255})
+	if err := s.AddClipImage(pngA, "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipText("复制的文字", "com.example.Editor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddImage(makePNG(t, 2, 2, color.RGBA{G: 62, A: 255})); err != nil {
+		t.Fatal(err)
+	}
+	// s.Items newest-first: image, text, image.
+	clipImg := s.Items[2]
+	txt := s.Items[1]
+	other := s.Items[0]
+	managed := clipImg.Path
+
+	n, err := s.HideFromClipboard([]string{clipImg.ID, txt.ID})
+	if err != nil || n != 2 {
+		t.Fatalf("HideFromClipboard = (%d, %v), want (2, nil)", n, err)
+	}
+	if len(s.Items) != 3 {
+		t.Fatalf("hiding removed items: %+v", s.Items)
+	}
+	for _, it := range s.Items {
+		wantOff := it.ID == clipImg.ID || it.ID == txt.ID
+		if it.OffClip != wantOff {
+			t.Fatalf("OffClip wrong after hide: %+v", it)
+		}
+		if it.OffTray {
+			t.Fatalf("HideFromClipboard touched OffTray: %+v", it)
+		}
+	}
+	// 不删任何文件：受管图片必须还在。
+	for _, p := range []string{managed, other.Path} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("file deleted by hide: %s: %v", p, err)
+		}
+	}
+	// 已隐藏的项目再次隐藏、未知 ID、空输入都是空操作，不写盘。
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ids := range [][]string{{clipImg.ID}, {"no-such-id"}, {}} {
+		if n, err := s.HideFromClipboard(ids); err != nil || n != 0 {
+			t.Fatalf("HideFromClipboard(%v) = (%d, %v), want (0, nil)", ids, n, err)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("no-op HideFromClipboard wrote state.json")
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	got := map[string]bool{}
+	for _, it := range s2.Items {
+		got[it.ID] = it.OffClip
+	}
+	if !got[clipImg.ID] || !got[txt.ID] || got[other.ID] {
+		t.Fatalf("OffClip not persisted: %+v", s2.Items)
+	}
+}
+
+// Save 失败（根目录只读）时 HideFromClipboard 回滚内存、state.json 字节不变。
+func TestHideFromClipboardSaveFailureRollsBack(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddClipText("复制的文字", "com.example.Editor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipImage(makePNG(t, 2, 2, color.RGBA{G: 71, A: 255}), "com.example.Shot"); err != nil {
+		t.Fatal(err)
+	}
+	managed := s.Items[0].Path
+	ids := itemIDs(s)
+	before, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o755) })
+
+	n, err := s.HideFromClipboard(ids)
+	if err == nil {
+		t.Fatal("expected save error with read-only root")
+	}
+	if n != 0 {
+		t.Fatalf("save failed but reported %d hidden", n)
+	}
+	for _, it := range s.Items {
+		if it.OffClip {
+			t.Fatalf("OffClip not rolled back: %+v", s.Items)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(root, stateFileName))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("state.json changed on failed HideFromClipboard")
+	}
+	if _, err := os.Stat(managed); err != nil {
+		t.Fatalf("managed png gone on failed hide: %v", err)
+	}
+}
+
+// 再次复制同一内容（四条 add 路径的去重分支）会清掉 OffClip，让被移出剪贴板
+// 页的项目回到两页，ID 不变。
+func TestReAddClearsOffClip(t *testing.T) {
+	s, _ := newStore(t)
+	pngA := makePNG(t, 3, 3, color.RGBA{R: 81, A: 255})
+	pngB := makePNG(t, 3, 3, color.RGBA{B: 82, A: 255})
+	if err := s.AddClipImage(pngA, "app"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipText("clipped", "app"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddImage(pngB); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("dropped"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.HideFromClipboard(itemIDs(s)); err != nil || n != 4 {
+		t.Fatalf("HideFromClipboard all = (%d, %v), want (4, nil)", n, err)
+	}
+
+	if err := s.AddClipText("clipped", "app2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddText("dropped"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddClipImage(pngA, "app3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddImage(pngB); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Items) != 4 {
+		t.Fatalf("re-add duplicated: %+v", s.Items)
+	}
+	for _, it := range s.Items {
+		if it.OffClip {
+			t.Fatalf("re-add did not clear OffClip: %+v", it)
+		}
+	}
+}
+
+// 置顶被移出剪贴板页的项目把它带回剪贴板页首：SetPinned(id, true) 清掉
+// OffClip，已置顶的项目也不例外（否则它永远只能在托盘上看到）。
+func TestPinClearsOffClip(t *testing.T) {
+	s, root := newStore(t)
+	if err := s.AddClipImage(makePNG(t, 2, 2, color.RGBA{G: 91, A: 255}), "app"); err != nil {
+		t.Fatal(err)
+	}
+	id := s.Items[0].ID
+	if err := s.SetPinned(id, true); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.HideFromClipboard([]string{id}); err != nil || n != 1 {
+		t.Fatalf("HideFromClipboard = (%d, %v), want (1, nil)", n, err)
+	}
+	if !s.Items[0].OffClip || !s.Items[0].Pinned {
+		t.Fatalf("hide clobbered pin state: %+v", s.Items[0])
+	}
+	// 已置顶的项目再次“置顶”不是空操作：还要清掉 OffClip 并落盘。
+	if err := s.SetPinned(id, true); err != nil {
+		t.Fatal(err)
+	}
+	if s.Items[0].OffClip || !s.Items[0].Pinned {
+		t.Fatalf("pin did not unhide from the clipboard page: %+v", s.Items[0])
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	if s2.Items[0].OffClip || !s2.Items[0].Pinned {
+		t.Fatalf("unhide not persisted: %+v", s2.Items[0])
+	}
+}
+
 // 同一内容再次收录（四种 add 路径的去重分支）都会清掉 OffTray：
 // 项目移回最前并重新出现在托盘上，保持原 ID 不变。
 func TestReAddClearsOffTray(t *testing.T) {

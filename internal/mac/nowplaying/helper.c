@@ -4,7 +4,7 @@
 //
 // It is NOT run on its own: since macOS 15.4 MediaRemote only answers
 // clients whose code is Apple-signed, so this bundle is loaded into an
-// Apple-signed host (/usr/bin/perl) by the Shelf app; the host installs
+// Apple-signed host (/usr/bin/perl) by the ShelfU app; the host installs
 // shelf_np_run as an xsub and calls it. Everything runs in the host
 // process; the bundle never spawns one.
 //
@@ -22,13 +22,20 @@
 // never folded into the play verdict, because publishers like NetEase
 // leave rate 0 in a minutes-stale dict while playback continues.
 // Commands, one per line on stdin:
-//   play | pause | toggle | next | prev | stop | quit
-// An unknown command gets {"error":"bad command"} back. EOF on stdin is
-// the shutdown request: the process exits after the current read.
+//   play | pause | toggle | next | prev | stop | seek <seconds> | quit
+// seek moves the playing app's position; it answers {"error":"seek
+// unsupported"} when this macOS build has no setter, and {"error":"bad
+// seek"} for a negative, non-numeric or trailing-junk argument.
+// An unknown command gets {"error":"bad command"} back, and so does a
+// command line that does not fit the reader's buffer: the whole line is
+// dropped, tail included, because a truncated line has no valid meaning.
+// EOF on stdin is the shutdown request: the process exits after the
+// current read.
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
+#include <math.h>
 #include <objc/message.h>
 #include <objc/objc.h>
 #include <pthread.h>
@@ -49,6 +56,7 @@ typedef void (*GetStateFn)(dispatch_queue_t, void (^)(int));
 typedef void (*RegFn)(dispatch_queue_t);
 typedef void (*SendCommandFn)(uint32_t, CFDictionaryRef);
 typedef void (*GetClientFn)(dispatch_queue_t, void (^)(id));
+typedef void (*SetElapsedFn)(double);
 
 static void *MR;
 static GetInfoFn MRGetInfo;
@@ -57,6 +65,9 @@ static GetStateFn MRGetAppState;
 static RegFn MRRegister;
 static SendCommandFn MRSendCommand;
 static GetClientFn MRGetClient;
+// Optional: some macOS builds do not export the elapsed-time setter.
+// Its absence only disables seek, never the rest of the helper.
+static SetElapsedFn MRSetElapsed;
 
 // MediaRemote command numbers, as in MPRemoteCommand (kMRMediaRemoteCommand).
 enum {
@@ -550,7 +561,28 @@ static void handleCommand(const char *line, int *quit) {
   else if (!strcmp(line, "next")) cmd = CMD_NEXT;
   else if (!strcmp(line, "prev")) cmd = CMD_PREV;
   else if (!strcmp(line, "quit")) { *quit = 1; return; }
-  else { emitError("bad command"); return; }
+  else if (!strncmp(line, "seek ", 5)) {
+    // seek <seconds>: a plain decimal, nothing after it. strtod also
+    // accepts "inf"; a non-finite value is rejected so the app never
+    // hands MediaRemote a nonsense position.
+    const char *arg = line + 5;
+    char *end = NULL;
+    double seconds = strtod(arg, &end);
+    if (end == arg || *end != '\0' || !isfinite(seconds) || seconds < 0) {
+      emitError("bad seek");
+      return;
+    }
+    if (!MRSetElapsed) {
+      emitError("seek unsupported");
+      return;
+    }
+    MRSetElapsed(seconds);
+    // Same hot-poll window as a transport command: the new position must
+    // reach the reader quickly, or the progress bar snaps back.
+    gotNotify = 1;
+    atomic_store(&cmdPollUntil, nowUnix() + 1.5);
+    return;
+  } else { emitError("bad command"); return; }
   MRSendCommand(cmd, NULL);
   // The system will tell us the new state; poll soon so it lands fast.
   // The notification usually follows within a frame, but some apps are
@@ -579,6 +611,8 @@ static void loadMediaRemote(void) {
   MRSendCommand = (SendCommandFn)dlsym(MR, "MRMediaRemoteSendCommand");
   MRGetClient =
       (GetClientFn)dlsym(MR, "MRMediaRemoteGetNowPlayingClient");
+  // Optional: a missing setter leaves seek unsupported, nothing else.
+  MRSetElapsed = (SetElapsedFn)dlsym(MR, "MRMediaRemoteSetElapsedTime");
   KeyTitle = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoTitle");
   KeyArtist = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoArtist");
   KeyAlbum = *(CFStringRef *)dlsym(MR, "kMRMediaRemoteNowPlayingInfoAlbum");
@@ -600,6 +634,29 @@ static void ignoreSigpipe(void) { signal(SIGPIPE, SIG_IGN); }
 
 static volatile sig_atomic_t wantQuit;
 
+// readCommandLine reads one command line into buf and strips its line
+// ending. It returns 1 for a line the caller must handle, 0 at end of
+// input, and 2 for a line that did not fit: the rest of that line is
+// discarded and the caller answers {"error":"bad command"}.
+//
+// A line without its newline is never a command. fgets stops at size-1
+// bytes, and the first 255 bytes of an overlong "seek <digits>" line are
+// themselves a valid decimal — handing that prefix on would seek to a
+// position the user never asked for, and the tail would then arrive as a
+// second, bogus command.
+static int readCommandLine(FILE *in, char *buf, size_t size) {
+  if (!fgets(buf, (int)size, in)) return 0;
+  size_t n = strlen(buf);
+  if (!n || (buf[n - 1] != '\n' && buf[n - 1] != '\r')) {
+    int c;
+    while ((c = fgetc(in)) != EOF && c != '\n') {
+    }
+    return 2;
+  }
+  while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
+  return 1;
+}
+
 // stdinReader owns the command pipe. Commands arrive on this thread so
 // the main thread stays free to run its run loop — MediaRemote
 // registers this client for notifications through a main-queue
@@ -612,10 +669,13 @@ static void *stdinReader(void *unused) {
   (void)unused;
   char line[256];
   int quit = 0;
-  while (!wantQuit && fgets(line, sizeof line, stdin)) {
-    size_t n = strlen(line);
-    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
-    if (!n) continue;
+  int status;
+  while (!wantQuit && (status = readCommandLine(stdin, line, sizeof line))) {
+    if (status == 2) {
+      emitError("bad command");
+      continue;
+    }
+    if (!line[0]) continue;
     handleCommand(line, &quit);
     if (quit) break;
   }

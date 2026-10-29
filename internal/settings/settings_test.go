@@ -33,9 +33,6 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.ClipboardHistory {
-		t.Fatal("missing clipboardHistory turned clipboard history off")
-	}
 	if s.ClipboardLimit != 30 {
 		t.Fatalf("missing clipboardLimit = %d, want 30", s.ClipboardLimit)
 	}
@@ -50,6 +47,26 @@ func TestMissingKeyKeepsDefault(t *testing.T) {
 // The now-playing toggle still loads from the file, and the removed
 // battery/volume island keys in a legacy settings.json are ignored
 // (unknown keys never fail a load) while the rest keep their defaults.
+// snapWindows defaults on: a file without the key (older versions) must
+// not silently turn window snapping off, and an explicit false is honoured.
+func TestSnapWindowsLoad(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(dir)
+	if err != nil || !s.SnapWindows {
+		t.Fatalf("missing snapWindows = %v, %v; want true", s.SnapWindows, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"snapWindows": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Load(dir)
+	if err != nil || s.SnapWindows {
+		t.Fatalf("snapWindows: false => %v, %v; want false", s.SnapWindows, err)
+	}
+}
+
 func TestNowPlayingToggleAndLegacyIslandKeysLoad(t *testing.T) {
 	dir := t.TempDir()
 	legacy := `{"islandNowPlaying": false, "islandBattery": false, "islandVolume": false}`
@@ -63,22 +80,8 @@ func TestNowPlayingToggleAndLegacyIslandKeysLoad(t *testing.T) {
 	if s.IslandNowPlaying {
 		t.Fatal("islandNowPlaying: false was ignored")
 	}
-	if !s.ClipboardHistory || !s.AutoCheckUpdates {
+	if !s.AutoCheckUpdates {
 		t.Fatalf("unrelated keys must keep their defaults: %+v", s)
-	}
-}
-
-func TestExplicitValueIsHonoured(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.ClipboardHistory {
-		t.Fatal("clipboardHistory: false was ignored")
 	}
 }
 
@@ -87,7 +90,7 @@ func TestExplicitValueIsHonoured(t *testing.T) {
 // explicit false is honoured.
 func TestAutoCheckUpdatesLoad(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Load(dir)
@@ -109,7 +112,7 @@ func TestAutoCheckUpdatesLoad(t *testing.T) {
 // their missing keys too, and an explicit enabled is honoured.
 func TestAIUsageLoad(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"clipboardHistory": false}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Load(dir)
@@ -139,7 +142,8 @@ func TestAIUsageLoad(t *testing.T) {
 
 func TestSaveRoundTrips(t *testing.T) {
 	dir := t.TempDir()
-	want := Settings{ClipboardHistory: false, RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"}}
+	want := Settings{RetentionDays: 7, ClipboardLimit: 12, ExcludedApps: []string{"com.example.one", "com.example.two"},
+		ShellStyle: ShellStyleIsland}
 	if err := Save(dir, want); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +175,7 @@ func TestNonPositiveClipboardLimitLoadsAsDefault(t *testing.T) {
 func TestInvalidFileIsNeverRewritten(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
-	bad := []byte(`{"clipboardHistory": fals`)
+	bad := []byte(`{"clipboardLimit": invalid`)
 	if err := os.WriteFile(path, bad, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -185,5 +189,75 @@ func TestInvalidFileIsNeverRewritten(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != string(bad) {
 		t.Fatalf("invalid settings.json was overwritten: %q", got)
+	}
+}
+
+// shellStyle is new in this version: a file without it keeps the hardware
+// notch shape, and only the exact "island" value switches the style —
+// hand-edited junk must not choose something the app cannot draw.
+func TestShellStyleLoad(t *testing.T) {
+	for _, tt := range []struct {
+		raw  string
+		want ShellStyle
+	}{
+		{`{}`, ShellStyleNotch},
+		{`{"shellStyle": "island"}`, ShellStyleIsland},
+		{`{"shellStyle": "notch"}`, ShellStyleNotch},
+		{`{"shellStyle": "ISLAND"}`, ShellStyleNotch},
+		{`{"shellStyle": ""}`, ShellStyleNotch},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, FileName), []byte(tt.raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Load(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.raw, err)
+		}
+		if s.ShellStyle != tt.want {
+			t.Fatalf("%s loaded shellStyle %q, want %q", tt.raw, s.ShellStyle, tt.want)
+		}
+	}
+}
+
+// LanguageOf reads the language without touching the directory: the startup
+// path that cannot open its data directory still names the user's language in
+// its refusal, and must not create settings.json, rewrite a broken one, or
+// report a language from a file it could not parse.
+func TestLanguageOf(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if lang, ok := LanguageOf(dir); ok || lang != "" {
+		t.Fatalf("a missing settings.json answered %q, %v", lang, ok)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("LanguageOf created settings.json: %v", err)
+	}
+
+	s := Default()
+	s.Language = "zh-Hans"
+	if err := Save(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if lang, ok := LanguageOf(dir); !ok || lang != "zh-Hans" {
+		t.Fatalf("LanguageOf = %q, %v, want zh-Hans, true", lang, ok)
+	}
+	// Follow System is a language the file names: "" with ok true.
+	if err := Save(dir, Default()); err != nil {
+		t.Fatal(err)
+	}
+	if lang, ok := LanguageOf(dir); !ok || lang != "" {
+		t.Fatalf("LanguageOf = %q, %v, want the empty language, true", lang, ok)
+	}
+
+	bad := []byte(`{"language": `)
+	if err := os.WriteFile(path, bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if lang, ok := LanguageOf(dir); ok || lang != "" {
+		t.Fatalf("a broken settings.json answered %q, %v", lang, ok)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(bad) {
+		t.Fatalf("LanguageOf rewrote the broken file: %q, %v", got, err)
 	}
 }
